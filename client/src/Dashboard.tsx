@@ -157,7 +157,7 @@ export default function Dashboard() {
                                     key={tab.id}
                                     onClick={() => {
                                         if (tab.id === 'keywords') {
-                                            window.location.href = '/keywords';
+                                            window.location.hash = '#/keywords';
                                             return;
                                         }
                                         setActiveTab(tab.id as 'dashboard' | 'audit');
@@ -547,4 +547,5 @@ export default function Dashboard() {
         </div>
     );
 }
+
 

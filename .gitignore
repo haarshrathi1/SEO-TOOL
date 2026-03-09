@@ -1,0 +1,7 @@
+client/node_modules/
+client/dist/
+server/node_modules/
+server/.env
+server/data/
+server/keyword_history.json
+*.log

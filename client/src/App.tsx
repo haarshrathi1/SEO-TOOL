@@ -24,6 +24,12 @@ interface ViewerInfo {
   createdAt: string;
 }
 
+function getCurrentRoute(): 'dashboard' | 'keywords' {
+  return window.location.hash === '#/keywords' || window.location.pathname === '/keywords'
+    ? 'keywords'
+    : 'dashboard';
+}
+
 function LoginPage({ onLogin }: { onLogin: (user: UserInfo) => void }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -183,13 +189,12 @@ function ViewerManager() {
   );
 }
 
-function AdminNav({ user, onLogout, onShowViewers }: { user: UserInfo; onLogout: () => void; onShowViewers: () => void }) {
-  const path = window.location.pathname;
+function AdminNav({ user, onLogout, onShowViewers, route }: { user: UserInfo; onLogout: () => void; onShowViewers: () => void; route: 'dashboard' | 'keywords' }) {
   return (
     <div className="fixed top-4 right-4 z-50 flex items-center gap-2">
-      {path === '/keywords'
-        ? <a href="/" className="text-xs font-medium text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-full border border-indigo-100 hover:bg-indigo-100 transition-colors">← Dashboard</a>
-        : <a href="/keywords" className="text-xs font-medium text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-full border border-indigo-100 hover:bg-indigo-100 transition-colors">Keyword Tool →</a>
+      {route === 'keywords'
+        ? <a href="/#/" className="text-xs font-medium text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-full border border-indigo-100 hover:bg-indigo-100 transition-colors">Dashboard</a>
+        : <a href="/#/keywords" className="text-xs font-medium text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-full border border-indigo-100 hover:bg-indigo-100 transition-colors">Keyword Tool</a>
       }
       <button onClick={onShowViewers} className="text-xs font-medium text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-100 hover:bg-emerald-100 transition-colors flex items-center gap-1">
         <Users className="w-3.5 h-3.5" /> Manage Viewers
@@ -223,8 +228,13 @@ function App() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [showViewers, setShowViewers] = useState(false);
+  const [route, setRoute] = useState<'dashboard' | 'keywords'>(getCurrentRoute);
 
   useEffect(() => {
+    const syncRoute = () => setRoute(getCurrentRoute());
+    window.addEventListener('hashchange', syncRoute);
+    window.addEventListener('popstate', syncRoute);
+
     const checkAuth = async () => {
       try {
         const res = await api.authMe();
@@ -235,7 +245,14 @@ function App() {
         setLoading(false);
       }
     };
+
+    syncRoute();
     checkAuth();
+
+    return () => {
+      window.removeEventListener('hashchange', syncRoute);
+      window.removeEventListener('popstate', syncRoute);
+    };
   }, []);
 
   const handleLogout = () => {
@@ -253,8 +270,6 @@ function App() {
   );
 
   if (!user) return <LoginPage onLogin={setUser} />;
-
-  const path = window.location.pathname;
 
   // Viewer can ONLY access keyword tool
   if (user.role === 'viewer') {
@@ -275,12 +290,15 @@ function App() {
   // Admin views
   return (
     <div>
-      <AdminNav user={user} onLogout={handleLogout} onShowViewers={() => setShowViewers(true)} />
+      <AdminNav user={user} onLogout={handleLogout} onShowViewers={() => setShowViewers(true)} route={route} />
       {showViewers && <ViewerModal onClose={() => setShowViewers(false)} />}
-      {path === '/keywords' ? <KeywordResearch /> : <Dashboard />}
+      {route === 'keywords' ? <KeywordResearch /> : <Dashboard />}
     </div>
   );
 }
 
 export default App;
+
+
+
 
