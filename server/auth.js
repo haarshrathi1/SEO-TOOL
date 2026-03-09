@@ -20,7 +20,9 @@ console.log('Initializing OAuth Client with ID:', clientId ? 'Set' : 'Missing');
 
 const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
 const TOKEN_PROVIDER = 'google-oauth';
-const DISABLE_SERVICE_ACCOUNT = /^(1|true|yes|on)$/i.test(process.env.DISABLE_SERVICE_ACCOUNT || '');
+const isProduction = process.env.NODE_ENV === 'production';
+const disableServiceAccountRaw = process.env.DISABLE_SERVICE_ACCOUNT ?? (isProduction ? 'true' : 'false');
+const DISABLE_SERVICE_ACCOUNT = /^(1|true|yes|on)$/i.test(disableServiceAccountRaw);
 
 const oauth2Client = new google.auth.OAuth2(
     clientId,
