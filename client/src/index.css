@@ -1,0 +1,158 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+:root {
+  /* Premium Light Theme */
+  --bg-primary: #F8FAFC;
+  --bg-secondary: #FFFFFF;
+  --bg-tertiary: #F1F5F9;
+  --text-primary: #0F172A;
+  --text-secondary: #475569;
+  --text-muted: #94A3B8;
+  --border-light: #E2E8F0;
+  --border-medium: #CBD5E1;
+  
+  /* Accent Colors */
+  --accent-indigo: #4F46E5;
+  --accent-indigo-light: #EEF2FF;
+  --accent-emerald: #059669;
+  --accent-emerald-light: #ECFDF5;
+  --accent-amber: #D97706;
+  --accent-amber-light: #FFFBEB;
+  --accent-rose: #E11D48;
+  --accent-rose-light: #FFF1F2;
+  --accent-blue: #2563EB;
+  --accent-blue-light: #EFF6FF;
+  --accent-violet: #7C3AED;
+  --accent-violet-light: #F5F3FF;
+  
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.07), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.08), 0 8px 10px -6px rgb(0 0 0 / 0.04);
+
+  /* Neo-Brutalist (legacy pages) */
+  --neo-white: #ffffff;
+  --neo-black: #1a1a1a;
+  --neo-bg: #e0e7ff;
+  --neo-shadow: 4px 4px 0px 0px #000000;
+  --neo-shadow-hover: 6px 6px 0px 0px #000000;
+  --neo-border: 2px solid #000000;
+}
+
+body {
+  font-family: 'Inter', 'Space Grotesk', system-ui, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code, pre, .font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+@layer components {
+  /* Legacy Neo-Brutalist */
+  .neo-card {
+    @apply bg-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all duration-200;
+  }
+  .neo-card:hover {
+    @apply translate-x-[-2px] translate-y-[-2px] shadow-[6px_6px_0px_0px_rgba(0,0,0,1)];
+  }
+  .neo-button {
+    @apply px-6 py-3 font-bold border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all duration-200;
+  }
+  .neo-button-primary {
+    @apply bg-blue-600 text-white hover:bg-blue-700;
+  }
+  .neo-button-secondary {
+    @apply bg-white text-black hover:bg-slate-50;
+  }
+  .neo-input {
+    @apply w-full border-2 border-black p-3 font-medium shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] focus:outline-none focus:translate-x-[-2px] focus:translate-y-[-2px] focus:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all;
+  }
+
+  /* Premium Light Theme */
+  .glass-card {
+    @apply bg-white/80 backdrop-blur-xl border border-slate-200/60 rounded-2xl;
+    box-shadow: var(--shadow-lg);
+  }
+  .glass-card:hover {
+    box-shadow: var(--shadow-xl);
+    @apply border-slate-300/60;
+  }
+
+  .premium-card {
+    @apply bg-white border border-slate-200 rounded-2xl transition-all duration-300;
+    box-shadow: var(--shadow-md);
+  }
+  .premium-card:hover {
+    box-shadow: var(--shadow-xl);
+    transform: translateY(-2px);
+  }
+
+  .premium-badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-full;
+  }
+
+  .premium-input {
+    @apply w-full rounded-xl border border-slate-200 bg-white px-5 py-4 text-base font-medium
+           placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400
+           transition-all duration-200;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .premium-button {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm
+           transition-all duration-200 active:scale-[0.98];
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-300 rounded-full;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-400;
+}
+
+/* Animations */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, transparent 25%, rgba(255,255,255,0.5) 50%, transparent 75%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
