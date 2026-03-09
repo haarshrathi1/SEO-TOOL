@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 import { Search, Loader2, Target, BarChart3, Layers, Sparkles, ExternalLink, Zap, Save, History, ChevronRight, TrendingUp, Brain, Lightbulb, Crosshair, Rocket, ArrowRight, ChevronDown, ChevronUp, HelpCircle, Star, Shield, Eye, BookOpen, Filter } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from './api';
@@ -11,6 +11,53 @@ const LAYER_STEPS = [
     { id: 4, label: 'Keyword Expansion', desc: 'Building keyword universe...', icon: Sparkles },
     { id: 5, label: 'Strategic Synthesis', desc: 'Generating actionable blueprint...', icon: Rocket },
 ];
+
+const LAYER_BANTER: Record<number, string[]> = {
+    0: [
+        'Collecting search clues like a detective with too many tabs open.',
+        'Autocomplete is speaking. We are pretending this is all very normal.',
+        'Gathering SERP crumbs before competitors eat them first.',
+        'Mining signals at speed because patience is not an SEO KPI.',
+        'Pulling raw data like it owes us rankings.',
+    ],
+    1: [
+        'Decoding SERP DNA to see what Google is emotionally attached to today.',
+        'Reading top results and judging them respectfully.',
+        'Analyzing ranking patterns so we can stop guessing politely.',
+        'Finding what Google rewards while pretending the rules are clear.',
+        'Inspecting authority signals before we pick a fight.',
+    ],
+    2: [
+        'Breaking intent into tiny pieces because users are complicated.',
+        'Mapping buyer psychology one query mood swing at a time.',
+        'Sorting intent chaos into something strategy can survive.',
+        'Detecting what people ask vs what they admit they ask.',
+        'Untangling search motives with minimal existential crisis.',
+    ],
+    3: [
+        'Expanding keywords until your content calendar starts sweating.',
+        'Building long-tail ideas that look small but punch hard.',
+        'Finding opportunity terms your competitors forgot to check.',
+        'Growing the keyword universe without growing nonsense.',
+        'Turning one seed into many ranking possibilities.',
+    ],
+    4: [
+        'Assembling strategy from data, logic, and mild caffeine energy.',
+        'Prioritizing quick wins before ambition gets expensive.',
+        'Packaging all findings into an actual action plan.',
+        'Final synthesis in progress. Wild guesses are not invited.',
+        'Converting raw insight into a roadmap your team can use.',
+    ],
+};
+
+function pickNextMessageIndex(messages: string[], previousIndex: number) {
+    if (messages.length <= 1) return 0;
+    let nextIndex = previousIndex;
+    while (nextIndex === previousIndex) {
+        nextIndex = Math.floor(Math.random() * messages.length);
+    }
+    return nextIndex;
+}
 
 const intentColors: Record<string, string> = {
     informational: 'bg-blue-100 text-blue-700', commercial: 'bg-amber-100 text-amber-700',
@@ -84,8 +131,34 @@ export default function KeywordResearch() {
     const [scanningUrl, setScanningUrl] = useState<string | null>(null);
     const [kwFilter, setKwFilter] = useState('all');
     const [kwSort, setKwSort] = useState<'opportunityScore' | 'term'>('opportunityScore');
+    const [activeBanter, setActiveBanter] = useState('');
+    const banterIndexRef = useRef<Record<number, number>>({});
 
     useEffect(() => { fetchHistory(); }, []);
+
+    useEffect(() => {
+        if (!loading || currentLayer < 0 || currentLayer >= LAYER_STEPS.length) {
+            setActiveBanter('');
+            return;
+        }
+
+        const messages = LAYER_BANTER[currentLayer] || [];
+        if (!messages.length) {
+            setActiveBanter('');
+            return;
+        }
+
+        const showNextMessage = () => {
+            const previousIndex = banterIndexRef.current[currentLayer] ?? -1;
+            const nextIndex = pickNextMessageIndex(messages, previousIndex);
+            banterIndexRef.current[currentLayer] = nextIndex;
+            setActiveBanter(messages[nextIndex]);
+        };
+
+        showNextMessage();
+        const banterTimer = window.setInterval(showNextMessage, 2800);
+        return () => window.clearInterval(banterTimer);
+    }, [loading, currentLayer]);
 
     const fetchHistory = async () => { try { setHistory(await api.getKeywordHistory()); } catch { } };
     const handleSave = async () => {
@@ -153,16 +226,9 @@ export default function KeywordResearch() {
             <div className="max-w-7xl mx-auto px-6 py-12 space-y-8">
                 {/* Hero */}
                 <div className="text-center space-y-5 pt-4 pb-2">
-                    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-50 border border-indigo-100">
-                        <Brain className="w-4 h-4 text-indigo-600" />
-                        <span className="text-xs font-semibold text-indigo-600">Powered by Gemini 3.1 Pro • 5-Layer AI Reasoning</span>
-                    </div>
                     <h1 className="text-4xl md:text-5xl font-extrabold text-slate-900 tracking-tight">
                         Keyword <span className="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">Intelligence</span>
                     </h1>
-                    <p className="text-slate-500 text-lg max-w-xl mx-auto leading-relaxed">
-                        Multi-layer SERP analysis, intent decomposition, and strategic keyword discovery — all powered by advanced AI reasoning.
-                    </p>
                     <form onSubmit={handleSearch} className="max-w-2xl mx-auto flex gap-3">
                         <div className="flex-1 relative">
                             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
@@ -194,9 +260,25 @@ export default function KeywordResearch() {
                                             <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${done ? 'bg-emerald-100' : active ? 'bg-indigo-100 animate-pulse' : 'bg-slate-100'}`}>
                                                 {done ? <span className="text-emerald-600 font-bold text-sm">✓</span> : <Icon className={`w-5 h-5 ${active ? 'text-indigo-600' : 'text-slate-400'}`} />}
                                             </div>
-                                            <div>
+                                            <div className="flex-1">
                                                 <p className={`font-semibold text-sm ${active ? 'text-indigo-700' : done ? 'text-emerald-700' : 'text-slate-500'}`}>Layer {step.id}: {step.label}</p>
                                                 <p className="text-xs text-slate-400">{step.desc}</p>
+                                                {active && (
+                                                    <motion.div
+                                                        key={`banter-${step.id}-${activeBanter}`}
+                                                        initial={{ opacity: 0, y: 4 }}
+                                                        animate={{ opacity: 1, y: 0 }}
+                                                        transition={{ duration: 0.2 }}
+                                                        className="min-h-[36px] mt-2"
+                                                    >
+                                                        <div
+                                                            aria-live="polite"
+                                                            className="inline-flex items-center rounded-lg border border-indigo-200/80 bg-gradient-to-r from-indigo-50 to-sky-50 px-2.5 py-1.5 text-xs italic text-indigo-700 shadow-sm animate-pulse-soft"
+                                                        >
+                                                            {activeBanter}
+                                                        </div>
+                                                    </motion.div>
+                                                )}
                                             </div>
                                             {active && <Loader2 className="w-4 h-4 text-indigo-500 animate-spin ml-auto" />}
                                         </div>
@@ -346,7 +428,7 @@ export default function KeywordResearch() {
                                     )}
                                     {/* Long-Tail Gems */}
                                     {data.keywordUniverse.longTailGems?.length > 0 && (
-                                        <div><p className="text-xs font-semibold text-slate-500 uppercase mb-2">💎 Long-Tail Gems</p>
+                                        <div><p className="text-xs font-semibold text-slate-500 uppercase mb-2">?? Long-Tail Gems</p>
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">{data.keywordUniverse.longTailGems.map((g, i) => (
                                                 <div key={i} className="p-3 rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-100">
                                                     <p className="font-semibold text-sm text-amber-800">{g.term}</p>
@@ -399,7 +481,7 @@ export default function KeywordResearch() {
                                             <p className="text-sm text-emerald-600 mt-1">{qw.reason}</p>
                                             <div className="flex items-center gap-3 mt-2">
                                                 <span className="premium-badge bg-emerald-200 text-emerald-800">{qw.timeToRank}</span>
-                                                <span className="text-xs text-emerald-500">→ {qw.action}</span>
+                                                <span className="text-xs text-emerald-500">? {qw.action}</span>
                                             </div>
                                         </div>
                                     ))}
@@ -430,11 +512,11 @@ export default function KeywordResearch() {
                                         <p className="text-slate-700 font-medium">{data.strategy.contentBlueprint.uniqueAngle}</p>
                                     </div>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div><p className="text-xs font-semibold text-emerald-600 uppercase mb-2">✓ Must Include</p>
-                                            <div className="space-y-1.5">{(data.strategy.contentBlueprint.mustInclude || []).map((m, i) => <div key={i} className="flex items-start gap-2 text-sm text-slate-700"><span className="text-emerald-500 mt-0.5">✓</span>{m}</div>)}</div>
+                                        <div><p className="text-xs font-semibold text-emerald-600 uppercase mb-2">? Must Include</p>
+                                            <div className="space-y-1.5">{(data.strategy.contentBlueprint.mustInclude || []).map((m, i) => <div key={i} className="flex items-start gap-2 text-sm text-slate-700"><span className="text-emerald-500 mt-0.5">?</span>{m}</div>)}</div>
                                         </div>
-                                        <div><p className="text-xs font-semibold text-rose-600 uppercase mb-2">✗ Avoid</p>
-                                            <div className="space-y-1.5">{(data.strategy.contentBlueprint.avoid || []).map((a, i) => <div key={i} className="flex items-start gap-2 text-sm text-slate-700"><span className="text-rose-500 mt-0.5">✗</span>{a}</div>)}</div>
+                                        <div><p className="text-xs font-semibold text-rose-600 uppercase mb-2">? Avoid</p>
+                                            <div className="space-y-1.5">{(data.strategy.contentBlueprint.avoid || []).map((a, i) => <div key={i} className="flex items-start gap-2 text-sm text-slate-700"><span className="text-rose-500 mt-0.5">?</span>{a}</div>)}</div>
                                         </div>
                                     </div>
                                 </div>
@@ -563,3 +645,10 @@ export default function KeywordResearch() {
         </div>
     );
 }
+
+
+
+
+
+
+
