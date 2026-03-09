@@ -1,33 +1,31 @@
-const fs = require('fs');
-const path = require('path');
+﻿const { KeywordResearch } = require('./models');
 
-const FILE_PATH = path.join(__dirname, 'keyword_history.json');
-
-function getHistory() {
-    if (!fs.existsSync(FILE_PATH)) return [];
+async function getHistory() {
     try {
-        const data = fs.readFileSync(FILE_PATH, 'utf8');
-        return JSON.parse(data);
+        const records = await KeywordResearch.find({}).sort({ timestamp: -1 }).lean();
+        return records.map((record) => ({
+            id: record._id.toString(),
+            timestamp: record.timestamp,
+            ...(record.payload || {}),
+        }));
     } catch (e) {
+        console.error('Failed to read keyword history:', e.message);
         return [];
     }
 }
 
-function saveResearch(data) {
-    const history = getHistory();
-    // Add new item with timestamp
-    const newItem = {
-        id: Date.now().toString(),
-        timestamp: new Date().toISOString(),
-        ...data
+async function saveResearch(data) {
+    const doc = await KeywordResearch.create({
+        seed: data?.seed || null,
+        payload: data,
+        timestamp: new Date(),
+    });
+
+    return {
+        id: doc._id.toString(),
+        timestamp: doc.timestamp,
+        ...data,
     };
-    history.unshift(newItem); // Add to top
-
-    // Keep last 50
-    if (history.length > 50) history.pop();
-
-    fs.writeFileSync(FILE_PATH, JSON.stringify(history, null, 2));
-    return newItem;
 }
 
 module.exports = { getHistory, saveResearch };

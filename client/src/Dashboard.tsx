@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import {
     Activity, AlertCircle,
     Globe, Layout, Zap, History
@@ -17,6 +17,15 @@ function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
 }
 
+function formatDashboardError(e: unknown) {
+    const message = e instanceof Error ? e.message : 'Analysis failed';
+
+    if (import.meta.env.DEV && message === 'Access Denied') {
+        return 'Signed in as viewer. Enable DEV_ADMIN_BYPASS=true in server/.env or sign in with ADMIN_EMAIL.';
+    }
+
+    return message;
+}
 // Interface for Audit History (matching Audit.tsx)
 interface AuditHistoryItem {
     id: string;
@@ -86,7 +95,7 @@ export default function Dashboard() {
             setSelectedHistoryId('live'); // Switch to live view
             fetchHistory(); // Refresh history dropdown
         } catch (e) {
-            setError(e instanceof Error ? e.message : 'Analysis failed');
+            setError(formatDashboardError(e));
         } finally {
             setLoading(false);
         }
@@ -547,5 +556,6 @@ export default function Dashboard() {
         </div>
     );
 }
+
 
 

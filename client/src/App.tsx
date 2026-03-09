@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+﻿import { useState, useEffect, useCallback } from 'react';
 import Dashboard from './Dashboard';
 import KeywordResearch from './KeywordResearch';
 import { api, setToken, clearToken } from './api';
@@ -255,8 +255,9 @@ function App() {
     };
   }, []);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     clearToken();
+    try { await api.logout(); } catch { }
     setUser(null);
     if (window.google?.accounts?.id) {
       window.google.accounts.id.disableAutoSelect();
@@ -298,6 +299,7 @@ function App() {
 }
 
 export default App;
+
 
 
 

@@ -274,7 +274,7 @@ const analyzeSite = async (req, res) => {
         };
 
         // Save to History
-        history.addToHistory(finalResponse, project.id);
+        await history.addToHistory(finalResponse, project.id);
 
         // Export to Sheets
         let sheetStatus = false;
@@ -289,12 +289,25 @@ const analyzeSite = async (req, res) => {
 
     } catch (e) {
         console.error('Analysis failed', e);
-        if (e.code === 403 || e.message.includes('403')) {
-            res.status(403).json({ error: 'Google APIs not enabled. Please enable Search Console, Analytics, and PageSpeed APIs in Google Cloud Console.' });
-        } else {
-            res.status(500).json({ error: e.message });
+        const statusCode = e?.response?.status || e?.code;
+        const errorReason =
+            e?.errors?.[0]?.reason ||
+            e?.response?.data?.error?.errors?.[0]?.reason ||
+            e?.response?.data?.error?.status ||
+            '';
+        if (statusCode === 403 || String(e?.message || '').includes('403')) {
+            if (errorReason === 'insufficientPermissions' || errorReason === 'PERMISSION_DENIED') {
+                res.status(403).json({
+                    error: 'Google account is authenticated but lacks required Search Console/GA4 permissions. Re-auth via /auth/google/login with the correct Google account and ensure it has access to the selected properties.'
+                });
+                return;
+            }
+            res.status(403).json({
+                error: 'Google API access denied. Ensure APIs are enabled and the authenticated account has permission to this property.'
+            });
+            return;
         }
+        res.status(500).json({ error: e.message });
     }
 };
-
 module.exports = { analyzeSite };
