@@ -59,6 +59,7 @@ router.get('/login', (req, res) => {
     scope: SCOPES,
     prompt: 'consent' // force consent
   });
+  console.log(url)
   res.redirect(url);
 });
 
