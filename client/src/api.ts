@@ -1,6 +1,6 @@
-﻿import type { KeywordData, KeywordDataV2 } from './types';
+import type { KeywordData, KeywordDataV2 } from './types';
 
-// Dynamic API base â€” same origin in production (served by Express), localhost in dev
+// Dynamic API base — same origin in production (served by Express), localhost in dev
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/+$/, '');
 const API_BASE_URL = configuredApiBaseUrl || (import.meta.env.PROD
     ? window.location.origin
@@ -21,7 +21,7 @@ export function clearToken() {
 
 // Headers with auth
 function authHeaders(): Record<string, string> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
     const token = getToken();
     if (token) headers['Authorization'] = `Bearer ${token}`;
     return headers;
@@ -41,7 +41,7 @@ const handleResponse = async (res: Response) => {
 };
 
 export const api = {
-    // â”€â”€â”€ Auth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Auth ────────────────────────────────────────────────────────
     googleLogin: (credential: string) =>
         fetch(getApiUrl('/api/auth/google-login'), {
             method: 'POST',
@@ -79,20 +79,20 @@ export const api = {
             headers: authHeaders(),
         }).then(handleResponse),
 
-    // â”€â”€â”€ Health & Google OAuth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Health & Google OAuth ────────────────────────────────────────
     checkHealth: () => fetch(getApiUrl('/health')).then(handleResponse),
     loginGoogle: () => { window.location.href = getApiUrl('/auth/google/login'); },
 
-    // â”€â”€â”€ Projects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Projects ────────────────────────────────────────────────────
     getProjects: () => fetch(getApiUrl('/api/projects'), { headers: authHeaders() }).then(handleResponse),
 
-    // â”€â”€â”€ Dashboard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Dashboard ───────────────────────────────────────────────────
     analyzeSite: (projectId: string) =>
         fetch(getApiUrl(`/api/analyze?projectId=${projectId}`), { headers: authHeaders(), credentials: 'include' }).then(handleResponse),
     getHistory: () =>
         fetch(getApiUrl('/api/history'), { headers: authHeaders() }).then(handleResponse),
 
-    // â”€â”€â”€ Audit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Audit ───────────────────────────────────────────────────────
     getAuditHistory: () =>
         fetch(getApiUrl('/api/audit/history'), { headers: authHeaders() }).then(handleResponse),
     runAudit: (projectId: string) =>
@@ -103,7 +103,7 @@ export const api = {
             body: JSON.stringify({ projectId }),
         }).then(handleResponse),
 
-    // â”€â”€â”€ Indexing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Indexing ────────────────────────────────────────────────────
     requestIndexing: (url: string) =>
         fetch(getApiUrl('/api/indexing/publish'), {
             method: 'POST',
@@ -111,7 +111,7 @@ export const api = {
             body: JSON.stringify({ url }),
         }).then(handleResponse),
 
-    // â”€â”€â”€ Keywords â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Keywords ────────────────────────────────────────────────────
     researchKeywords: (seed: string) =>
         fetch(getApiUrl('/api/keywords/research'), {
             method: 'POST',
@@ -136,7 +136,7 @@ export const api = {
             body: JSON.stringify(data),
         }).then(handleResponse),
 
-    // â”€â”€â”€ AI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── AI ──────────────────────────────────────────────────────────
     analyzeContent: (url: string, content?: string) =>
         fetch(getApiUrl('/api/ai/analyze'), {
             method: 'POST',
@@ -153,5 +153,6 @@ export const api = {
 };
 
 export const requestIndexing = api.requestIndexing;
+
 
 

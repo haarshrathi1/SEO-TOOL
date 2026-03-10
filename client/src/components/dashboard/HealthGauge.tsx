@@ -1,51 +1,38 @@
 import { ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import type { AuditResult } from '../../types';
+import { calculateAuditHealth, countHealthyPages } from '../../utils/auditScoring';
 
 interface HealthGaugeProps {
     results: AuditResult[];
 }
 
 export default function HealthGauge({ results }: HealthGaugeProps) {
-    // 1. Calculate Health Score (Penalty System)
-    const calculateScore = (res: AuditResult[]) => {
-        if (!res.length) return 0;
-
-        let score = 100;
-        const total = res.length;
-
-        // A. Critical Errors (Max 40 pts deduction)
-        const criticalCount = res.filter(r => r.status === 'FAIL' || r.h1Count === 0).length;
-        const criticalPenalty = (criticalCount / total) * 40;
-        score -= criticalPenalty;
-
-        // B. Warnings (Max 30 pts deduction)
-        const warningCount = res.filter(r =>
-            r.status === 'PARTIAL' || !r.description || (r.wordCount || 0) < 300
-        ).length;
-        const warningPenalty = (warningCount / total) * 30;
-        score -= warningPenalty;
-
-        // C. Performance (Max 30 pts deduction)
-        const psiSum = res.reduce((acc, r) => acc + (r.psi_data?.desktop?.score || 0.5), 0);
-        const avgPsi = psiSum / total;
-        const perfPenalty = (1 - avgPsi) * 30;
-        score -= perfPenalty;
-
-        return Math.round(Math.max(0, score));
-    };
-
-    const healthScore = calculateScore(results);
-
-    // Gauge Data
+    const healthScore = calculateAuditHealth(results);
     const gaugeData = [
         { name: 'Score', value: healthScore },
-        { name: 'Remaining', value: 100 - healthScore }
+        { name: 'Remaining', value: Math.max(0, 100 - healthScore) },
     ];
 
-    // Issue Counts
-    const criticalErrors = results.filter(r => r.status === 'FAIL' || r.h1Count === 0).length;
-    const warnings = results.filter(r => r.status === 'PARTIAL' || !r.description).length;
-    const healthy = results.filter(r => r.status === 'PASS' && r.description && r.h1Count === 1).length;
+    const criticalErrors = results.filter((result) =>
+        result.status !== 'PASS'
+        || (result.httpStatus || 0) >= 400
+        || !!result.isNoindex
+        || result.h1Count === 0
+    ).length;
+
+    const warnings = results.filter((result) =>
+        !result.description
+        || (result.wordCount || 0) < 300
+        || !!result.duplicateTitle
+        || !!result.duplicateDescription
+        || !!result.canonicalIssue
+        || !result.canonicalUrl
+        || !result.schemaCount
+        || (result.missingAltCount || 0) > 0
+        || !result.lang
+    ).length;
+
+    const healthy = countHealthyPages(results);
 
     return (
         <div className="bg-white p-6 border-2 border-black shadow-[8px_8px_0px_0px_#000] flex flex-col justify-between relative overflow-hidden group hover:-translate-y-1 transition-transform h-full">
@@ -67,7 +54,6 @@ export default function HealthGauge({ results }: HealthGaugeProps) {
                                 outerRadius={80}
                                 paddingAngle={5}
                                 dataKey="value"
-                                cornerRadius={0}
                                 stroke="black"
                                 strokeWidth={2}
                             >
@@ -78,7 +64,6 @@ export default function HealthGauge({ results }: HealthGaugeProps) {
                         </PieChart>
                     </ResponsiveContainer>
                 </div>
-                {/* Center Text */}
                 <div className="absolute top-[65%] left-1/2 -translate-x-1/2 -translate-y-1/2 text-center mt-2">
                     <div className="text-5xl font-black text-black leading-none">{healthScore}</div>
                     <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Score</div>

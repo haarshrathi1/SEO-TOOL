@@ -1,4 +1,4 @@
-import { Search, CheckCircle, XCircle } from 'lucide-react';
+import { Search, CheckCircle, XCircle, Shuffle } from 'lucide-react';
 import type { AuditResult } from '../../types';
 
 interface CrawlStatusProps {
@@ -6,6 +6,10 @@ interface CrawlStatusProps {
 }
 
 export default function CrawlStatus({ results }: CrawlStatusProps) {
+    const indexedCount = results.filter((result) => result.status === 'PASS' && !result.isNoindex).length;
+    const needsWorkCount = results.filter((result) => result.status !== 'PASS' || !!result.isNoindex).length;
+    const sampledPerformanceCount = results.filter((result) => result.performanceSampled).length;
+
     return (
         <div className="bg-white p-6 border-2 border-black shadow-[8px_8px_0px_0px_#000] flex flex-col justify-between group hover:-translate-y-1 transition-transform h-full">
             <div>
@@ -22,21 +26,32 @@ export default function CrawlStatus({ results }: CrawlStatusProps) {
                             <div className="p-1.5 bg-green-200 border-2 border-black text-black"><CheckCircle className="w-4 h-4" /></div>
                             <div>
                                 <div className="text-[10px] text-black font-black uppercase">Indexed</div>
-                                <div className="text-xs text-slate-600 font-bold">Can search</div>
+                                <div className="text-xs text-slate-600 font-bold">Search-ready pages</div>
                             </div>
                         </div>
-                        <div className="text-2xl font-black text-black">{results.filter(r => r.status === 'PASS').length}</div>
+                        <div className="text-2xl font-black text-black">{indexedCount}</div>
                     </div>
 
                     <div className="flex items-center justify-between p-3 bg-white border-2 border-black shadow-[2px_2px_0px_0px_#000] hover:translate-x-1 transition-transform">
                         <div className="flex items-center gap-3">
                             <div className="p-1.5 bg-red-200 border-2 border-black text-black"><XCircle className="w-4 h-4" /></div>
                             <div>
-                                <div className="text-[10px] text-black font-black uppercase">Not Indexed</div>
-                                <div className="text-xs text-slate-600 font-bold">Issues found</div>
+                                <div className="text-[10px] text-black font-black uppercase">Needs Work</div>
+                                <div className="text-xs text-slate-600 font-bold">Index or quality issues</div>
                             </div>
                         </div>
-                        <div className="text-2xl font-black text-black">{results.filter(r => r.status !== 'PASS').length}</div>
+                        <div className="text-2xl font-black text-black">{needsWorkCount}</div>
+                    </div>
+
+                    <div className="flex items-center justify-between p-3 bg-white border-2 border-black shadow-[2px_2px_0px_0px_#000] hover:translate-x-1 transition-transform">
+                        <div className="flex items-center gap-3">
+                            <div className="p-1.5 bg-yellow-200 border-2 border-black text-black"><Shuffle className="w-4 h-4" /></div>
+                            <div>
+                                <div className="text-[10px] text-black font-black uppercase">PSI Sample</div>
+                                <div className="text-xs text-slate-600 font-bold">Pages with live speed data</div>
+                            </div>
+                        </div>
+                        <div className="text-2xl font-black text-black">{sampledPerformanceCount}</div>
                     </div>
                 </div>
             </div>

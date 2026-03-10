@@ -32,6 +32,9 @@ export interface AnalysisData {
         psiNotices: number;
         exactErrors: string;
         failedUrls?: { url: string; reason: string }[];
+        discoveredUrls?: number;
+        inspectedUrls?: number;
+        inspectionMode?: 'sampled' | 'full';
     };
     keywords: {
         count: number;
@@ -95,6 +98,10 @@ export interface PSIData {
 
 export interface AuditResult {
     url: string;
+    normalizedUrl?: string;
+    finalUrl?: string;
+    httpStatus?: number;
+    redirected?: boolean;
     status: string;
     coverageState: string;
     indexingState: string;
@@ -102,14 +109,31 @@ export interface AuditResult {
     robotStatus: string;
     ga4_views?: number;
     psi_score?: number;
-    psi_data?: PSIData;
+    psi_data?: PSIData | null;
     title?: string;
     description?: string;
+    canonicalUrl?: string;
+    canonicalIssue?: boolean;
+    metaRobots?: string;
+    isNoindex?: boolean;
+    isNofollow?: boolean;
+    lang?: string;
     h1Count?: number;
+    h2Count?: number;
     wordCount?: number;
+    imageCount?: number;
+    missingAltCount?: number;
+    schemaCount?: number;
+    hasOgTags?: boolean;
+    hasTwitterCard?: boolean;
+    duplicateTitle?: boolean;
+    duplicateDescription?: boolean;
     internalLinksOut?: number;
     externalLinksOut?: number;
     incomingLinks?: number;
+    crawlDepth?: number | null;
+    isOrphan?: boolean;
+    performanceSampled?: boolean;
     brokenLinks?: string[];
 }
 
@@ -325,3 +349,4 @@ export interface SavedResearchV2 extends KeywordDataV2 {
     id: string;
     timestamp: string;
 }
+
