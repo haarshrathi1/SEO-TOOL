@@ -1,4 +1,4 @@
-﻿const jwt = require('jsonwebtoken');
+const jwt = require('jsonwebtoken');
 const express = require('express');
 const { OAuth2Client } = require('google-auth-library');
 const { Viewer } = require('./models');
@@ -6,11 +6,15 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 const router = express.Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_change_me';
+const JWT_SECRET = process.env.JWT_SECRET;
 const GOOGLE_CLIENT_ID = process.env.CLIENT_ID;
 const TOKEN_EXPIRY = '7d';
 const LEGACY_ADMIN_EMAIL = 'harshrathi.hyvikk@gmail.com';
 const DEV_ADMIN_BYPASS = /^(1|true|yes|on)$/i.test(process.env.DEV_ADMIN_BYPASS || '');
+
+if (!JWT_SECRET) {
+    throw new Error('JWT_SECRET is required. Add it to server/.env before starting the server.');
+}
 
 const adminEmails = new Set(
     [
@@ -56,12 +60,21 @@ function shouldBypassAdmin(req) {
     return DEV_ADMIN_BYPASS && isLocalRequest(req);
 }
 
+function getCookieSameSite() {
+    const configured = (process.env.COOKIE_SAME_SITE || 'lax').toLowerCase();
+    if (configured === 'none' || configured === 'strict') {
+        return configured;
+    }
+    return 'lax';
+}
+
 function getCookieOptions() {
+    const sameSite = getCookieSameSite();
     const isProd = process.env.NODE_ENV === 'production';
     return {
         httpOnly: true,
-        secure: isProd,
-        sameSite: isProd ? 'none' : 'lax',
+        secure: isProd || sameSite === 'none',
+        sameSite,
         maxAge: 7 * 24 * 60 * 60 * 1000,
         path: '/',
     };
@@ -84,8 +97,9 @@ function requireAuth(req, res, next) {
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
         req.user = decoded;
+        req.authSource = bearerToken ? 'bearer' : cookieToken ? 'cookie' : 'legacy';
         next();
-    } catch (e) {
+    } catch {
         return res.status(401).json({ error: 'Invalid or expired token' });
     }
 }
@@ -110,9 +124,13 @@ router.post('/google-login', async (req, res) => {
         });
 
         const payload = ticket.getPayload();
-        const email = payload.email.toLowerCase().trim();
-        const name = payload.name || email;
-        const picture = payload.picture || '';
+        const email = payload?.email?.toLowerCase().trim();
+        const name = payload?.name || email;
+        const picture = payload?.picture || '';
+
+        if (!email) {
+            return res.status(401).json({ error: 'Google account email not available' });
+        }
 
         if (isAdminEmail(email) || shouldBypassAdmin(req)) {
             const token = jwt.sign(
@@ -156,13 +174,7 @@ router.get('/me', requireAuth, (req, res) => {
 });
 
 router.post('/logout', (req, res) => {
-    const isProd = process.env.NODE_ENV === 'production';
-    res.clearCookie('seo_token', {
-        httpOnly: true,
-        secure: isProd,
-        sameSite: isProd ? 'none' : 'lax',
-        path: '/',
-    });
+    res.clearCookie('seo_token', getCookieOptions());
     res.json({ message: 'Logged out' });
 });
 

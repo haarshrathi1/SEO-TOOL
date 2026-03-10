@@ -62,7 +62,7 @@ export default function AuditAI({ results }: AuditAIProps) {
                                 : 'bg-white border-transparent hover:bg-slate-50 text-slate-600 hover:border-black font-medium'
                                 }`}
                         >
-                            <div className="truncate font-mono">{r.url.replace('https://laserliftsolutions.com', '') || '/'}</div>
+                            <div className="truncate font-mono">{(() => { try { return new URL(r.finalUrl || r.url).pathname || '/'; } catch { return r.url; } })()}</div>
                             {r.status === 'FAIL' && <span className="text-[10px] text-red-500 font-bold uppercase block mt-1">Not Indexed</span>}
                         </button>
                     ))}
@@ -177,3 +177,4 @@ export default function AuditAI({ results }: AuditAIProps) {
         </div>
     );
 }
+

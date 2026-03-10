@@ -26,12 +26,9 @@ export default function Audit({ projectId }: AuditProps) {
     const [error, setError] = useState('');
     const [activeTab, setActiveTab] = useState<Tab>('overview');
     const [filterId, setFilterId] = useState<string>('');
-
-    // History State
     const [history, setHistory] = useState<AuditHistoryItem[]>([]);
     const [selectedHistoryId, setSelectedHistoryId] = useState<string>('live');
 
-    // Fetch History on Mount
     useEffect(() => {
         fetchHistory();
     }, []);
@@ -49,11 +46,11 @@ export default function Audit({ projectId }: AuditProps) {
         setLoading(true);
         setError('');
         setResults([]);
-        setSelectedHistoryId('live'); // Reset state to live
+        setSelectedHistoryId('live');
         try {
             const data = await api.runAudit(projectId);
             setResults(data);
-            fetchHistory(); // Refresh dropdown
+            fetchHistory();
         } catch (e: unknown) {
             console.error(e);
             if (e instanceof Error && e.message === 'Unauthorized') {
@@ -69,10 +66,10 @@ export default function Audit({ projectId }: AuditProps) {
     const handleHistorySelect = (id: string) => {
         setSelectedHistoryId(id);
         if (id === 'live') {
-            setResults([]); // Clear results for "ready state"
+            setResults([]);
             return;
         }
-        const item = history.find(h => h.id === id);
+        const item = history.find((entry) => entry.id === id);
         if (item) {
             setResults(item.results);
             setError('');
@@ -82,50 +79,74 @@ export default function Audit({ projectId }: AuditProps) {
     const handleRequestIndexing = async (url: string) => {
         try {
             await requestIndexing(url);
-            alert('Indexing Requested Successfully!');
+            alert('Indexing request sent. Use this only for supported page types and recrawl workflows.');
         } catch (e: unknown) {
             alert(`Request failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
         }
     };
 
-    // Filter Logic
-    const getFilteredResults = () => {
+    const filteredResults = (() => {
         if (!filterId) return results;
-        switch (filterId) {
-            case 'not-indexed': return results.filter(r => r.status === 'FAIL');
-            case 'no-h1': return results.filter(r => r.h1Count === 0);
-            case 'multi-h1': return results.filter(r => r.h1Count && r.h1Count > 1);
-            case 'missing-desc': return results.filter(r => !r.description);
-            case 'low-word-count': return results.filter(r => (r.wordCount || 0) < 300);
-            case 'orphans': return results.filter(r => (r.incomingLinks || 0) === 0);
-            case 'slow-performance': return results.filter(r => (r.psi_data?.desktop?.score || 0) < 50);
-            default: return results;
-        }
-    };
 
-    const filteredResults = getFilteredResults();
+        switch (filterId) {
+            case 'not-indexed':
+                return results.filter((result) => result.status !== 'PASS');
+            case 'non-200':
+                return results.filter((result) => (result.httpStatus || 0) >= 400);
+            case 'noindex':
+                return results.filter((result) => !!result.isNoindex);
+            case 'no-h1':
+                return results.filter((result) => result.h1Count === 0);
+            case 'multi-h1':
+                return results.filter((result) => (result.h1Count || 0) > 1);
+            case 'missing-desc':
+                return results.filter((result) => !result.description);
+            case 'missing-canonical':
+                return results.filter((result) => !result.canonicalUrl);
+            case 'canonical-issue':
+                return results.filter((result) => !!result.canonicalIssue);
+            case 'duplicate-title':
+                return results.filter((result) => !!result.duplicateTitle);
+            case 'duplicate-description':
+                return results.filter((result) => !!result.duplicateDescription);
+            case 'low-word-count':
+                return results.filter((result) => (result.wordCount || 0) < 300);
+            case 'missing-schema':
+                return results.filter((result) => !result.schemaCount);
+            case 'missing-alt':
+                return results.filter((result) => (result.missingAltCount || 0) > 0);
+            case 'missing-lang':
+                return results.filter((result) => !result.lang);
+            case 'missing-social':
+                return results.filter((result) => !result.hasOgTags || !result.hasTwitterCard);
+            case 'redirected':
+                return results.filter((result) => !!result.redirected && (result.httpStatus || 0) < 400);
+            case 'orphans':
+                return results.filter((result) => !!result.isOrphan);
+            case 'slow-performance':
+                return results.filter((result) => (result.psi_data?.desktop?.score || 0) < 50);
+            default:
+                return results;
+        }
+    })();
 
     const handleReviewIssue = (id: string) => {
         setFilterId(id);
         setActiveTab('pages');
     };
 
-    // Filter history for current project (optional)
-    const projectHistory = history.filter(h => h.projectId === projectId);
+    const projectHistory = history.filter((entry) => entry.projectId === projectId);
     const formatDate = (iso: string) => new Date(iso).toLocaleString();
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-6 duration-700 pb-20">
-            {/* Header Section */}
             <div className="flex flex-col md:flex-row items-center justify-between gap-6 bg-white border-2 border-black p-6 shadow-[8px_8px_0px_0px_#000]">
                 <div className="flex items-center gap-5 w-full md:w-auto">
                     <div className="p-3 bg-[#FF6B6B] border-2 border-black text-black shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)]">
                         <Search className="w-8 h-8" />
                     </div>
                     <div>
-                        <h2 className="text-4xl font-black text-black tracking-tighter uppercase italic">
-                            SEO Commander
-                        </h2>
+                        <h2 className="text-4xl font-black text-black tracking-tighter uppercase italic">SEO Commander</h2>
                         <div className="flex items-center gap-2 mt-1">
                             <span className="w-2 h-2 bg-green-500 rounded-full border border-black animate-pulse"></span>
                             <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">System Ready</p>
@@ -134,7 +155,6 @@ export default function Audit({ projectId }: AuditProps) {
                 </div>
 
                 <div className="flex items-center gap-3 w-full md:w-auto">
-                    {/* History Dropdown */}
                     {projectHistory.length > 0 && (
                         <div className="relative group flex-1 md:flex-none">
                             <select
@@ -142,11 +162,11 @@ export default function Audit({ projectId }: AuditProps) {
                                 onChange={(e) => handleHistorySelect(e.target.value)}
                                 className="w-full md:w-56 appearance-none bg-white hover:bg-slate-50 border-2 border-black text-black text-sm font-bold py-3 pl-4 pr-10 shadow-[4px_4px_0px_0px_#000] focus:translate-x-[2px] focus:translate-y-[2px] focus:shadow-none focus:outline-none transition-all cursor-pointer uppercase"
                             >
-                                <option value="live">⚡ New Audit</option>
+                                <option value="live">New Audit</option>
                                 <optgroup label="Previous Audits">
-                                    {projectHistory.map((h) => (
-                                        <option key={h.id} value={h.id}>
-                                            📄 {formatDate(h.timestamp)}
+                                    {projectHistory.map((entry) => (
+                                        <option key={entry.id} value={entry.id}>
+                                            Report {formatDate(entry.timestamp)}
                                         </option>
                                     ))}
                                 </optgroup>
@@ -173,11 +193,8 @@ export default function Audit({ projectId }: AuditProps) {
                 </div>
             )}
 
-            {/* Main Content Area */}
             {results.length > 0 && (
                 <div className="space-y-6">
-
-                    {/* Tabs Navigation - Improved Button Group */}
                     <div className="flex flex-wrap items-center gap-4 mb-2">
                         {[
                             { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -203,15 +220,13 @@ export default function Audit({ projectId }: AuditProps) {
                         ))}
                     </div>
 
-                    {/* Historical Banner */}
                     {selectedHistoryId !== 'live' && (
                         <div className="bg-white border-2 border-black p-3 flex items-center gap-3 text-black text-sm shadow-[4px_4px_0px_0px_#000] w-fit">
                             <Calendar className="w-4 h-4 text-black" />
-                            <div>Historical Snapshot: <span className="font-black bg-yellow-300 px-1 border border-black">{formatDate(history.find(h => h.id === selectedHistoryId)?.timestamp || '')}</span></div>
+                            <div>Historical Snapshot: <span className="font-black bg-yellow-300 px-1 border border-black">{formatDate(history.find((entry) => entry.id === selectedHistoryId)?.timestamp || '')}</span></div>
                         </div>
                     )}
 
-                    {/* Tab Content */}
                     <div className="min-h-[400px]">
                         {activeTab === 'overview' && <AuditOverview results={results} history={projectHistory} />}
                         {activeTab === 'issues' && <AuditIssues results={results} onReview={handleReviewIssue} />}
@@ -221,7 +236,7 @@ export default function Audit({ projectId }: AuditProps) {
                                     <div className="flex items-center justify-between bg-indigo-50 border border-indigo-100 p-3 rounded-xl animate-in fade-in slide-in-from-top-2">
                                         <div className="text-sm font-bold text-indigo-700 flex items-center gap-2">
                                             <Filter className="w-4 h-4" />
-                                            Filtering by: <span className="uppercase">{filterId.replace('-', ' ')}</span>
+                                            Filtering by: <span className="uppercase">{filterId.replace(/-/g, ' ')}</span>
                                             <span className="bg-white px-2 py-0.5 rounded text-xs border border-indigo-200">{filteredResults.length}</span>
                                         </div>
                                         <button

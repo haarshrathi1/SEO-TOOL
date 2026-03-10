@@ -1,11 +1,11 @@
-﻿require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const auth = require('./auth');
 const userAuth = require('./userAuth');
-const { connectMongo } = require('./db');
+const { connectMongo, mongoose } = require('./db');
 
 const keywords = require('./keywords');
 const keywordHistory = require('./keywordHistory');
@@ -20,25 +20,37 @@ const { analyzePageContent } = require('./gemini');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-const allowedOrigins = [
+const configuredOrigins = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+const allowedOrigins = new Set([
     'http://localhost:5173',
     'http://localhost:3000',
     process.env.FRONTEND_URL,
     'https://seotool.harshrathi.com',
     'http://seotool.harshrathi.com',
-].filter(Boolean);
+    ...configuredOrigins,
+].filter(Boolean));
 
+function isOriginAllowed(origin) {
+    return !origin || allowedOrigins.has(origin);
+}
+
+app.disable('x-powered-by');
 app.use(cors({
     origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) {
+        if (isOriginAllowed(origin)) {
             callback(null, true);
-        } else {
-            callback(null, true);
+            return;
         }
+
+        callback(new Error(`Origin not allowed by CORS: ${origin}`));
     },
     credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
 const clientDist = path.join(__dirname, '..', 'client', 'dist');
@@ -50,7 +62,12 @@ app.use('/auth/google', auth.router);
 
 app.get('/health', (req, res) => {
     const isAuthenticated = !!auth.getAuthClient();
-    res.json({ status: 'ok', authenticated: isAuthenticated });
+    const mongoConnected = mongoose.connection.readyState === 1;
+    res.json({
+        status: mongoConnected ? 'ok' : 'degraded',
+        authenticated: isAuthenticated,
+        mongoConnected,
+    });
 });
 
 // Protected routes - all users
@@ -168,16 +185,49 @@ app.get('*', (req, res) => {
     }
 });
 
-async function startServer() {
+app.use((error, req, res, next) => {
+    if (error?.message?.startsWith('Origin not allowed by CORS')) {
+        res.status(403).json({ error: 'Origin not allowed' });
+        return;
+    }
+
+    next(error);
+});
+
+async function initializeDependencies() {
     try {
         await connectMongo();
         await auth.initializeAuth();
+    } catch (error) {
+        console.error('[Startup] Dependency init failed. Server will stay up and retry MongoDB in background:', error.message);
+    }
+}
 
+function scheduleMongoReconnect() {
+    const retryMs = Number(process.env.MONGO_RETRY_MS || 30000);
+    const timer = setInterval(async () => {
+        if (mongoose.connection.readyState === 1) return;
+        try {
+            await connectMongo();
+            await auth.initializeAuth();
+            console.log('[MongoDB] Reconnected in background');
+        } catch (error) {
+            console.error('[MongoDB] Reconnect attempt failed:', error.message);
+        }
+    }, retryMs);
+    if (typeof timer.unref === 'function') {
+        timer.unref();
+    }
+}
+
+async function startServer() {
+    try {
         const server = app.listen(PORT, () => {
             console.log(`Server running on http://localhost:${PORT}`);
         });
-
         server.setTimeout(1200000);
+        await initializeDependencies();
+        scheduleMongoReconnect();
     } catch (error) {
         console.error('Failed to start server:', error);
         process.exit(1);
@@ -185,5 +235,3 @@ async function startServer() {
 }
 
 startServer();
-
-
