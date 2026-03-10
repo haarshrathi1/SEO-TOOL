@@ -99,12 +99,9 @@ const crawlSite = async (startUrl, maxPages = 200) => {
     // ---------------------------------------------------------
     // PUPPETEER SETUP for React/SPA Crawling
     // ---------------------------------------------------------
-    const puppeteer = require('puppeteer');
+    const { launchBrowser } = require('./browser');
     console.log('Launching Headless Browser...');
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
+    const browser = await launchBrowser();
 
     try {
         const batchSize = 3; // Keep low for memory usage
@@ -312,3 +309,4 @@ const formatCoverageState = (state) => {
 };
 
 module.exports = { crawlSite };
+
