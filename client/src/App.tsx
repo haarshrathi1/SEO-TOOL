@@ -1,27 +1,45 @@
-﻿import { useState, useEffect, useCallback } from 'react';
-import Dashboard from './Dashboard';
-import KeywordResearch from './KeywordResearch';
-import { api, setToken, clearToken } from './api';
-import { Loader2, UserPlus, Trash2, Users, LogOut, KeyRound, Brain } from 'lucide-react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
+import { Brain, KeyRound, Loader2, LogOut, Trash2, UserPlus, Users } from 'lucide-react';
+import { api, clearToken, setToken } from './api';
+import type { AuthUser, ViewerRecord } from './types';
+
+const Dashboard = lazy(() => import('./Dashboard'));
+const KeywordResearch = lazy(() => import('./KeywordResearch'));
+
+interface GoogleCredentialResponse {
+  credential: string;
+}
+
+interface GoogleIdentityClient {
+  initialize(config: {
+    client_id: string;
+    callback: (response: GoogleCredentialResponse) => void;
+    auto_select: boolean;
+    ux_mode: 'popup';
+  }): void;
+  renderButton(
+    element: HTMLElement,
+    options: {
+      theme: 'outline';
+      size: 'large';
+      shape: 'pill';
+      width: number;
+      text: 'signin_with';
+      logo_alignment: 'left';
+    },
+  ): void;
+  disableAutoSelect(): void;
+}
 
 declare global {
   interface Window {
-    google: any;
-    handleGoogleLogin?: (response: any) => void;
+    google?: {
+      accounts?: {
+        id?: GoogleIdentityClient;
+      };
+    };
+    handleGoogleLogin?: (response: GoogleCredentialResponse) => void;
   }
-}
-
-interface UserInfo {
-  email: string;
-  role: 'admin' | 'viewer';
-  name?: string;
-  picture?: string;
-  access?: string[];
-}
-interface ViewerInfo {
-  email: string;
-  access: string[];
-  createdAt: string;
 }
 
 function getCurrentRoute(): 'dashboard' | 'keywords' {
@@ -30,67 +48,105 @@ function getCurrentRoute(): 'dashboard' | 'keywords' {
     : 'dashboard';
 }
 
-function LoginPage({ onLogin }: { onLogin: (user: UserInfo) => void }) {
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function FullScreenLoader() {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-indigo-50/40 flex items-center justify-center">
+      <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+    </div>
+  );
+}
+
+function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => void }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [configLoading, setConfigLoading] = useState(true);
 
-  const handleCredential = useCallback(async (response: any) => {
+  const handleCredential = useCallback(async (response: GoogleCredentialResponse) => {
+    if (!response.credential) {
+      setError('Google did not return a valid credential.');
+      return;
+    }
+
     setLoading(true);
     setError('');
     try {
       const res = await api.googleLogin(response.credential);
       setToken(res.token);
       onLogin(res.user);
-    } catch (err: any) {
-      setError(err.message || 'Login failed');
+    } catch (error) {
+      setError(getErrorMessage(error, 'Login failed'));
     } finally {
       setLoading(false);
     }
   }, [onLogin]);
 
   useEffect(() => {
-    // Make handler available globally for Google callback
     window.handleGoogleLogin = handleCredential;
+
+    const renderGoogleButton = (clientId: string) => {
+      const googleId = window.google?.accounts?.id;
+      const buttonElement = document.getElementById('google-signin-btn');
+
+      if (!googleId || !(buttonElement instanceof HTMLElement)) {
+        setError('Failed to initialize Google Sign-In.');
+        setConfigLoading(false);
+        return;
+      }
+
+      googleId.initialize({
+        client_id: clientId,
+        callback: handleCredential,
+        auto_select: false,
+        ux_mode: 'popup',
+      });
+      googleId.renderButton(buttonElement, {
+        theme: 'outline',
+        size: 'large',
+        shape: 'pill',
+        width: 360,
+        text: 'signin_with',
+        logo_alignment: 'left',
+      });
+      setConfigLoading(false);
+    };
 
     const initGoogle = async () => {
       try {
         const config = await api.getAuthConfig();
+        if (!config.googleClientId) {
+          throw new Error('Google client ID is missing from the server config.');
+        }
 
-        // Load Google Identity Services script
+        if (window.google?.accounts?.id) {
+          renderGoogleButton(config.googleClientId);
+          return;
+        }
+
         const script = document.createElement('script');
         script.src = 'https://accounts.google.com/gsi/client';
         script.async = true;
         script.defer = true;
-        script.onload = () => {
-          window.google.accounts.id.initialize({
-            client_id: config.googleClientId,
-            callback: handleCredential,
-            auto_select: false,
-            ux_mode: 'popup',
-          });
-          window.google.accounts.id.renderButton(
-            document.getElementById('google-signin-btn'),
-            {
-              theme: 'outline',
-              size: 'large',
-              shape: 'pill',
-              width: 360,
-              text: 'signin_with',
-              logo_alignment: 'left',
-            }
-          );
+        script.onload = () => renderGoogleButton(config.googleClientId);
+        script.onerror = () => {
+          setError('Failed to load Google Sign-In.');
           setConfigLoading(false);
         };
         document.head.appendChild(script);
-      } catch (e) {
-        setError('Failed to load login config');
+      } catch (error) {
+        setError(getErrorMessage(error, 'Failed to load login config'));
         setConfigLoading(false);
       }
     };
-    initGoogle();
 
-    return () => { delete window.handleGoogleLogin; };
+    void initGoogle();
+
+    return () => {
+      delete window.handleGoogleLogin;
+    };
   }, [handleCredential]);
 
   return (
@@ -129,32 +185,52 @@ function LoginPage({ onLogin }: { onLogin: (user: UserInfo) => void }) {
 }
 
 function ViewerManager() {
-  const [viewers, setViewers] = useState<ViewerInfo[]>([]);
+  const [viewers, setViewers] = useState<ViewerRecord[]>([]);
   const [newEmail, setNewEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
 
-  const fetchViewers = async () => {
-    try { setViewers(await api.getViewers()); } catch { }
-  };
-  useEffect(() => { fetchViewers(); }, []);
+  const fetchViewers = useCallback(async () => {
+    try {
+      setViewers(await api.getViewers());
+    } catch (error) {
+      setMsg(getErrorMessage(error, 'Failed to load viewers'));
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchViewers();
+  }, [fetchViewers]);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newEmail.trim()) return;
-    setLoading(true); setMsg('');
+
+    setLoading(true);
+    setMsg('');
     try {
-      await api.addViewer(newEmail);
+      await api.addViewer(newEmail.trim());
       setNewEmail('');
-      setMsg('Viewer added!');
-      fetchViewers();
-    } catch (err: any) { setMsg(err.message); }
-    finally { setLoading(false); }
+      setMsg('Viewer added.');
+      await fetchViewers();
+    } catch (error) {
+      setMsg(getErrorMessage(error, 'Failed to add viewer'));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleRemove = async (email: string) => {
-    if (!confirm(`Remove viewer ${email}?`)) return;
-    try { await api.removeViewer(email); fetchViewers(); } catch { }
+    if (!window.confirm(`Remove viewer ${email}?`)) return;
+
+    setMsg('');
+    try {
+      await api.removeViewer(email);
+      await fetchViewers();
+      setMsg('Viewer removed.');
+    } catch (error) {
+      setMsg(getErrorMessage(error, 'Failed to remove viewer'));
+    }
   };
 
   return (
@@ -164,7 +240,7 @@ function ViewerManager() {
       <form onSubmit={handleAdd} className="flex gap-3 items-end">
         <div className="flex-1">
           <label className="text-xs font-semibold text-slate-500 uppercase">Google Email</label>
-          <input type="email" value={newEmail} onChange={e => setNewEmail(e.target.value)} placeholder="viewer@gmail.com" className="premium-input py-2.5 text-sm mt-1" />
+          <input type="email" value={newEmail} onChange={(event) => setNewEmail(event.target.value)} placeholder="viewer@gmail.com" className="premium-input py-2.5 text-sm mt-1" />
         </div>
         <button type="submit" disabled={loading} className="premium-button bg-indigo-600 text-white hover:bg-indigo-700 py-2.5 flex-shrink-0">
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><UserPlus className="w-4 h-4" /> Add</>}
@@ -173,13 +249,13 @@ function ViewerManager() {
       {msg && <p className="text-sm text-indigo-600 font-medium">{msg}</p>}
       {viewers.length > 0 && (
         <div className="space-y-2">
-          {viewers.map(v => (
-            <div key={v.email} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
+          {viewers.map((viewer) => (
+            <div key={viewer.email} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
               <div>
-                <span className="font-medium text-sm text-slate-800">{v.email}</span>
-                <span className="ml-2 text-xs text-slate-400 inline-flex items-center gap-1"><KeyRound className="w-3 h-3" /> {v.access?.join(', ')}</span>
+                <span className="font-medium text-sm text-slate-800">{viewer.email}</span>
+                <span className="ml-2 text-xs text-slate-400 inline-flex items-center gap-1"><KeyRound className="w-3 h-3" /> {viewer.access.join(', ')}</span>
               </div>
-              <button onClick={() => handleRemove(v.email)} className="text-rose-400 hover:text-rose-600"><Trash2 className="w-4 h-4" /></button>
+              <button onClick={() => void handleRemove(viewer.email)} className="text-rose-400 hover:text-rose-600"><Trash2 className="w-4 h-4" /></button>
             </div>
           ))}
         </div>
@@ -189,7 +265,7 @@ function ViewerManager() {
   );
 }
 
-function AdminNav({ user, onLogout, onShowViewers, route }: { user: UserInfo; onLogout: () => void; onShowViewers: () => void; route: 'dashboard' | 'keywords' }) {
+function AdminNav({ user, onLogout, onShowViewers, route }: { user: AuthUser; onLogout: () => void; onShowViewers: () => void; route: 'dashboard' | 'keywords' }) {
   return (
     <div className="fixed top-4 right-4 z-50 flex items-center gap-2">
       {route === 'keywords'
@@ -211,7 +287,7 @@ function AdminNav({ user, onLogout, onShowViewers, route }: { user: UserInfo; on
 function ViewerModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[80vh] overflow-y-auto border border-slate-200" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[80vh] overflow-y-auto border border-slate-200" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-slate-100">
           <h2 className="font-bold text-lg text-slate-900 flex items-center gap-2"><Users className="w-5 h-5 text-indigo-600" /> Manage Viewers</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 font-medium text-sm">Close</button>
@@ -225,7 +301,7 @@ function ViewerModal({ onClose }: { onClose: () => void }) {
 }
 
 function App() {
-  const [user, setUser] = useState<UserInfo | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [showViewers, setShowViewers] = useState(false);
   const [route, setRoute] = useState<'dashboard' | 'keywords'>(getCurrentRoute);
@@ -247,7 +323,7 @@ function App() {
     };
 
     syncRoute();
-    checkAuth();
+    void checkAuth();
 
     return () => {
       window.removeEventListener('hashchange', syncRoute);
@@ -257,50 +333,45 @@ function App() {
 
   const handleLogout = async () => {
     clearToken();
-    try { await api.logout(); } catch { }
-    setUser(null);
-    if (window.google?.accounts?.id) {
-      window.google.accounts.id.disableAutoSelect();
+    try {
+      await api.logout();
+    } catch (error) {
+      console.error('Logout failed:', error);
     }
+    setUser(null);
+    window.google?.accounts?.id?.disableAutoSelect();
   };
 
-  if (loading) return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-indigo-50/40 flex items-center justify-center">
-      <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
-    </div>
-  );
+  if (loading) return <FullScreenLoader />;
 
   if (!user) return <LoginPage onLogin={setUser} />;
 
-  // Viewer can ONLY access keyword tool
   if (user.role === 'viewer') {
     return (
       <div>
         <div className="fixed top-4 right-4 z-50 flex items-center gap-2">
           {user.picture && <img src={user.picture} className="w-7 h-7 rounded-full border border-slate-200" alt="" />}
           <span className="text-xs text-slate-500 bg-white/80 backdrop-blur-sm px-3 py-1.5 rounded-full border border-slate-200">{user.name || user.email}</span>
-          <button onClick={handleLogout} className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center hover:bg-rose-50 hover:border-rose-200 transition-all shadow-sm">
+          <button onClick={() => void handleLogout()} className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center hover:bg-rose-50 hover:border-rose-200 transition-all shadow-sm">
             <LogOut className="w-3.5 h-3.5 text-slate-500" />
           </button>
         </div>
-        <KeywordResearch />
+        <Suspense fallback={<FullScreenLoader />}>
+          <KeywordResearch />
+        </Suspense>
       </div>
     );
   }
 
-  // Admin views
   return (
     <div>
-      <AdminNav user={user} onLogout={handleLogout} onShowViewers={() => setShowViewers(true)} route={route} />
+      <AdminNav user={user} onLogout={() => void handleLogout()} onShowViewers={() => setShowViewers(true)} route={route} />
       {showViewers && <ViewerModal onClose={() => setShowViewers(false)} />}
-      {route === 'keywords' ? <KeywordResearch /> : <Dashboard />}
+      <Suspense fallback={<FullScreenLoader />}>
+        {route === 'keywords' ? <KeywordResearch /> : <Dashboard />}
+      </Suspense>
     </div>
   );
 }
 
 export default App;
-
-
-
-
-

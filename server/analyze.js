@@ -13,6 +13,10 @@ const analyzeSite = async (req, res) => {
         const projectId = req.query.projectId;
         const project = getProject(projectId);
 
+        if (!project) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
         const siteUrl = project.url;
         const ga4PropertyId = project.ga4PropertyId;
 

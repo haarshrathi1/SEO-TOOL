@@ -20,7 +20,8 @@ const projects = [
 ];
 
 const getProject = (id) => {
-    return projects.find(p => p.id === id) || projects[0];
+    if (!id) return projects[0] || null;
+    return projects.find(p => p.id === id) || null;
 };
 
 module.exports = { projects, getProject };

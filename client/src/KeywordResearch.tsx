@@ -1,8 +1,8 @@
 ﻿import { useState, useEffect, useRef } from 'react';
-import { Search, Loader2, Target, BarChart3, Layers, Sparkles, ExternalLink, Zap, Save, History, ChevronRight, TrendingUp, Brain, Lightbulb, Crosshair, Rocket, ArrowRight, ChevronDown, ChevronUp, HelpCircle, Star, Shield, Eye, BookOpen, Filter } from 'lucide-react';
+import { Search, Loader2, Target, BarChart3, Layers, Sparkles, ExternalLink, Zap, Save, History, ChevronRight, TrendingUp, Brain, Lightbulb, Crosshair, Rocket, ArrowRight, ChevronDown, ChevronUp, HelpCircle, Star, Shield, Eye, BookOpen, Filter, type LucideIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from './api';
-import type { KeywordDataV2, SavedResearch, KeywordItem } from './types';
+import type { KeywordDataV2, KeywordHistoryItem, KeywordItem, KeywordScanResult, StrategicSynthesis } from './types';
 
 const LAYER_STEPS = [
     { id: 1, label: 'Collecting Data', desc: 'Autocomplete, SERP, PAA, related searches...', icon: Search },
@@ -59,6 +59,14 @@ function pickNextMessageIndex(messages: string[], previousIndex: number) {
     return nextIndex;
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+    return error instanceof Error ? error.message : fallback;
+}
+
+function isKeywordDataV2(item: KeywordHistoryItem): item is KeywordDataV2 & { id: string; timestamp: string } {
+    return 'keywordUniverse' in item && 'strategy' in item && 'metadata' in item;
+}
+
 const intentColors: Record<string, string> = {
     informational: 'bg-blue-100 text-blue-700', commercial: 'bg-amber-100 text-amber-700',
     transactional: 'bg-emerald-100 text-emerald-700', navigational: 'bg-violet-100 text-violet-700',
@@ -102,7 +110,7 @@ function SpectrumBar({ data, colors }: { data: Record<string, number>; colors: s
     );
 }
 
-function Section({ icon: Icon, title, badge, children, defaultOpen = true }: { icon: any; title: string; badge?: string; children: React.ReactNode; defaultOpen?: boolean }) {
+function Section({ icon: Icon, title, badge, children, defaultOpen = true }: { icon: LucideIcon; title: string; badge?: string; children: React.ReactNode; defaultOpen?: boolean }) {
     const [open, setOpen] = useState(defaultOpen);
     return (
         <div className="premium-card overflow-hidden">
@@ -122,19 +130,19 @@ function Section({ icon: Icon, title, badge, children, defaultOpen = true }: { i
 export default function KeywordResearch() {
     const [seed, setSeed] = useState('');
     const [data, setData] = useState<KeywordDataV2 | null>(null);
-    const [history, setHistory] = useState<SavedResearch[]>([]);
+    const [history, setHistory] = useState<KeywordHistoryItem[]>([]);
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [showHistory, setShowHistory] = useState(false);
     const [currentLayer, setCurrentLayer] = useState(0);
-    const [scanResult, setScanResult] = useState<any>(null);
+    const [scanResult, setScanResult] = useState<KeywordScanResult | null>(null);
     const [scanningUrl, setScanningUrl] = useState<string | null>(null);
     const [kwFilter, setKwFilter] = useState('all');
     const [kwSort, setKwSort] = useState<'opportunityScore' | 'term'>('opportunityScore');
     const [activeBanter, setActiveBanter] = useState('');
     const banterIndexRef = useRef<Record<number, number>>({});
 
-    useEffect(() => { fetchHistory(); }, []);
+    useEffect(() => { void fetchHistory(); }, []);
 
     useEffect(() => {
         if (!loading || currentLayer < 0 || currentLayer >= LAYER_STEPS.length) {
@@ -160,16 +168,49 @@ export default function KeywordResearch() {
         return () => window.clearInterval(banterTimer);
     }, [loading, currentLayer]);
 
-    const fetchHistory = async () => { try { setHistory(await api.getKeywordHistory()); } catch { } };
-    const handleSave = async () => {
-        if (!data) return; setSaving(true);
-        try { await api.saveKeywordResearch(data); await fetchHistory(); alert('Research saved!'); }
-        catch { alert('Failed to save'); } finally { setSaving(false); }
+    const fetchHistory = async () => {
+        try {
+            setHistory(await api.getKeywordHistory());
+        } catch (error) {
+            console.error('Failed to load keyword history:', error);
+        }
     };
-    const loadFromHistory = (item: SavedResearch) => { setData(item as any); setShowHistory(false); };
+
+    const handleSave = async () => {
+        if (!data) return;
+
+        setSaving(true);
+        try {
+            await api.saveKeywordResearch(data);
+            await fetchHistory();
+            alert('Research saved!');
+        } catch (error) {
+            alert(getErrorMessage(error, 'Failed to save research.'));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const loadFromHistory = (item: KeywordHistoryItem) => {
+        if (!isKeywordDataV2(item)) {
+            alert('This saved research uses the legacy format and cannot be opened in the new interface.');
+            return;
+        }
+
+        setData(item);
+        setSeed(item.seed);
+        setShowHistory(false);
+    };
+
     const handleScan = async (url: string) => {
         setScanningUrl(url);
-        try { setScanResult(await api.analyzePageKeywords(url)); } catch { alert('Scan failed.'); } finally { setScanningUrl(null); }
+        try {
+            setScanResult(await api.analyzePageKeywords(url));
+        } catch (error) {
+            alert(getErrorMessage(error, 'Scan failed.'));
+        } finally {
+            setScanningUrl(null);
+        }
     };
 
     const handleSearch = async (e: React.FormEvent) => {
@@ -179,13 +220,23 @@ export default function KeywordResearch() {
         const layerTimer = setInterval(() => setCurrentLayer(p => Math.min(p + 1, 4)), 8000);
         try {
             const json = await api.researchKeywordsV2(seed);
-            setData(json); setCurrentLayer(5);
-        } catch { alert('Analysis failed. Please try again.'); }
-        finally { clearInterval(layerTimer); setLoading(false); }
+            setData(json);
+            setCurrentLayer(5);
+        } catch (error) {
+            alert(getErrorMessage(error, 'Analysis failed. Please try again.'));
+        } finally {
+            clearInterval(layerTimer);
+            setLoading(false);
+        }
     };
 
     const filteredKeywords = data?.keywordUniverse?.keywords?.filter((k: KeywordItem) => kwFilter === 'all' || k.intent?.toLowerCase() === kwFilter) || [];
     const sortedKeywords = [...filteredKeywords].sort((a, b) => kwSort === 'opportunityScore' ? (b.opportunityScore - a.opportunityScore) : a.term.localeCompare(b.term));
+    const viabilityAudiences: Array<{ key: keyof StrategicSynthesis['viability']; label: string }> = [
+        { key: 'soloCreator', label: 'Solo Creator' },
+        { key: 'smallBusiness', label: 'Small Business' },
+        { key: 'brand', label: 'Brand' },
+    ];
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-indigo-50/30 relative">
@@ -428,7 +479,7 @@ export default function KeywordResearch() {
                                     )}
                                     {/* Long-Tail Gems */}
                                     {data.keywordUniverse.longTailGems?.length > 0 && (
-                                        <div><p className="text-xs font-semibold text-slate-500 uppercase mb-2">?? Long-Tail Gems</p>
+                                        <div><p className="text-xs font-semibold text-slate-500 uppercase mb-2">Long-Tail Gems</p>
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">{data.keywordUniverse.longTailGems.map((g, i) => (
                                                 <div key={i} className="p-3 rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-100">
                                                     <p className="font-semibold text-sm text-amber-800">{g.term}</p>
@@ -481,7 +532,7 @@ export default function KeywordResearch() {
                                             <p className="text-sm text-emerald-600 mt-1">{qw.reason}</p>
                                             <div className="flex items-center gap-3 mt-2">
                                                 <span className="premium-badge bg-emerald-200 text-emerald-800">{qw.timeToRank}</span>
-                                                <span className="text-xs text-emerald-500">? {qw.action}</span>
+                                                <span className="text-xs text-emerald-500">Action: {qw.action}</span>
                                             </div>
                                         </div>
                                     ))}
@@ -512,11 +563,11 @@ export default function KeywordResearch() {
                                         <p className="text-slate-700 font-medium">{data.strategy.contentBlueprint.uniqueAngle}</p>
                                     </div>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div><p className="text-xs font-semibold text-emerald-600 uppercase mb-2">? Must Include</p>
-                                            <div className="space-y-1.5">{(data.strategy.contentBlueprint.mustInclude || []).map((m, i) => <div key={i} className="flex items-start gap-2 text-sm text-slate-700"><span className="text-emerald-500 mt-0.5">?</span>{m}</div>)}</div>
+                                        <div><p className="text-xs font-semibold text-emerald-600 uppercase mb-2">Must Include</p>
+                                            <div className="space-y-1.5">{(data.strategy.contentBlueprint.mustInclude || []).map((m, i) => <div key={i} className="flex items-start gap-2 text-sm text-slate-700"><span className="text-emerald-500 mt-0.5">-</span>{m}</div>)}</div>
                                         </div>
-                                        <div><p className="text-xs font-semibold text-rose-600 uppercase mb-2">? Avoid</p>
-                                            <div className="space-y-1.5">{(data.strategy.contentBlueprint.avoid || []).map((a, i) => <div key={i} className="flex items-start gap-2 text-sm text-slate-700"><span className="text-rose-500 mt-0.5">?</span>{a}</div>)}</div>
+                                        <div><p className="text-xs font-semibold text-rose-600 uppercase mb-2">Avoid</p>
+                                            <div className="space-y-1.5">{(data.strategy.contentBlueprint.avoid || []).map((a, i) => <div key={i} className="flex items-start gap-2 text-sm text-slate-700"><span className="text-rose-500 mt-0.5">-</span>{a}</div>)}</div>
                                         </div>
                                     </div>
                                 </div>
@@ -527,8 +578,8 @@ export default function KeywordResearch() {
                         {data.strategy?.viability && (
                             <Section icon={Target} title="Viability Matrix" defaultOpen={false}>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                    {[{ key: 'soloCreator', label: 'Solo Creator' }, { key: 'smallBusiness', label: 'Small Business' }, { key: 'brand', label: 'Brand' }].map(({ key, label }) => {
-                                        const v = (data.strategy?.viability as any)?.[key];
+                                    {viabilityAudiences.map(({ key, label }) => {
+                                        const v = data.strategy.viability[key];
                                         return (
                                             <div key={key} className="p-4 rounded-xl border border-slate-200">
                                                 <p className="text-xs font-semibold text-slate-500 uppercase">{label}</p>
@@ -628,11 +679,11 @@ export default function KeywordResearch() {
                                         <div className="col-span-6">Keyword</div><div className="col-span-3 text-right">Count</div><div className="col-span-3 text-right">Density</div>
                                     </div>
                                     <div className="divide-y divide-slate-100">
-                                        {scanResult.topKeywords.map((k: any, i: number) => (
+                                        {scanResult.topKeywords.map((keyword, i) => (
                                             <div key={i} className="grid grid-cols-12 gap-2 px-4 py-2.5 text-sm hover:bg-indigo-50/30 transition-colors">
-                                                <div className="col-span-6 font-mono text-indigo-600 font-medium text-xs">{k.keyword}</div>
-                                                <div className="col-span-3 text-right text-slate-600">{k.count}</div>
-                                                <div className="col-span-3 text-right"><span className="premium-badge bg-indigo-50 text-indigo-600">{k.density}</span></div>
+                                                <div className="col-span-6 font-mono text-indigo-600 font-medium text-xs">{keyword.keyword}</div>
+                                                <div className="col-span-3 text-right text-slate-600">{keyword.count}</div>
+                                                <div className="col-span-3 text-right"><span className="premium-badge bg-indigo-50 text-indigo-600">{keyword.density}</span></div>
                                             </div>
                                         ))}
                                     </div>

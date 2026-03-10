@@ -1,51 +1,48 @@
-import { ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { Pie, PieChart, ResponsiveContainer, Cell } from 'recharts';
 import type { AuditResult } from '../../types';
 
 interface HealthGaugeProps {
     results: AuditResult[];
 }
 
+function getNormalizedDesktopPsi(result: AuditResult): number {
+    const score = result.psi_data?.desktop?.score;
+    if (typeof score === 'number') {
+        return Math.max(0, Math.min(1, score / 100));
+    }
+    return 0.5;
+}
+
 export default function HealthGauge({ results }: HealthGaugeProps) {
-    // 1. Calculate Health Score (Penalty System)
-    const calculateScore = (res: AuditResult[]) => {
-        if (!res.length) return 0;
+    const calculateScore = (auditResults: AuditResult[]) => {
+        if (!auditResults.length) return 0;
 
         let score = 100;
-        const total = res.length;
+        const total = auditResults.length;
 
-        // A. Critical Errors (Max 40 pts deduction)
-        const criticalCount = res.filter(r => r.status === 'FAIL' || r.h1Count === 0).length;
-        const criticalPenalty = (criticalCount / total) * 40;
-        score -= criticalPenalty;
+        const criticalCount = auditResults.filter((result) => result.status !== 'PASS' || result.h1Count === 0).length;
+        score -= (criticalCount / total) * 40;
 
-        // B. Warnings (Max 30 pts deduction)
-        const warningCount = res.filter(r =>
-            r.status === 'PARTIAL' || !r.description || (r.wordCount || 0) < 300
+        const warningCount = auditResults.filter((result) =>
+            result.status === 'PARTIAL' || !result.description || (result.wordCount || 0) < 300,
         ).length;
-        const warningPenalty = (warningCount / total) * 30;
-        score -= warningPenalty;
+        score -= (warningCount / total) * 30;
 
-        // C. Performance (Max 30 pts deduction)
-        const psiSum = res.reduce((acc, r) => acc + (r.psi_data?.desktop?.score || 0.5), 0);
-        const avgPsi = psiSum / total;
-        const perfPenalty = (1 - avgPsi) * 30;
-        score -= perfPenalty;
+        const avgPsi = auditResults.reduce((acc, result) => acc + getNormalizedDesktopPsi(result), 0) / total;
+        score -= (1 - avgPsi) * 30;
 
-        return Math.round(Math.max(0, score));
+        return Math.round(Math.max(0, Math.min(100, score)));
     };
 
     const healthScore = calculateScore(results);
-
-    // Gauge Data
     const gaugeData = [
         { name: 'Score', value: healthScore },
-        { name: 'Remaining', value: 100 - healthScore }
+        { name: 'Remaining', value: 100 - healthScore },
     ];
 
-    // Issue Counts
-    const criticalErrors = results.filter(r => r.status === 'FAIL' || r.h1Count === 0).length;
-    const warnings = results.filter(r => r.status === 'PARTIAL' || !r.description).length;
-    const healthy = results.filter(r => r.status === 'PASS' && r.description && r.h1Count === 1).length;
+    const criticalErrors = results.filter((result) => result.status !== 'PASS' || result.h1Count === 0).length;
+    const warnings = results.filter((result) => result.status === 'PARTIAL' || !result.description).length;
+    const healthy = results.filter((result) => result.status === 'PASS' && result.description && result.h1Count === 1).length;
 
     return (
         <div className="bg-white p-6 border-2 border-black shadow-[8px_8px_0px_0px_#000] flex flex-col justify-between relative overflow-hidden group hover:-translate-y-1 transition-transform h-full">
@@ -78,7 +75,6 @@ export default function HealthGauge({ results }: HealthGaugeProps) {
                         </PieChart>
                     </ResponsiveContainer>
                 </div>
-                {/* Center Text */}
                 <div className="absolute top-[65%] left-1/2 -translate-x-1/2 -translate-y-1/2 text-center mt-2">
                     <div className="text-5xl font-black text-black leading-none">{healthScore}</div>
                     <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Score</div>

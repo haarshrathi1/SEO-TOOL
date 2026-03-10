@@ -1,4 +1,4 @@
-import { AreaChart, Area, ResponsiveContainer } from 'recharts';
+import { Area, AreaChart, ResponsiveContainer } from 'recharts';
 import type { AuditResult } from '../../types';
 
 interface PerformanceSummaryProps {
@@ -6,28 +6,37 @@ interface PerformanceSummaryProps {
     history?: { timestamp: string; results: AuditResult[] }[];
 }
 
-export default function PerformanceSummary({ results, history = [] }: PerformanceSummaryProps) {
-    // Helper to calculate score (copied to reuse logic for trend)
-    const calculateScore = (res: AuditResult[]) => {
-        if (!res.length) return 0;
-        let score = 100;
-        const total = res.length;
-        const criticalCount = res.filter(r => r.status === 'FAIL' || r.h1Count === 0).length;
-        score -= (criticalCount / total) * 40;
-        const warningCount = res.filter(r => r.status === 'PARTIAL' || !r.description || (r.wordCount || 0) < 300).length;
-        score -= (warningCount / total) * 30;
-        const psiSum = res.reduce((acc, r) => acc + (r.psi_data?.desktop?.score || 0.5), 0);
-        const avgPsi = psiSum / total;
-        score -= (1 - avgPsi) * 30;
-        return Math.round(Math.max(0, score));
-    };
+function getNormalizedDesktopPsi(result: AuditResult): number {
+    const score = result.psi_data?.desktop?.score;
+    if (typeof score === 'number') {
+        return Math.max(0, Math.min(1, score / 100));
+    }
+    return 0.5;
+}
 
-    // Calculate Trend Data
-    const trendData = history
+function calculateScore(auditResults: AuditResult[]) {
+    if (!auditResults.length) return 0;
+
+    let score = 100;
+    const total = auditResults.length;
+    const criticalCount = auditResults.filter((result) => result.status !== 'PASS' || result.h1Count === 0).length;
+    score -= (criticalCount / total) * 40;
+
+    const warningCount = auditResults.filter((result) => result.status === 'PARTIAL' || !result.description || (result.wordCount || 0) < 300).length;
+    score -= (warningCount / total) * 30;
+
+    const avgPsi = auditResults.reduce((acc, result) => acc + getNormalizedDesktopPsi(result), 0) / total;
+    score -= (1 - avgPsi) * 30;
+
+    return Math.round(Math.max(0, Math.min(100, score)));
+}
+
+export default function PerformanceSummary({ results, history = [] }: PerformanceSummaryProps) {
+    const trendData = [...history]
         .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-        .map(h => ({
-            v: calculateScore(h.results),
-            date: new Date(h.timestamp).toLocaleDateString()
+        .map((entry) => ({
+            v: calculateScore(entry.results),
+            date: new Date(entry.timestamp).toLocaleDateString(),
         }));
 
     if (trendData.length === 0) {
@@ -36,16 +45,11 @@ export default function PerformanceSummary({ results, history = [] }: Performanc
         trendData.unshift({ v: currentScore, date: 'Start' });
     }
 
-    // Find representational page (LCP/CLS source)
-    const repPage = results.find(r => r.url.endsWith(results[0]?.url.split('/')[2] + '/')) ||
-        results.find(r => r.psi_data?.desktop?.lcp) ||
-        results[0];
-
-    const lcp = repPage?.psi_data?.desktop?.lcp;
-    const cls = repPage?.psi_data?.desktop?.cls;
-    // Average Desktop PSI
-    const avgScore = Math.round(results.reduce((acc, r) => acc + (r.psi_data?.desktop?.score || 0), 0) / (results.filter(r => r.psi_data).length || 1));
-
+    const representativePage = results.find((result) => result.psi_data?.desktop?.lcp || result.psi_data?.desktop?.cls) || results[0];
+    const lcp = representativePage?.psi_data?.desktop?.lcp;
+    const cls = representativePage?.psi_data?.desktop?.cls;
+    const pagesWithPsi = results.filter((result) => typeof result.psi_data?.desktop?.score === 'number');
+    const avgScore = Math.round(pagesWithPsi.reduce((acc, result) => acc + (result.psi_data?.desktop?.score || 0), 0) / (pagesWithPsi.length || 1));
 
     return (
         <div className="bg-black p-6 border-2 border-black shadow-[8px_8px_0px_0px_#000] text-white flex flex-col justify-between relative overflow-hidden h-full">
@@ -57,7 +61,6 @@ export default function PerformanceSummary({ results, history = [] }: Performanc
                 <p className="text-slate-400 font-bold text-xs mt-1">Avg Score: <span className="text-white">{avgScore} / 100</span></p>
             </div>
 
-            {/* Decorative Chart BG */}
             <div className="absolute inset-0 opacity-20 pointer-events-none">
                 <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={trendData}>

@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
-import { Loader2, Play, Search, History, Calendar, LayoutDashboard, AlertOctagon, TableProperties, Sparkles, Filter } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { AlertOctagon, Calendar, Filter, History, LayoutDashboard, Loader2, Play, Search, Sparkles, TableProperties } from 'lucide-react';
 import type { AuditResult } from './types';
 import { api, requestIndexing } from './api';
-import AuditOverview from './components/audit/AuditOverview';
-import AuditIssues from './components/audit/AuditIssues';
-import AuditTable from './components/audit/AuditTable';
 import AuditAI from './components/audit/AuditAI';
+import AuditIssues from './components/audit/AuditIssues';
+import AuditOverview from './components/audit/AuditOverview';
+import AuditTable from './components/audit/AuditTable';
 
 interface AuditHistoryItem {
     id: string;
@@ -25,41 +25,46 @@ export default function Audit({ projectId }: AuditProps) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [activeTab, setActiveTab] = useState<Tab>('overview');
-    const [filterId, setFilterId] = useState<string>('');
-
-    // History State
+    const [filterId, setFilterId] = useState('');
     const [history, setHistory] = useState<AuditHistoryItem[]>([]);
-    const [selectedHistoryId, setSelectedHistoryId] = useState<string>('live');
-
-    // Fetch History on Mount
-    useEffect(() => {
-        fetchHistory();
-    }, []);
+    const [selectedHistoryId, setSelectedHistoryId] = useState('live');
 
     const fetchHistory = async () => {
         try {
-            const data = await api.getAuditHistory();
-            setHistory(data);
-        } catch (e) {
-            console.error('Failed to fetch audit history', e);
+            setHistory(await api.getAuditHistory());
+        } catch (error) {
+            console.error('Failed to fetch audit history', error);
         }
     };
+
+    useEffect(() => {
+        void fetchHistory();
+    }, [projectId]);
+
+    useEffect(() => {
+        setResults([]);
+        setError('');
+        setFilterId('');
+        setActiveTab('overview');
+        setSelectedHistoryId('live');
+    }, [projectId]);
 
     const runAudit = async () => {
         setLoading(true);
         setError('');
         setResults([]);
-        setSelectedHistoryId('live'); // Reset state to live
+        setSelectedHistoryId('live');
+
         try {
             const data = await api.runAudit(projectId);
             setResults(data);
-            fetchHistory(); // Refresh dropdown
-        } catch (e: unknown) {
-            console.error(e);
-            if (e instanceof Error && e.message === 'Unauthorized') {
+            await fetchHistory();
+        } catch (error: unknown) {
+            console.error(error);
+            if (error instanceof Error && error.message === 'Unauthorized') {
                 setError('Please log in with Google to perform audits.');
             } else {
-                setError(e instanceof Error ? e.message : 'Failed to run audit');
+                setError(error instanceof Error ? error.message : 'Failed to run audit');
             }
         } finally {
             setLoading(false);
@@ -69,54 +74,57 @@ export default function Audit({ projectId }: AuditProps) {
     const handleHistorySelect = (id: string) => {
         setSelectedHistoryId(id);
         if (id === 'live') {
-            setResults([]); // Clear results for "ready state"
+            setResults([]);
+            setFilterId('');
             return;
         }
-        const item = history.find(h => h.id === id);
+
+        const item = history.find((entry) => entry.id === id);
         if (item) {
             setResults(item.results);
             setError('');
+            setFilterId('');
         }
     };
 
     const handleRequestIndexing = async (url: string) => {
         try {
             await requestIndexing(url);
-            alert('Indexing Requested Successfully!');
-        } catch (e: unknown) {
-            alert(`Request failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
+            alert('Indexing requested successfully.');
+        } catch (error: unknown) {
+            alert(`Request failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     };
 
-    // Filter Logic
     const getFilteredResults = () => {
         if (!filterId) return results;
         switch (filterId) {
-            case 'not-indexed': return results.filter(r => r.status === 'FAIL');
-            case 'no-h1': return results.filter(r => r.h1Count === 0);
-            case 'multi-h1': return results.filter(r => r.h1Count && r.h1Count > 1);
-            case 'missing-desc': return results.filter(r => !r.description);
-            case 'low-word-count': return results.filter(r => (r.wordCount || 0) < 300);
-            case 'orphans': return results.filter(r => (r.incomingLinks || 0) === 0);
-            case 'slow-performance': return results.filter(r => (r.psi_data?.desktop?.score || 0) < 50);
-            default: return results;
+            case 'not-indexed':
+                return results.filter((result) => result.status !== 'PASS');
+            case 'no-h1':
+                return results.filter((result) => result.h1Count === 0);
+            case 'multi-h1':
+                return results.filter((result) => (result.h1Count || 0) > 1);
+            case 'missing-desc':
+                return results.filter((result) => !result.description);
+            case 'low-word-count':
+                return results.filter((result) => (result.wordCount || 0) < 300);
+            case 'orphans':
+                return results.filter((result) => (result.incomingLinks || 0) === 0);
+            case 'slow-performance':
+                return results.filter((result) => (result.psi_data?.desktop?.score || 0) < 50);
+            default:
+                return results;
         }
     };
 
     const filteredResults = getFilteredResults();
-
-    const handleReviewIssue = (id: string) => {
-        setFilterId(id);
-        setActiveTab('pages');
-    };
-
-    // Filter history for current project (optional)
-    const projectHistory = history.filter(h => h.projectId === projectId);
+    const projectHistory = history.filter((entry) => entry.projectId === projectId);
+    const selectedHistory = projectHistory.find((entry) => entry.id === selectedHistoryId) || null;
     const formatDate = (iso: string) => new Date(iso).toLocaleString();
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-6 duration-700 pb-20">
-            {/* Header Section */}
             <div className="flex flex-col md:flex-row items-center justify-between gap-6 bg-white border-2 border-black p-6 shadow-[8px_8px_0px_0px_#000]">
                 <div className="flex items-center gap-5 w-full md:w-auto">
                     <div className="p-3 bg-[#FF6B6B] border-2 border-black text-black shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)]">
@@ -134,19 +142,18 @@ export default function Audit({ projectId }: AuditProps) {
                 </div>
 
                 <div className="flex items-center gap-3 w-full md:w-auto">
-                    {/* History Dropdown */}
                     {projectHistory.length > 0 && (
                         <div className="relative group flex-1 md:flex-none">
                             <select
                                 value={selectedHistoryId}
-                                onChange={(e) => handleHistorySelect(e.target.value)}
+                                onChange={(event) => handleHistorySelect(event.target.value)}
                                 className="w-full md:w-56 appearance-none bg-white hover:bg-slate-50 border-2 border-black text-black text-sm font-bold py-3 pl-4 pr-10 shadow-[4px_4px_0px_0px_#000] focus:translate-x-[2px] focus:translate-y-[2px] focus:shadow-none focus:outline-none transition-all cursor-pointer uppercase"
                             >
-                                <option value="live">⚡ New Audit</option>
+                                <option value="live">New Audit</option>
                                 <optgroup label="Previous Audits">
-                                    {projectHistory.map((h) => (
-                                        <option key={h.id} value={h.id}>
-                                            📄 {formatDate(h.timestamp)}
+                                    {projectHistory.map((entry) => (
+                                        <option key={entry.id} value={entry.id}>
+                                            {formatDate(entry.timestamp)}
                                         </option>
                                     ))}
                                 </optgroup>
@@ -156,7 +163,7 @@ export default function Audit({ projectId }: AuditProps) {
                     )}
 
                     <button
-                        onClick={runAudit}
+                        onClick={() => void runAudit()}
                         disabled={loading}
                         className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-black hover:bg-slate-800 text-white px-8 py-3.5 border-2 border-transparent hover:border-black hover:bg-white hover:text-black hover:shadow-[4px_4px_0px_0px_#000] disabled:opacity-50 disabled:pointer-events-none transition-all font-black text-sm active:translate-x-[2px] active:translate-y-[2px] active:shadow-none uppercase tracking-wide"
                     >
@@ -173,11 +180,8 @@ export default function Audit({ projectId }: AuditProps) {
                 </div>
             )}
 
-            {/* Main Content Area */}
             {results.length > 0 && (
                 <div className="space-y-6">
-
-                    {/* Tabs Navigation - Improved Button Group */}
                     <div className="flex flex-wrap items-center gap-4 mb-2">
                         {[
                             { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -203,18 +207,16 @@ export default function Audit({ projectId }: AuditProps) {
                         ))}
                     </div>
 
-                    {/* Historical Banner */}
-                    {selectedHistoryId !== 'live' && (
+                    {selectedHistory && (
                         <div className="bg-white border-2 border-black p-3 flex items-center gap-3 text-black text-sm shadow-[4px_4px_0px_0px_#000] w-fit">
                             <Calendar className="w-4 h-4 text-black" />
-                            <div>Historical Snapshot: <span className="font-black bg-yellow-300 px-1 border border-black">{formatDate(history.find(h => h.id === selectedHistoryId)?.timestamp || '')}</span></div>
+                            <div>Historical Snapshot: <span className="font-black bg-yellow-300 px-1 border border-black">{formatDate(selectedHistory.timestamp)}</span></div>
                         </div>
                     )}
 
-                    {/* Tab Content */}
                     <div className="min-h-[400px]">
                         {activeTab === 'overview' && <AuditOverview results={results} history={projectHistory} />}
-                        {activeTab === 'issues' && <AuditIssues results={results} onReview={handleReviewIssue} />}
+                        {activeTab === 'issues' && <AuditIssues results={results} onReview={(id) => { setFilterId(id); setActiveTab('pages'); }} />}
                         {activeTab === 'pages' && (
                             <div className="space-y-4">
                                 {filterId && (

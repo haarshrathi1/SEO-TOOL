@@ -60,6 +60,33 @@ export interface Project {
     url: string;
 }
 
+export interface AuthUser {
+    email: string;
+    role: 'admin' | 'viewer';
+    name?: string;
+    picture?: string;
+    access?: string[];
+}
+
+export interface ViewerRecord {
+    email: string;
+    access: string[];
+    createdAt: string;
+}
+
+export interface AuthConfigResponse {
+    googleClientId: string;
+}
+
+export interface AuthSessionResponse {
+    user: AuthUser;
+}
+
+export interface GoogleLoginResponse {
+    token: string;
+    user: AuthUser;
+}
+
 export interface HistoryItem {
     id: string;
     timestamp: string;
@@ -324,4 +351,16 @@ export interface KeywordDataV2 {
 export interface SavedResearchV2 extends KeywordDataV2 {
     id: string;
     timestamp: string;
+}
+
+export type KeywordHistoryItem = SavedResearch | SavedResearchV2;
+
+export interface KeywordScanResult {
+    url: string;
+    totalWords: number;
+    topKeywords: {
+        keyword: string;
+        count: number;
+        density: string;
+    }[];
 }

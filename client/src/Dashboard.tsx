@@ -9,6 +9,7 @@ import { twMerge } from 'tailwind-merge';
 import Audit from './Audit';
 import type { AnalysisData, Project, HistoryItem, AuditResult } from './types';
 import { api } from './api';
+import { getUrlPathLabel } from './url';
 import HealthGauge from './components/dashboard/HealthGauge';
 import CrawlStatus from './components/dashboard/CrawlStatus';
 import PerformanceSummary from './components/dashboard/PerformanceSummary';
@@ -115,6 +116,7 @@ export default function Dashboard() {
 
     // Filter history for current project
     const projectHistory = history.filter(h => h.projectId === selectedProjectId || (!h.projectId && selectedProjectId === 'laserlift'));
+    const selectedHistory = projectHistory.find(h => h.id === selectedHistoryId) || null;
 
     // Get Latest Audit for this project
     const projectAuditHistory = auditHistory.filter(h => h.projectId === selectedProjectId);
@@ -262,8 +264,8 @@ export default function Dashboard() {
                                         <span className="font-bold text-sm uppercase truncate pr-6 pointer-events-none z-10 select-none">
                                             {selectedHistoryId === 'live'
                                                 ? 'New Analysis'
-                                                : projectHistory.find(h => h.id === selectedHistoryId)
-                                                    ? formatDate(projectHistory.find(h => h.id === selectedHistoryId)!.timestamp)
+                                                : selectedHistory
+                                                    ? formatDate(selectedHistory.timestamp)
                                                     : 'Select Report'
                                             }
                                         </span>
@@ -434,7 +436,7 @@ export default function Dashboard() {
                                             <div className="mt-2 text-[10px] font-mono bg-black text-red-400 p-2 border-2 border-black overflow-x-auto">
                                                 {data.issues.failedUrls.map((err, idx) => (
                                                     <div key={idx} className="mb-1 last:mb-0">
-                                                        <span className="text-white font-bold">[{err.reason}]</span> {new URL(err.url).pathname}
+                                                        <span className="text-white font-bold">[{err.reason}]</span> {getUrlPathLabel(err.url)}
                                                     </div>
                                                 ))}
                                             </div>

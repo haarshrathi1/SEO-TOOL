@@ -160,12 +160,14 @@ const crawlSite = async (startUrl, maxPages = 200) => {
                 if (inspectionData.error) {
                     results.push({
                         url,
-                        status: 'Error',
+                        status: 'FAIL',
                         coverageState: inspectionData.error,
                         indexingState: 'ERROR',
                         lastCrawlTime: '-',
-                        content: pageData,
-                        // Defaults for failed pages
+                        title: pageData.title,
+                        description: pageData.description,
+                        h1Count: pageData.h1s?.length || 0,
+                        wordCount: pageData.wordCount || 0,
                         internalLinksOut: 0,
                         externalLinksOut: 0,
                         incomingLinks: 0,

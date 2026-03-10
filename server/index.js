@@ -60,15 +60,17 @@ const allowedOrigins = [
     process.env.FRONTEND_URL,
     'https://seotool.harshrathi.com',
     'http://seotool.harshrathi.com',
-].filter(Boolean);
+].filter(Boolean).map((origin) => origin.replace(/\/+$/, ''));
 
 app.use(cors({
     origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) {
+        const normalizedOrigin = origin ? origin.replace(/\/+$/, '') : origin;
+        if (!normalizedOrigin || allowedOrigins.includes(normalizedOrigin)) {
             callback(null, true);
-        } else {
-            callback(null, true);
+            return;
         }
+
+        callback(new Error('Origin not allowed by CORS'));
     },
     credentials: true,
 }));
@@ -159,7 +161,15 @@ app.get('/api/history', userAuth.requireAuth, userAuth.requireAdmin, async (req,
 app.post('/api/indexing/publish', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
     try {
         const { url } = req.body;
+        if (!url) {
+            return res.status(400).json({ error: 'URL is required' });
+        }
+
         const result = await indexing.publish(url);
+        if (result?.error) {
+            return res.status(502).json({ error: result.error });
+        }
+
         res.json(result);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -169,7 +179,15 @@ app.post('/api/indexing/publish', userAuth.requireAuth, userAuth.requireAdmin, a
 app.post('/api/indexing/remove', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
     try {
         const { url } = req.body;
+        if (!url) {
+            return res.status(400).json({ error: 'URL is required' });
+        }
+
         const result = await indexing.remove(url);
+        if (result?.error) {
+            return res.status(502).json({ error: result.error });
+        }
+
         res.json(result);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -194,11 +212,15 @@ app.post('/api/audit', userAuth.requireAuth, userAuth.requireAdmin, async (req, 
         }
 
         const project = getProject(projectId);
+        if (!project) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
         const url = project.url;
         console.log(`Starting audit for project: ${project.name} (${url})`);
 
         const results = await crawler.crawlSite(url);
-        await auditHistory.addAudit(results, projectId);
+        await auditHistory.addAudit(results, project.id);
         res.json(results);
     } catch (e) {
         console.error('Audit failed:', e);
