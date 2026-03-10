@@ -20,6 +20,40 @@ const { analyzePageContent } = require('./gemini');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+app.set('trust proxy', 1);
+
+const ENABLE_CANONICAL_REDIRECT = process.env.ENABLE_CANONICAL_REDIRECT === 'true';
+const CANONICAL_HOST = (() => {
+    try {
+        return process.env.CANONICAL_HOST || (process.env.FRONTEND_URL ? new URL(process.env.FRONTEND_URL).host : '');
+    } catch {
+        return '';
+    }
+})();
+
+function getCanonicalBase(req) {
+    const protoHeader = (req.headers['x-forwarded-proto'] || req.protocol || 'http').toString().split(',')[0];
+    const host = req.headers.host;
+    const proto = protoHeader === 'https' ? 'https' : protoHeader === 'http' ? 'http' : 'http';
+    return `${proto}://${host}`;
+}
+
+app.use((req, res, next) => {
+    if (!ENABLE_CANONICAL_REDIRECT) return next();
+    if (!req.headers.host || req.headers.host.startsWith('localhost') || req.headers.host.startsWith('127.')) return next();
+
+    const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').toString().split(',')[0];
+    const expectedHost = CANONICAL_HOST || req.headers.host;
+    const needsHost = CANONICAL_HOST && req.headers.host !== CANONICAL_HOST;
+    const needsHttps = proto !== 'https';
+
+    if (needsHost || needsHttps) {
+        const destination = `https://${expectedHost}${req.originalUrl}`;
+        return res.redirect(301, destination);
+    }
+    return next();
+});
+
 const allowedOrigins = [
     'http://localhost:5173',
     'http://localhost:3000',
@@ -43,6 +77,31 @@ app.use(cookieParser());
 
 const clientDist = path.join(__dirname, '..', 'client', 'dist');
 app.use(express.static(clientDist));
+
+app.get('/robots.txt', (req, res) => {
+    const base = getCanonicalBase(req);
+    const lines = [
+        'User-agent: *',
+        'Allow: /',
+        'Disallow: /api/',
+        'Disallow: /auth/',
+        `Sitemap: ${base}/sitemap.xml`,
+    ];
+    res.type('text/plain').send(lines.join('\n'));
+});
+
+app.get('/sitemap.xml', (req, res) => {
+    const base = getCanonicalBase(req);
+    const today = new Date().toISOString().split('T')[0];
+    const urls = [
+        { loc: `${base}/`, changefreq: 'weekly', priority: '0.8' },
+        { loc: `${base}/keywords`, changefreq: 'weekly', priority: '0.5' },
+    ];
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+        urls.map(u => `  <url>\n    <loc>${u.loc}</loc>\n    <lastmod>${today}</lastmod>\n    <changefreq>${u.changefreq}</changefreq>\n    <priority>${u.priority}</priority>\n  </url>`).join('\n') +
+        '\n</urlset>';
+    res.type('application/xml').send(xml);
+});
 
 // Public routes
 app.use('/api/auth', userAuth.router);
@@ -185,5 +244,9 @@ async function startServer() {
 }
 
 startServer();
+
+
+
+
 
 
