@@ -171,7 +171,7 @@ app.delete('/api/projects/:projectId', userAuth.requireAuth, userAuth.requireAdm
     }
 });
 
-app.get('/api/analyze', userAuth.requireAuth, userAuth.requireAccess('dashboard'), async (req, res) => {
+app.get('/api/analyze', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
     if (!auth.getAuthClient()) {
         return res.status(401).json({ error: 'Google service not authenticated. Please visit /auth/google/login' });
     }
@@ -242,7 +242,7 @@ app.get('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAccess('audit')
     }
 });
 
-app.post('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAccess('audit'), async (req, res) => {
+app.post('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
     try {
         if (!auth.getAuthClient()) {
             return res.status(401).json({ error: 'Google service not authenticated.' });
@@ -290,7 +290,7 @@ app.get('/api/audit/jobs/:jobId/result', userAuth.requireAuth, userAuth.requireA
     }
 });
 
-app.post('/api/audit', userAuth.requireAuth, userAuth.requireAccess('audit'), async (req, res) => {
+app.post('/api/audit', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
     try {
         if (!auth.getAuthClient()) {
             return res.status(401).json({ error: 'Google service not authenticated.' });
@@ -352,4 +352,5 @@ async function startServer() {
 }
 
 startServer();
+
 

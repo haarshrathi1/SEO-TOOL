@@ -304,7 +304,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                         </div>
                     )}
 
-                    {results.length > 0 && (
+                    {canRunAudit && results.length > 0 && (
                         <button onClick={exportResults} className="flex items-center gap-2 border-2 border-black bg-white px-5 py-3 font-black uppercase tracking-wide text-black shadow-[4px_4px_0px_0px_#000] transition-all hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none">
                             <Download className="h-4 w-4" /> Export CSV
                         </button>
@@ -451,6 +451,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
         </div>
     );
 }
+
 
 
 

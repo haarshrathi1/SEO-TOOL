@@ -77,6 +77,7 @@ export default function Dashboard({ user }: DashboardProps) {
     const canViewDashboard = canAccessDashboard(user);
     const canViewAudit = canAccessAudit(user);
     const canViewKeywords = canAccessKeywords(user);
+    const canRunDashboardActions = user.role === 'admin';
     const canRequestIndexing = user.role === 'admin';
     const [projects, setProjects] = useState<Project[]>([]);
     const [selectedProjectId, setSelectedProjectId] = useState<string>('');
@@ -116,6 +117,24 @@ export default function Dashboard({ user }: DashboardProps) {
                 ]);
                 setHistory(historyData);
                 setAuditHistory(auditData);
+
+                const defaultProjectId = nextProjects[0]?.id || '';
+                if (canViewDashboard && defaultProjectId) {
+                    const latestHistory = historyData
+                        .filter((item) => item.projectId === defaultProjectId || (!item.projectId && defaultProjectId === 'laserlift'))
+                        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null;
+
+                    if (latestHistory) {
+                        setSelectedHistoryId(latestHistory.id);
+                        setData(latestHistory.data);
+                    } else {
+                        setSelectedHistoryId('live');
+                        setData(null);
+                    }
+                } else {
+                    setSelectedHistoryId('live');
+                    setData(null);
+                }
             } catch (e) {
                 console.error('Initialization failed', e);
             }
@@ -137,7 +156,7 @@ export default function Dashboard({ user }: DashboardProps) {
     };
 
     const runAnalysis = async () => {
-        if (!selectedProjectId) return;
+        if (!selectedProjectId || !canRunDashboardActions) return;
         setLoading(true);
         setError('');
         try {
@@ -327,7 +346,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
             {activeTab === 'audit' && (
                 <main className="max-w-7xl mx-auto mt-8 px-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                    <Audit key={selectedProjectId} projectId={selectedProjectId} canRunAudit={canViewAudit} canRequestIndexing={canRequestIndexing} />
+                    <Audit key={selectedProjectId} projectId={selectedProjectId} canRunAudit={user.role === 'admin' && canViewAudit} canRequestIndexing={canRequestIndexing} />
                 </main>
             )}
 
@@ -366,7 +385,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                             onChange={(e) => handleHistorySelect(e.target.value)}
                                             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
                                         >
-                                            <option value="live">New Analysis</option>
+                                            <option value="live">{canRunDashboardActions ? 'New Analysis' : 'Latest Snapshot'}</option>
                                             <optgroup label="Previous Reports">
                                                 {projectHistory.map((h) => (
                                                     <option key={h.id} value={h.id}>
@@ -694,6 +713,7 @@ export default function Dashboard({ user }: DashboardProps) {
         </div>
     );
 }
+
 
 
 
