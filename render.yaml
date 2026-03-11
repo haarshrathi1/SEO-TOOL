@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: seo-tool
+    runtime: node
+    rootDir: .
+    buildCommand: npm run build
+    startCommand: npm run start
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 20

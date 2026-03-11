@@ -1,0 +1,10 @@
+{
+  "name": "seo-tool",
+  "private": true,
+  "version": "1.2.0",
+  "scripts": {
+    "build": "npm --prefix server ci && npm --prefix client ci && npm --prefix client run build",
+    "start": "npm --prefix server start",
+    "test": "npm --prefix server test"
+  }
+}
