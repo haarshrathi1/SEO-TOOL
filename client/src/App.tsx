@@ -2,7 +2,7 @@
 import { Loader2 } from 'lucide-react';
 import LoginPage from './components/app/LoginPage';
 import UserBar from './components/app/UserBar';
-import { defaultAdminNav, viewerNav } from './appNav';
+import { canAccessDashboardSurface, canAccessRoute, getDefaultRouteForUser, getNavItemsForUser } from './appNav';
 import { api } from './api';
 import ProjectsPage from './ProjectsPage';
 import { useRouter } from './router';
@@ -19,17 +19,14 @@ function FullScreenLoader() {
     );
 }
 
-function normalizeAppRoute(path: string, role: AuthUser['role'] | null) {
-    const normalized = path === '/' ? '/dashboard' : path.replace(/\/+$/, '') || '/dashboard';
-    if (role === 'viewer') {
-        return '/keywords';
+function normalizeAppRoute(path: string, user: AuthUser | null) {
+    if (!user) {
+        return '/dashboard';
     }
 
-    if (['/dashboard', '/keywords', '/projects'].includes(normalized)) {
-        return normalized;
-    }
-
-    return '/dashboard';
+    const fallback = getDefaultRouteForUser(user);
+    const normalized = path === '/' ? fallback : path.replace(/\/+$/, '') || fallback;
+    return canAccessRoute(user, normalized) ? normalized : fallback;
 }
 
 export default function App() {
@@ -53,11 +50,11 @@ export default function App() {
     }, []);
 
     useEffect(() => {
-        const nextRoute = normalizeAppRoute(path, user?.role || null);
+        const nextRoute = normalizeAppRoute(path, user);
         if (path !== nextRoute) {
             navigate(nextRoute, { replace: true });
         }
-    }, [navigate, path, user?.role]);
+    }, [navigate, path, user]);
 
     const handleLogout = async () => {
         try {
@@ -78,18 +75,17 @@ export default function App() {
         return <LoginPage onLogin={setUser} />;
     }
 
-    const route = normalizeAppRoute(path, user.role);
-    const navItems = user.role === 'admin' ? defaultAdminNav : viewerNav;
+    const route = normalizeAppRoute(path, user);
+    const navItems = getNavItemsForUser(user);
 
     return (
         <div>
             <UserBar user={user} path={route} navItems={navItems} onNavigate={navigate} onLogout={() => void handleLogout()} />
             <Suspense fallback={<FullScreenLoader />}>
                 {route === '/keywords' && <KeywordResearch />}
-                {route === '/dashboard' && user.role === 'admin' && <Dashboard />}
+                {route === '/dashboard' && canAccessDashboardSurface(user) && <Dashboard user={user} />}
                 {route === '/projects' && user.role === 'admin' && <ProjectsPage />}
             </Suspense>
         </div>
     );
 }
-

@@ -1,5 +1,34 @@
 ﻿const { AnalysisHistory } = require('./models');
 
+function normalizeProjectId(projectId) {
+    return typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null;
+}
+
+function buildHistoryQuery(user, options = {}) {
+    const projectId = normalizeProjectId(options.projectId);
+    const query = {};
+
+    if (projectId) {
+        query.projectId = projectId;
+    }
+
+    if (user?.role === 'viewer') {
+        if (!Array.isArray(user.projectIds) || user.projectIds.length === 0) {
+            return null;
+        }
+
+        if (projectId) {
+            if (!user.projectIds.includes(projectId)) {
+                return null;
+            }
+        } else {
+            query.projectId = { $in: user.projectIds };
+        }
+    }
+
+    return query;
+}
+
 const addToHistory = async (analysisData, projectId) => {
     try {
         await AnalysisHistory.create({
@@ -12,9 +41,14 @@ const addToHistory = async (analysisData, projectId) => {
     }
 };
 
-const getHistory = async () => {
+const getHistory = async (user, options = {}) => {
+    const query = buildHistoryQuery(user, options);
+    if (!query) {
+        return [];
+    }
+
     try {
-        const records = await AnalysisHistory.find({}).sort({ timestamp: -1 }).lean();
+        const records = await AnalysisHistory.find(query).sort({ timestamp: -1 }).lean();
         return records.map((record) => ({
             id: record._id.toString(),
             timestamp: record.timestamp,
@@ -27,4 +61,11 @@ const getHistory = async () => {
     }
 };
 
-module.exports = { addToHistory, getHistory };
+module.exports = {
+    addToHistory,
+    getHistory,
+    __internal: {
+        normalizeProjectId,
+        buildHistoryQuery,
+    },
+};

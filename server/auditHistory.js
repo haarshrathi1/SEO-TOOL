@@ -1,5 +1,34 @@
 ﻿const { AuditHistory } = require('./models');
 
+function normalizeProjectId(projectId) {
+    return typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null;
+}
+
+function buildAuditHistoryQuery(user, options = {}) {
+    const projectId = normalizeProjectId(options.projectId);
+    const query = {};
+
+    if (projectId) {
+        query.projectId = projectId;
+    }
+
+    if (user?.role === 'viewer') {
+        if (!Array.isArray(user.projectIds) || user.projectIds.length === 0) {
+            return null;
+        }
+
+        if (projectId) {
+            if (!user.projectIds.includes(projectId)) {
+                return null;
+            }
+        } else {
+            query.projectId = { $in: user.projectIds };
+        }
+    }
+
+    return query;
+}
+
 const addAudit = async (results, projectId) => {
     try {
         const doc = await AuditHistory.create({
@@ -20,9 +49,14 @@ const addAudit = async (results, projectId) => {
     }
 };
 
-const getAuditHistory = async () => {
+const getAuditHistory = async (user, options = {}) => {
+    const query = buildAuditHistoryQuery(user, options);
+    if (!query) {
+        return [];
+    }
+
     try {
-        const records = await AuditHistory.find({}).sort({ timestamp: -1 }).lean();
+        const records = await AuditHistory.find(query).sort({ timestamp: -1 }).lean();
         return records.map((record) => ({
             id: record._id.toString(),
             timestamp: record.timestamp,
@@ -35,4 +69,11 @@ const getAuditHistory = async () => {
     }
 };
 
-module.exports = { addAudit, getAuditHistory };
+module.exports = {
+    addAudit,
+    getAuditHistory,
+    __internal: {
+        normalizeProjectId,
+        buildAuditHistoryQuery,
+    },
+};

@@ -119,9 +119,9 @@ export const api = {
 
     analyzeSite: (projectId: string) => request<AnalysisData>(`/api/analyze${createQuery({ projectId })}`),
 
-    getHistory: () => request<HistoryItem[]>('/api/history'),
+    getHistory: (projectId?: string) => request<HistoryItem[]>(`/api/history${createQuery({ projectId })}`),
 
-    getAuditHistory: () => request<{ id: string; timestamp: string; projectId: string; results: AuditResult[] }[]>('/api/audit/history'),
+    getAuditHistory: (projectId?: string) => request<{ id: string; timestamp: string; projectId: string; results: AuditResult[] }[]>(`/api/audit/history${createQuery({ projectId })}`),
 
     createAuditJob: (projectId: string) => request<AuditJob>('/api/audit/jobs', {
         method: 'POST',

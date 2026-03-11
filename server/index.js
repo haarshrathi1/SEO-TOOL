@@ -171,16 +171,16 @@ app.delete('/api/projects/:projectId', userAuth.requireAuth, userAuth.requireAdm
     }
 });
 
-app.get('/api/analyze', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
+app.get('/api/analyze', userAuth.requireAuth, userAuth.requireAccess('dashboard'), async (req, res) => {
     if (!auth.getAuthClient()) {
         return res.status(401).json({ error: 'Google service not authenticated. Please visit /auth/google/login' });
     }
     return analyze.analyzeSite(req, res);
 });
 
-app.get('/api/history', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
+app.get('/api/history', userAuth.requireAuth, userAuth.requireAccess('dashboard'), async (req, res) => {
     try {
-        const historyData = await history.getHistory();
+        const historyData = await history.getHistory(req.user, { projectId: req.query.projectId });
         historyData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
         res.json(historyData);
     } catch (e) {
@@ -224,9 +224,9 @@ app.post('/api/indexing/remove', userAuth.requireAuth, userAuth.requireAdmin, as
     }
 });
 
-app.get('/api/audit/history', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
+app.get('/api/audit/history', userAuth.requireAuth, userAuth.requireAccess('audit'), async (req, res) => {
     try {
-        const auditData = await auditHistory.getAuditHistory();
+        const auditData = await auditHistory.getAuditHistory(req.user, { projectId: req.query.projectId });
         auditData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
         res.json(auditData);
     } catch (e) {
@@ -234,7 +234,7 @@ app.get('/api/audit/history', userAuth.requireAuth, userAuth.requireAdmin, async
     }
 });
 
-app.get('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
+app.get('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAccess('audit'), async (req, res) => {
     try {
         res.json(await auditJobs.listAuditJobs(req.user, { projectId: req.query.projectId }));
     } catch (e) {
@@ -242,7 +242,7 @@ app.get('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAdmin, async (r
     }
 });
 
-app.post('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
+app.post('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAccess('audit'), async (req, res) => {
     try {
         if (!auth.getAuthClient()) {
             return res.status(401).json({ error: 'Google service not authenticated.' });
@@ -260,7 +260,7 @@ app.post('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAdmin, async (
     }
 });
 
-app.get('/api/audit/jobs/:jobId', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
+app.get('/api/audit/jobs/:jobId', userAuth.requireAuth, userAuth.requireAccess('audit'), async (req, res) => {
     try {
         const job = await auditJobs.getAuditJob(req.params.jobId, req.user);
         if (!job) {
@@ -273,7 +273,7 @@ app.get('/api/audit/jobs/:jobId', userAuth.requireAuth, userAuth.requireAdmin, a
     }
 });
 
-app.get('/api/audit/jobs/:jobId/result', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
+app.get('/api/audit/jobs/:jobId/result', userAuth.requireAuth, userAuth.requireAccess('audit'), async (req, res) => {
     try {
         const job = await auditJobs.getAuditJob(req.params.jobId, req.user, { includeResult: true });
         if (!job) {
@@ -290,7 +290,7 @@ app.get('/api/audit/jobs/:jobId/result', userAuth.requireAuth, userAuth.requireA
     }
 });
 
-app.post('/api/audit', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
+app.post('/api/audit', userAuth.requireAuth, userAuth.requireAccess('audit'), async (req, res) => {
     try {
         if (!auth.getAuthClient()) {
             return res.status(401).json({ error: 'Google service not authenticated.' });
@@ -352,3 +352,4 @@ async function startServer() {
 }
 
 startServer();
+

@@ -3,6 +3,49 @@ const auditHistory = require('./auditHistory');
 const crawler = require('./crawler');
 const { getProject } = require('./projects');
 
+function normalizeProjectId(projectId) {
+    return typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null;
+}
+
+function buildAuditJobListQuery(user, options = {}) {
+    const projectId = normalizeProjectId(options.projectId);
+    const query = {};
+
+    if (user?.role === 'admin') {
+        if (projectId) {
+            query.projectId = projectId;
+        }
+        return query;
+    }
+
+    if (!Array.isArray(user?.projectIds) || user.projectIds.length === 0) {
+        return null;
+    }
+
+    if (projectId) {
+        if (!user.projectIds.includes(projectId)) {
+            return null;
+        }
+        query.projectId = projectId;
+    } else {
+        query.projectId = { $in: user.projectIds };
+    }
+
+    return query;
+}
+
+function canAccessAuditJob(job, user) {
+    if (!job) {
+        return false;
+    }
+
+    if (user?.role === 'admin') {
+        return true;
+    }
+
+    return Array.isArray(user?.projectIds) && user.projectIds.includes(job.projectId);
+}
+
 function serializeJob(record, options = {}) {
     const job = typeof record.toObject === 'function' ? record.toObject() : record;
     return {
@@ -138,14 +181,9 @@ async function runAuditJob(jobId) {
 }
 
 async function listAuditJobs(user, options = {}) {
-    const query = {};
-
-    if (options.projectId) {
-        query.projectId = options.projectId;
-    }
-
-    if (user?.role !== 'admin') {
-        query.ownerEmail = user.email;
+    const query = buildAuditJobListQuery(user, options);
+    if (!query) {
+        return [];
     }
 
     const jobs = await AuditJob.find(query).sort({ createdAt: -1 }).limit(20).lean();
@@ -153,13 +191,13 @@ async function listAuditJobs(user, options = {}) {
 }
 
 async function getAuditJob(jobId, user, options = {}) {
-    const query = { _id: jobId };
-    if (user?.role !== 'admin') {
-        query.ownerEmail = user.email;
+    const job = await AuditJob.findById(jobId).lean();
+    if (!job || !canAccessAuditJob(job, user)) {
+        return null;
     }
 
-    const job = await AuditJob.findOne(query).lean();
-    if (!job) {
+    const projectId = normalizeProjectId(options.projectId);
+    if (projectId && projectId !== job.projectId) {
         return null;
     }
 
@@ -171,4 +209,9 @@ module.exports = {
     createAuditJob,
     listAuditJobs,
     getAuditJob,
+    __internal: {
+        normalizeProjectId,
+        buildAuditJobListQuery,
+        canAccessAuditJob,
+    },
 };

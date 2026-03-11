@@ -7,8 +7,9 @@ import { motion } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import Audit from './Audit';
-import type { AnalysisData, Project, HistoryItem, AuditResult } from './types';
+import type { AnalysisData, Project, HistoryItem, AuditResult, AuthUser } from './types';
 import { api } from './api';
+import { canAccessAudit, canAccessDashboard, canAccessKeywords } from './appNav';
 import { getUrlPathLabel } from './url';
 import HealthGauge from './components/dashboard/HealthGauge';
 import CrawlStatus from './components/dashboard/CrawlStatus';
@@ -66,49 +67,69 @@ interface AuditHistoryItem {
     results: AuditResult[];
 }
 
-export default function Dashboard() {
+interface DashboardProps {
+    user: AuthUser;
+}
+
+export default function Dashboard({ user }: DashboardProps) {
     const { navigate } = useRouter();
     const { push } = useToast();
+    const canViewDashboard = canAccessDashboard(user);
+    const canViewAudit = canAccessAudit(user);
+    const canViewKeywords = canAccessKeywords(user);
+    const canRequestIndexing = user.role === 'admin';
     const [projects, setProjects] = useState<Project[]>([]);
     const [selectedProjectId, setSelectedProjectId] = useState<string>('');
 
     const [data, setData] = useState<AnalysisData | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
-    const [activeTab, setActiveTab] = useState<'dashboard' | 'audit'>('dashboard');
+    const [activeTab, setActiveTab] = useState<'dashboard' | 'audit'>(canViewDashboard ? 'dashboard' : 'audit');
     const [history, setHistory] = useState<HistoryItem[]>([]);
     const [selectedHistoryId, setSelectedHistoryId] = useState<string>('live');
     const [auditHistory, setAuditHistory] = useState<AuditHistoryItem[]>([]);
 
-    // Fetch Projects & History on Mount
+    useEffect(() => {
+        if (activeTab === 'dashboard' && !canViewDashboard && canViewAudit) {
+            setActiveTab('audit');
+        }
+        if (activeTab === 'audit' && !canViewAudit && canViewDashboard) {
+            setActiveTab('dashboard');
+        }
+    }, [activeTab, canViewAudit, canViewDashboard]);
+
     useEffect(() => {
         const init = async () => {
             try {
-                // Fetch Projects
-                const projects = await api.getProjects();
-                setProjects(projects);
-                if (projects.length > 0) {
-                    setSelectedProjectId(projects[0].id);
-                }
+                const nextProjects = await api.getProjects();
+                setProjects(nextProjects);
+                setSelectedProjectId((current) => {
+                    if (current && nextProjects.some((project) => project.id === current)) {
+                        return current;
+                    }
+                    return nextProjects[0]?.id || '';
+                });
 
-                // Fetch GSC History
-                const historyData = await api.getHistory();
+                const [historyData, auditData] = await Promise.all([
+                    canViewDashboard ? api.getHistory() : Promise.resolve([]),
+                    canViewAudit ? api.getAuditHistory() : Promise.resolve([]),
+                ]);
                 setHistory(historyData);
-
-                // Fetch Audit History (For latest health data)
-                const auditData = await api.getAuditHistory();
                 setAuditHistory(auditData);
-
             } catch (e) {
                 console.error('Initialization failed', e);
             }
         };
-        init();
-    }, []);
+        void init();
+    }, [canViewAudit, canViewDashboard]);
 
-    const fetchHistory = async () => {
+    const fetchHistory = async (projectId?: string) => {
+        if (!canViewDashboard) {
+            return;
+        }
+
         try {
-            const nextHistory = await api.getHistory();
+            const nextHistory = await api.getHistory(projectId);
             setHistory(nextHistory);
         } catch (e) {
             console.error('Failed to fetch history', e);
@@ -123,7 +144,7 @@ export default function Dashboard() {
             const json = await api.analyzeSite(selectedProjectId);
             setData(json);
             setSelectedHistoryId('live');
-            void fetchHistory();
+            void fetchHistory(selectedProjectId);
         } catch (e) {
             setError(formatDashboardError(e));
         } finally {
@@ -154,7 +175,7 @@ export default function Dashboard() {
     const selectedHistory = sortedProjectHistory.find((item) => item.id === selectedHistoryId) || null;
     const previousSnapshot = selectedHistoryId === 'live'
         ? sortedProjectHistory[0] || null
-        : sortedProjectHistory.find((item) => item.id !== selectedHistoryId) || null;
+        : sortedProjectHistory.find((item) => item.id !== selectedHistoryId) || null;
 
     const projectAuditHistory = useMemo(
         () => auditHistory.filter((item) => item.projectId === selectedProjectId),
@@ -173,6 +194,11 @@ export default function Dashboard() {
     const formatDate = (iso: string) => new Date(iso).toLocaleString();
 
     const handleRequestIndexing = async (url: string) => {
+        if (!canRequestIndexing) {
+            push({ tone: 'error', title: 'Admin access required', description: 'Only admins can request indexing.' });
+            return;
+        }
+
         try {
             await api.requestIndexing(url);
             push({ tone: 'success', title: 'Indexing requested', description: url });
@@ -180,6 +206,17 @@ export default function Dashboard() {
             push({ tone: 'error', title: 'Indexing request failed', description: issue instanceof Error ? issue.message : 'Unknown error' });
         }
     };
+
+    const surfaceTabs: Array<{ id: 'dashboard' | 'audit' | 'keywords'; label: string; icon: typeof Layout }> = [];
+    if (canViewDashboard) {
+        surfaceTabs.push({ id: 'dashboard', label: 'Command Center', icon: Layout });
+    }
+    if (canViewAudit) {
+        surfaceTabs.push({ id: 'audit', label: 'Deep Audit', icon: Zap });
+    }
+    if (canViewKeywords) {
+        surfaceTabs.push({ id: 'keywords', label: 'Keywords', icon: Globe });
+    }
 
     const exportSummary = () => {
         if (!data) return;
@@ -222,11 +259,7 @@ export default function Dashboard() {
 
                         {/* Navigation Tabs */}
                         <nav className="flex items-center gap-2">
-                            {[
-                                { id: 'dashboard', label: 'Command Center', icon: Layout },
-                                { id: 'audit', label: 'Deep Audit', icon: Zap },
-                                { id: 'keywords', label: 'Keywords', icon: Globe }
-                            ].map((tab) => (
+                            {surfaceTabs.map((tab) => (
                                 <button
                                     key={tab.id}
                                     onClick={() => {
@@ -257,9 +290,27 @@ export default function Dashboard() {
                                 <select
                                     value={selectedProjectId}
                                     onChange={(e) => {
-                                        setSelectedProjectId(e.target.value);
-                                        setData(null);
-                                        setSelectedHistoryId('live');
+                                        const nextProjectId = e.target.value;
+                                        setSelectedProjectId(nextProjectId);
+
+                                        if (!canViewDashboard) {
+                                            setData(null);
+                                            setSelectedHistoryId('live');
+                                            return;
+                                        }
+
+                                        const latestHistory = history
+                                            .filter((item) => item.projectId === nextProjectId || (!item.projectId && nextProjectId === 'laserlift'))
+                                            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null;
+
+                                        if (latestHistory) {
+                                            setSelectedHistoryId(latestHistory.id);
+                                            setData(latestHistory.data);
+                                            setError('');
+                                        } else {
+                                            setData(null);
+                                            setSelectedHistoryId('live');
+                                        }
                                     }}
                                     className="appearance-none bg-white hover:bg-slate-50 border-2 border-black text-black text-sm font-bold py-2 pl-4 pr-10 shadow-[4px_4px_0px_0px_#000] focus:outline-none focus:translate-x-[2px] focus:translate-y-[2px] focus:shadow-none transition-all cursor-pointer uppercase"
                                 >
@@ -276,7 +327,7 @@ export default function Dashboard() {
 
             {activeTab === 'audit' && (
                 <main className="max-w-7xl mx-auto mt-8 px-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                    <Audit key={selectedProjectId} projectId={selectedProjectId} />
+                    <Audit key={selectedProjectId} projectId={selectedProjectId} canRunAudit={canViewAudit} canRequestIndexing={canRequestIndexing} />
                 </main>
             )}
 
@@ -556,16 +607,18 @@ export default function Dashboard() {
                                                         {page.impressions} imp | {page.clicks} clicks
                                                     </span>
                                                 </div>
-                                                <button
-                                                    onClick={() => void handleRequestIndexing(page.url)}
-                                                    className="opacity-0 group-hover:opacity-100 transition-all p-2 bg-black text-white hover:bg-gray-800" title="Request Indexing"
-                                                >
-                                                    <Zap className="w-4 h-4" />
-                                                </button>
+                                                {canRequestIndexing && (
+                                                    <button
+                                                        onClick={() => void handleRequestIndexing(page.url)}
+                                                        className="opacity-0 group-hover:opacity-100 transition-all p-2 bg-black text-white hover:bg-gray-800"
+                                                        title="Request Indexing"
+                                                    >
+                                                        <Zap className="w-4 h-4" />
+                                                    </button>
+                                                )}
                                             </div>
                                         ))
                                     ) : (
-                                        // Legacy String Support
                                         data.pages.top.split(/ \| (?=http)/).map((page, i) => {
                                             const match = page.match(/^(https?:\/\/[^\s]+)\s\((.*)\)$/);
                                             const url = match ? match[1] : page.split(' ')[0];
@@ -578,12 +631,15 @@ export default function Dashboard() {
                                                         </a>
                                                         <span className="text-[10px] text-black font-bold uppercase bg-yellow-200 px-1.5 py-0.5 border border-black mt-2 inline-block shadow-[2px_2px_0px_0px_#000]">{metrics}</span>
                                                     </div>
-                                                    <button
-                                                        onClick={() => void handleRequestIndexing(url)}
-                                                        className="opacity-0 group-hover:opacity-100 transition-all p-2 bg-black text-white hover:bg-gray-800" title="Request Indexing"
-                                                    >
-                                                        <Zap className="w-4 h-4" />
-                                                    </button>
+                                                    {canRequestIndexing && (
+                                                        <button
+                                                            onClick={() => void handleRequestIndexing(url)}
+                                                            className="opacity-0 group-hover:opacity-100 transition-all p-2 bg-black text-white hover:bg-gray-800"
+                                                            title="Request Indexing"
+                                                        >
+                                                            <Zap className="w-4 h-4" />
+                                                        </button>
+                                                    )}
                                                 </div>
                                             );
                                         })
@@ -638,6 +694,14 @@ export default function Dashboard() {
         </div>
     );
 }
+
+
+
+
+
+
+
+
 
 
 

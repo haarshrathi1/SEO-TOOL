@@ -18,6 +18,8 @@ interface AuditHistoryItem {
 
 interface AuditProps {
     projectId: string;
+    canRunAudit?: boolean;
+    canRequestIndexing?: boolean;
 }
 
 type Tab = 'overview' | 'issues' | 'pages' | 'ai';
@@ -59,7 +61,7 @@ function compareAuditResults(current: AuditResult[], previous: AuditResult[]) {
     }));
 }
 
-export default function Audit({ projectId }: AuditProps) {
+export default function Audit({ projectId, canRunAudit = true, canRequestIndexing = false }: AuditProps) {
     const { push } = useToast();
     const [results, setResults] = useState<AuditResult[]>([]);
     const [loading, setLoading] = useState(false);
@@ -81,7 +83,7 @@ export default function Audit({ projectId }: AuditProps) {
 
     const fetchHistory = async () => {
         try {
-            setHistory(await api.getAuditHistory());
+            setHistory(await api.getAuditHistory(projectId));
         } catch (issue) {
             console.error('Failed to fetch audit history', issue);
         }
@@ -100,15 +102,19 @@ export default function Audit({ projectId }: AuditProps) {
 
         const load = async () => {
             try {
-                const [historyData, jobData] = await Promise.all([api.getAuditHistory(), api.getAuditJobs(projectId)]);
+                const [historyData, jobData] = await Promise.all([api.getAuditHistory(projectId), api.getAuditJobs(projectId)]);
                 if (cancelled) return;
+                const latestHistory = historyData
+                    .filter((entry) => entry.projectId === projectId)
+                    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null;
+
                 setHistory(historyData);
                 setJobs(jobData);
-                setResults([]);
+                setResults(latestHistory?.results || []);
                 setError('');
                 setFilterId('');
                 setActiveTab('overview');
-                setSelectedHistoryId('live');
+                setSelectedHistoryId(latestHistory?.id || 'live');
                 setCurrentJob(null);
             } catch (issue) {
                 if (!cancelled) {
@@ -157,7 +163,7 @@ export default function Audit({ projectId }: AuditProps) {
     };
 
     const runAudit = async () => {
-        if (!projectId) return;
+        if (!projectId || !canRunAudit) return;
         setLoading(true);
         setError('');
         setResults([]);
@@ -197,6 +203,11 @@ export default function Audit({ projectId }: AuditProps) {
     };
 
     const handleRequestIndexing = async (url: string) => {
+        if (!canRequestIndexing) {
+            push({ tone: 'error', title: 'Admin access required', description: 'Only admins can request indexing.' });
+            return;
+        }
+
         try {
             await requestIndexing(url);
             push({ tone: 'success', title: 'Indexing requested', description: url });
@@ -237,7 +248,7 @@ export default function Audit({ projectId }: AuditProps) {
         ? sortedProjectHistory[0] || null
         : sortedProjectHistory.find((entry) => entry.id !== selectedHistoryId) || null;
     const comparison = results.length > 0 && comparisonBaseline ? compareAuditResults(results, comparisonBaseline.results) : [];
-    const formatDate = (iso: string) => new Date(iso).toLocaleString();
+    const formatDate = (iso: string) => new Date(iso).toLocaleString();
 
     const exportResults = () => {
         downloadCsv(
@@ -299,6 +310,7 @@ export default function Audit({ projectId }: AuditProps) {
                         </button>
                     )}
 
+                    {canRunAudit && (
                     <button
                         onClick={() => void runAudit()}
                         disabled={loading}
@@ -307,6 +319,7 @@ export default function Audit({ projectId }: AuditProps) {
                         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                         {loading ? 'Running…' : 'Start Audit'}
                     </button>
+                    )}
                 </div>
             </div>
 
@@ -397,7 +410,7 @@ export default function Audit({ projectId }: AuditProps) {
                                         </button>
                                     </div>
                                 )}
-                                <AuditTable results={filteredResults} onRequestIndexing={handleRequestIndexing} />
+                                <AuditTable results={filteredResults} onRequestIndexing={canRequestIndexing ? handleRequestIndexing : null} />
                             </div>
                         )}
                         {activeTab === 'ai' && <AuditAI results={results} />}
@@ -438,4 +451,7 @@ export default function Audit({ projectId }: AuditProps) {
         </div>
     );
 }
+
+
+
 

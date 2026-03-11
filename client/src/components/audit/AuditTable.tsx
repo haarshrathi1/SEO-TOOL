@@ -1,13 +1,13 @@
-import { AlertTriangle, CheckCircle, Info, Play, XCircle } from 'lucide-react';
+﻿import { AlertTriangle, CheckCircle, Info, Play, XCircle } from 'lucide-react';
 import type { AuditResult } from '../../types';
 import { getUrlPathLabel } from '../../url';
 
 interface TableProps {
     results: AuditResult[];
-    onRequestIndexing: (url: string) => void;
+    onRequestIndexing?: ((url: string) => void) | null;
 }
 
-export default function AuditTable({ results, onRequestIndexing }: TableProps) {
+export default function AuditTable({ results, onRequestIndexing = null }: TableProps) {
     const getStatusBadge = (status: string, coverage: string) => {
         const normalizedStatus = status?.toUpperCase() || 'UNKNOWN';
         if (normalizedStatus === 'PASS') {
@@ -62,17 +62,19 @@ export default function AuditTable({ results, onRequestIndexing }: TableProps) {
                                             </a>
                                             <div className="text-[10px] font-mono text-slate-500 font-bold mt-0.5 truncate max-w-[300px]">{result.url}</div>
                                         </div>
-                                        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                                            {result.status !== 'PASS' && (
-                                                <button
-                                                    onClick={() => onRequestIndexing(result.url)}
-                                                    className="p-1.5 text-black hover:bg-black hover:text-white rounded-none transition-colors border-2 border-black shadow-[2px_2px_0px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none"
-                                                    title="Request Indexing"
-                                                >
-                                                    <Play className="w-3.5 h-3.5 fill-current" />
-                                                </button>
-                                            )}
-                                        </div>
+                                        {onRequestIndexing && (
+                                            <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                                {result.status !== 'PASS' && (
+                                                    <button
+                                                        onClick={() => onRequestIndexing(result.url)}
+                                                        className="p-1.5 text-black hover:bg-black hover:text-white rounded-none transition-colors border-2 border-black shadow-[2px_2px_0px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none"
+                                                        title="Request Indexing"
+                                                    >
+                                                        <Play className="w-3.5 h-3.5 fill-current" />
+                                                    </button>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 </td>
 
