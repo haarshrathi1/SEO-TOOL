@@ -1,5 +1,5 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertOctagon, Calendar, Download, Filter, History, LayoutDashboard, Loader2, Play, Search, Sparkles, TableProperties } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertOctagon, Calendar, Download, Filter, History, LayoutDashboard, Loader2, Play, RefreshCw, Search, Sparkles, TableProperties } from 'lucide-react';
 import type { AuditJob, AuditResult } from './types';
 import { api, requestIndexing } from './api';
 import AuditAI from './components/audit/AuditAI';
@@ -8,6 +8,8 @@ import AuditOverview from './components/audit/AuditOverview';
 import AuditTable from './components/audit/AuditTable';
 import { downloadCsv } from './csv';
 import { useToast } from './toast';
+import { OperatorPageHero, OperatorStatePanel } from './components/common/OperatorUi';
+import { OperatorComparisonCard } from './components/common/OperatorStats';
 
 interface AuditHistoryItem {
     id: string;
@@ -61,6 +63,14 @@ function compareAuditResults(current: AuditResult[], previous: AuditResult[]) {
     }));
 }
 
+function formatAuditLoadError(issue: unknown) {
+    if (issue instanceof Error && issue.message) {
+        return issue.message;
+    }
+
+    return 'Failed to load audit data.';
+}
+
 export default function Audit({ projectId, canRunAudit = true, canRequestIndexing = false }: AuditProps) {
     const { push } = useToast();
     const [results, setResults] = useState<AuditResult[]>([]);
@@ -72,6 +82,9 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
     const [jobs, setJobs] = useState<AuditJob[]>([]);
     const [selectedHistoryId, setSelectedHistoryId] = useState('live');
     const [currentJob, setCurrentJob] = useState<AuditJob | null>(null);
+    const [initialLoading, setInitialLoading] = useState(true);
+    const [loadError, setLoadError] = useState('');
+    const [loadRetryKey, setLoadRetryKey] = useState(0);
     const pollRef = useRef<number | null>(null);
 
     const clearPoll = () => {
@@ -101,6 +114,17 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
         let cancelled = false;
 
         const load = async () => {
+            setInitialLoading(true);
+            setLoadError('');
+            setError('');
+            setResults([]);
+            setHistory([]);
+            setJobs([]);
+            setFilterId('');
+            setActiveTab('overview');
+            setSelectedHistoryId('live');
+            setCurrentJob(null);
+
             try {
                 const [historyData, jobData] = await Promise.all([api.getAuditHistory(projectId), api.getAuditJobs(projectId)]);
                 if (cancelled) return;
@@ -119,6 +143,16 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
             } catch (issue) {
                 if (!cancelled) {
                     console.error('Failed to initialize audit view', issue);
+                    setResults([]);
+                    setHistory([]);
+                    setJobs([]);
+                    setSelectedHistoryId('live');
+                    setCurrentJob(null);
+                    setLoadError(formatAuditLoadError(issue));
+                }
+            } finally {
+                if (!cancelled) {
+                    setInitialLoading(false);
                 }
             }
         };
@@ -128,7 +162,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
             cancelled = true;
             clearPoll();
         };
-    }, [projectId]);
+    }, [projectId, loadRetryKey]);
 
     const pollJob = (jobId: string) => {
         clearPoll();
@@ -189,7 +223,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
             if (currentJob?.status === 'completed' && currentJob.result) {
                 setResults(currentJob.result);
             } else {
-                setResults([]);
+                setResults(sortedProjectHistory[0]?.results || []);
             }
             return;
         }
@@ -238,17 +272,25 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
         }
     }, [filterId, results]);
 
-    const projectHistory = useMemo(() => history.filter((entry) => entry.projectId === projectId), [history, projectId]);
-    const sortedProjectHistory = useMemo(
-        () => [...projectHistory].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
-        [projectHistory],
-    );
+    const sortedProjectHistory = history
+        .filter((entry) => entry.projectId === projectId)
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     const selectedHistory = sortedProjectHistory.find((entry) => entry.id === selectedHistoryId) || null;
     const comparisonBaseline = selectedHistoryId === 'live'
         ? sortedProjectHistory[0] || null
         : sortedProjectHistory.find((entry) => entry.id !== selectedHistoryId) || null;
     const comparison = results.length > 0 && comparisonBaseline ? compareAuditResults(results, comparisonBaseline.results) : [];
-    const formatDate = (iso: string) => new Date(iso).toLocaleString();
+    const formatDate = (iso: string) => new Date(iso).toLocaleString();
+    const hasRunningJob = Boolean(currentJob && currentJob.status !== 'completed');
+    const showInitialLoadingState = initialLoading && results.length === 0;
+    const showLoadErrorState = !initialLoading && Boolean(loadError) && results.length === 0;
+    const showEmptyState = !initialLoading && !loadError && !loading && !hasRunningJob && results.length === 0;
+    const auditEmptyTitle = sortedProjectHistory.length > 0 ? 'No pages in this snapshot' : 'No audit snapshot yet';
+    const auditEmptyDescription = sortedProjectHistory.length > 0
+        ? 'This audit snapshot completed without any page results. Try another run if you expected URLs here.'
+        : canRunAudit
+            ? 'Run the first deep audit for this project to populate crawl health, issue counts, and page details.'
+            : 'No completed audit snapshots are available for this project yet.';
 
     const exportResults = () => {
         downloadCsv(
@@ -271,57 +313,56 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
 
     return (
         <div className="space-y-8 pb-20 animate-in slide-in-from-bottom-6 duration-700 fade-in">
-            <div className="flex flex-col gap-6 border-2 border-black bg-white p-6 shadow-[8px_8px_0px_0px_#000] md:flex-row md:items-center md:justify-between">
-                <div className="flex items-center gap-5">
-                    <div className="border-2 border-black bg-[#FF6B6B] p-3 text-black shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)]">
-                        <Search className="h-8 w-8" />
+            <OperatorPageHero
+                icon={Search}
+                title="SEO Commander"
+                titleClassName="italic"
+                supportingContent={(
+                    <div className="mt-1 flex items-center justify-center gap-2 md:justify-start">
+                        <span className="h-2 w-2 animate-pulse rounded-full border border-black bg-green-500"></span>
+                        <p className="text-xs font-bold uppercase tracking-widest text-slate-500">Async audit pipeline ready</p>
                     </div>
-                    <div>
-                        <h2 className="text-4xl font-black uppercase italic tracking-tighter text-black">SEO Commander</h2>
-                        <div className="mt-1 flex items-center gap-2">
-                            <span className="h-2 w-2 animate-pulse rounded-full border border-black bg-green-500"></span>
-                            <p className="text-xs font-bold uppercase tracking-widest text-slate-500">Async audit pipeline ready</p>
-                        </div>
-                    </div>
-                </div>
+                )}
+                actions={(
+                    <>
+                        {sortedProjectHistory.length > 0 && (
+                            <div className="relative group min-w-[14rem]">
+                                <select
+                                    value={selectedHistoryId}
+                                    onChange={(event) => handleHistorySelect(event.target.value)}
+                                    disabled={initialLoading}
+                                    className="operator-control w-full appearance-none cursor-pointer py-3 pl-4 pr-10 text-sm font-bold uppercase text-black"
+                                >
+                                    <option value="live">Live / latest run</option>
+                                    <optgroup label="Previous Audits">
+                                        {sortedProjectHistory.map((entry) => (
+                                            <option key={entry.id} value={entry.id}>{formatDate(entry.timestamp)}</option>
+                                        ))}
+                                    </optgroup>
+                                </select>
+                                <History className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black" />
+                            </div>
+                        )}
 
-                <div className="flex flex-wrap items-center gap-3">
-                    {sortedProjectHistory.length > 0 && (
-                        <div className="relative group min-w-[14rem]">
-                            <select
-                                value={selectedHistoryId}
-                                onChange={(event) => handleHistorySelect(event.target.value)}
-                                className="w-full appearance-none cursor-pointer border-2 border-black bg-white py-3 pl-4 pr-10 text-sm font-bold uppercase text-black shadow-[4px_4px_0px_0px_#000] transition-all hover:bg-slate-50 focus:translate-x-[2px] focus:translate-y-[2px] focus:outline-none focus:shadow-none"
+                        {canRunAudit && results.length > 0 && (
+                            <button onClick={exportResults} className="operator-button-secondary px-5 py-3">
+                                <Download className="h-4 w-4" /> Export CSV
+                            </button>
+                        )}
+
+                        {canRunAudit && (
+                            <button
+                                onClick={() => void runAudit()}
+                                disabled={loading}
+                                className="operator-button-primary px-8 py-3.5"
                             >
-                                <option value="live">Live / latest run</option>
-                                <optgroup label="Previous Audits">
-                                    {sortedProjectHistory.map((entry) => (
-                                        <option key={entry.id} value={entry.id}>{formatDate(entry.timestamp)}</option>
-                                    ))}
-                                </optgroup>
-                            </select>
-                            <History className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black" />
-                        </div>
-                    )}
-
-                    {canRunAudit && results.length > 0 && (
-                        <button onClick={exportResults} className="flex items-center gap-2 border-2 border-black bg-white px-5 py-3 font-black uppercase tracking-wide text-black shadow-[4px_4px_0px_0px_#000] transition-all hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none">
-                            <Download className="h-4 w-4" /> Export CSV
-                        </button>
-                    )}
-
-                    {canRunAudit && (
-                    <button
-                        onClick={() => void runAudit()}
-                        disabled={loading}
-                        className="flex items-center justify-center gap-2 border-2 border-transparent bg-black px-8 py-3.5 text-sm font-black uppercase tracking-wide text-white transition-all hover:border-black hover:bg-white hover:text-black hover:shadow-[4px_4px_0px_0px_#000] disabled:pointer-events-none disabled:opacity-50"
-                    >
-                        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                        {loading ? 'Running…' : 'Start Audit'}
-                    </button>
-                    )}
-                </div>
-            </div>
+                                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                                {loading ? 'Running...' : 'Start Audit'}
+                            </button>
+                        )}
+                    </>
+                )}
+            />
 
             {currentJob && currentJob.status !== 'completed' && (
                 <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-5 shadow-sm">
@@ -352,16 +393,65 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                 </div>
             )}
 
-            {comparison.length > 0 && (
+            {showInitialLoadingState && (
+                <OperatorStatePanel
+                    icon={Loader2}
+                    iconClassName="animate-spin"
+                    title="Loading audit history..."
+                    titleAs="p"
+                    description="Preparing the latest crawl data for this project."
+                />
+            )}
+
+            {showLoadErrorState && (
+                <OperatorStatePanel
+                    icon={AlertOctagon}
+                    title="Could not load audit data"
+                    description={loadError}
+                    variant="warm"
+                    titleAs="h3"
+                    action={(
+                        <button
+                            onClick={() => setLoadRetryKey((current) => current + 1)}
+                            className="operator-button-primary px-4 py-2"
+                        >
+                            <RefreshCw className="h-4 w-4" /> Retry
+                        </button>
+                    )}
+                />
+            )}
+
+            {showEmptyState && (
+                <OperatorStatePanel
+                    icon={History}
+                    title={auditEmptyTitle}
+                    description={auditEmptyDescription}
+                    variant="panel"
+                    align="center"
+                    titleAs="h3"
+                    action={canRunAudit ? (
+                        <button
+                            onClick={() => void runAudit()}
+                            disabled={loading}
+                            className="operator-button-primary px-5 py-3"
+                        >
+                            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                            {loading ? 'Starting...' : 'Start audit'}
+                        </button>
+                    ) : undefined}
+                />
+            )}
+
+                        {comparison.length > 0 && (
                 <div className="grid gap-4 md:grid-cols-3">
                     {comparison.map((item) => (
-                        <div key={item.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{item.label}</p>
-                            <p className="mt-2 text-3xl font-black text-slate-900">{item.current}</p>
-                            <p className={`mt-2 text-sm font-semibold ${item.delta === 0 ? 'text-slate-400' : item.delta > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                {item.delta === 0 ? 'No change' : `${item.delta > 0 ? '+' : ''}${item.delta} vs previous snapshot`}
-                            </p>
-                        </div>
+                        <OperatorComparisonCard
+                            key={item.label}
+                            label={item.label}
+                            value={item.current}
+                            deltaTone={item.delta === 0 ? 'neutral' : item.delta > 0 ? 'positive' : 'negative'}
+                            deltaLabel={item.delta === 0 ? 'No change' : `${item.delta > 0 ? '+' : ''}${item.delta} vs previous snapshot`}
+                        />
                     ))}
                 </div>
             )}
@@ -387,7 +477,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                     </div>
 
                     {selectedHistory && (
-                        <div className="flex w-fit items-center gap-3 border-2 border-black bg-white p-3 text-sm text-black shadow-[4px_4px_0px_0px_#000]">
+                        <div className="operator-panel-inset flex w-fit items-center gap-3 p-3 text-sm text-black">
                             <Calendar className="h-4 w-4 text-black" />
                             <div>Historical Snapshot: <span className="border border-black bg-yellow-300 px-1 font-black">{formatDate(selectedHistory.timestamp)}</span></div>
                         </div>
@@ -451,6 +541,10 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
         </div>
     );
 }
+
+
+
+
 
 
 

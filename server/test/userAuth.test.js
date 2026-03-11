@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
 process.env.CLIENT_ID = process.env.CLIENT_ID || 'test-client';
+process.env.DEV_ADMIN_BYPASS = process.env.DEV_ADMIN_BYPASS || 'true';
 
 const { requireAccess, __internal } = require('../userAuth');
 
@@ -120,4 +121,40 @@ test('requireAccess always allows admins through', () => {
 
     assert.equal(nextCalled, true);
     assert.equal(res.statusCode, 200);
+});
+
+
+test('resolveLoginRole keeps real viewers as viewers even with local dev bypass', () => {
+    assert.equal(
+        __internal.resolveLoginRole({
+            adminAllowed: false,
+            viewerExists: true,
+            allowDevAdmin: true,
+        }),
+        'viewer',
+    );
+});
+
+test('resolveFreshRole downgrades a bypassed admin token to viewer when a viewer record exists', () => {
+    assert.equal(
+        __internal.resolveFreshRole({
+            tokenRole: 'admin',
+            adminAllowed: false,
+            viewerExists: true,
+            allowDevAdmin: true,
+        }),
+        'viewer',
+    );
+});
+
+test('resolveFreshRole still allows local admin bypass when no viewer record exists', () => {
+    assert.equal(
+        __internal.resolveFreshRole({
+            tokenRole: 'admin',
+            adminAllowed: false,
+            viewerExists: false,
+            allowDevAdmin: true,
+        }),
+        'admin',
+    );
 });

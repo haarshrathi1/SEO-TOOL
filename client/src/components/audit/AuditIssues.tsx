@@ -1,4 +1,4 @@
-import { AlertTriangle, XCircle, ChevronRight, Info } from 'lucide-react';
+import { AlertTriangle, ChevronRight, Info, XCircle } from 'lucide-react';
 import type { AuditResult } from '../../types';
 
 interface IssuesProps {
@@ -7,154 +7,152 @@ interface IssuesProps {
 }
 
 export default function AuditIssues({ results, onReview }: IssuesProps) {
+    const orphanCount = results.filter((result) => (result.incomingLinks || 0) === 0).length;
 
-    // Group Issues
     const errors = [
         {
             id: 'not-indexed',
             title: 'Pages not indexed by Google',
-            count: results.filter(r => r.status === 'FAIL').length,
+            count: results.filter((result) => result.status === 'FAIL').length,
             severity: 'critical',
-            desc: 'These pages are completely invisible to search engines.'
+            desc: 'These pages are completely invisible to search engines.',
         },
         {
             id: 'no-h1',
             title: 'Missing H1 Tags',
-            count: results.filter(r => r.h1Count === 0).length,
+            count: results.filter((result) => result.h1Count === 0).length,
             severity: 'critical',
-            desc: 'H1 tags are crucial for ranking. Several pages have none.'
+            desc: 'H1 tags are crucial for ranking. Several pages have none.',
         },
         {
             id: 'multi-h1',
             title: 'Multiple H1 Tags',
-            count: results.filter(r => r.h1Count && r.h1Count > 1).length,
+            count: results.filter((result) => result.h1Count && result.h1Count > 1).length,
             severity: 'critical',
-            desc: 'Multiple H1s confuse search engines about the main topic.'
-        }
-    ].filter(i => i.count > 0);
+            desc: 'Multiple H1s confuse search engines about the main topic.',
+        },
+    ].filter((issue) => issue.count > 0);
 
     const warnings = [
         {
             id: 'missing-desc',
             title: 'Missing Meta Descriptions',
-            count: results.filter(r => !r.description).length,
+            count: results.filter((result) => !result.description).length,
             severity: 'warning',
-            desc: 'CTR may be lower because Google will generate random snippets.'
+            desc: 'CTR may be lower because Google will generate random snippets.',
         },
         {
             id: 'low-word-count',
             title: 'Low Word Count (< 300 words)',
-            count: results.filter(r => (r.wordCount || 0) < 300).length,
+            count: results.filter((result) => (result.wordCount || 0) < 300).length,
             severity: 'warning',
-            desc: 'Thin content is hard to rank.'
+            desc: 'Thin content is hard to rank.',
         },
         {
             id: 'slow-performance',
             title: 'Slow Desktop Performance (< 50)',
-            count: results.filter(r => (r.psi_data?.desktop?.score || 0) < 50).length,
+            count: results.filter((result) => (result.psi_data?.desktop?.score || 0) < 50).length,
             severity: 'warning',
-            desc: 'User experience is poor on these pages.'
-        }
-    ].filter(i => i.count > 0);
+            desc: 'User experience is poor on these pages.',
+        },
+    ].filter((issue) => issue.count > 0);
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {/* Critical Errors Section */}
             <div>
-                <h3 className="text-sm font-black text-black uppercase tracking-wider mb-4 flex items-center gap-2 bg-red-100 w-fit px-2 border-2 border-black">
-                    <XCircle className="w-4 h-4 text-red-600" />
-                    Critical Issues ({errors.reduce((a, b) => a + b.count, 0)})
+                <h3 className="mb-4 flex w-fit items-center gap-2 border-2 border-black bg-red-100 px-2 text-sm font-black uppercase tracking-wider text-black">
+                    <XCircle className="h-4 w-4 text-red-600" />
+                    Critical Issues ({errors.reduce((sum, issue) => sum + issue.count, 0)})
                 </h3>
                 <div className="space-y-3">
-                    {errors.map((err, i) => (
-                        <div
-                            key={i}
-                            onClick={() => onReview(err.id)}
-                            className="bg-white p-4 border-2 border-black shadow-[4px_4px_0px_0px_#000] hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[6px_6px_0px_0px_#000] transition-all flex items-center justify-between group cursor-pointer"
+                    {errors.map((issue, index) => (
+                        <button
+                            key={index}
+                            type="button"
+                            onClick={() => onReview(issue.id)}
+                            className="group flex w-full cursor-pointer items-center justify-between border-2 border-black bg-white p-4 text-left shadow-[4px_4px_0px_0px_#000] transition-all hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[6px_6px_0px_0px_#000] focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
                         >
                             <div className="flex items-center gap-4">
-                                <div className="p-3 bg-[#FF6B6B] text-black border-2 border-black">
-                                    <AlertTriangle className="w-5 h-5" />
+                                <div className="border-2 border-black bg-[#FF6B6B] p-3 text-black">
+                                    <AlertTriangle className="h-5 w-5" />
                                 </div>
                                 <div>
-                                    <div className="font-black text-black text-lg uppercase">{err.count} {err.title}</div>
-                                    <div className="text-slate-600 font-bold text-sm mt-0.5">{err.desc}</div>
+                                    <div className="text-lg font-black uppercase text-black">{issue.count} {issue.title}</div>
+                                    <div className="mt-0.5 text-sm font-bold text-slate-600">{issue.desc}</div>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-2 text-black font-black text-sm bg-red-100 px-4 py-2 border-2 border-black group-hover:bg-black group-hover:text-white transition-colors uppercase">
-                                Fix Now <ChevronRight className="w-4 h-4" />
+                            <div className="flex items-center gap-2 border-2 border-black bg-red-100 px-4 py-2 text-sm font-black uppercase text-black transition-colors group-hover:bg-black group-hover:text-white">
+                                Fix Now <ChevronRight className="h-4 w-4" />
                             </div>
-                        </div>
+                        </button>
                     ))}
                     {errors.length === 0 && (
-                        <div className="p-6 bg-slate-50 border-2 border-black text-center text-slate-500 font-bold italic shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)]">
+                        <div className="p-6 text-center font-bold italic text-slate-500 shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] border-2 border-black bg-slate-50">
                             Great work! No critical issues found.
                         </div>
                     )}
                 </div>
             </div>
 
-            {/* Warnings Section */}
             <div>
-                <h3 className="text-sm font-black text-black uppercase tracking-wider mb-4 flex items-center gap-2 bg-yellow-100 w-fit px-2 border-2 border-black">
-                    <AlertTriangle className="w-4 h-4 text-amber-600" />
-                    Warnings ({warnings.reduce((a, b) => a + b.count, 0)})
+                <h3 className="mb-4 flex w-fit items-center gap-2 border-2 border-black bg-yellow-100 px-2 text-sm font-black uppercase tracking-wider text-black">
+                    <AlertTriangle className="h-4 w-4 text-amber-600" />
+                    Warnings ({warnings.reduce((sum, issue) => sum + issue.count, 0)})
                 </h3>
                 <div className="space-y-3">
-                    {warnings.map((warn, i) => (
-                        <div
-                            key={i}
-                            onClick={() => onReview(warn.id)}
-                            className="bg-white p-4 border-2 border-black shadow-[4px_4px_0px_0px_#000] hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[6px_6px_0px_0px_#000] transition-all flex items-center justify-between group cursor-pointer"
+                    {warnings.map((issue, index) => (
+                        <button
+                            key={index}
+                            type="button"
+                            onClick={() => onReview(issue.id)}
+                            className="group flex w-full cursor-pointer items-center justify-between border-2 border-black bg-white p-4 text-left shadow-[4px_4px_0px_0px_#000] transition-all hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[6px_6px_0px_0px_#000] focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
                         >
                             <div className="flex items-center gap-4">
-                                <div className="p-3 bg-yellow-300 text-black border-2 border-black">
-                                    <Info className="w-5 h-5" />
+                                <div className="border-2 border-black bg-yellow-300 p-3 text-black">
+                                    <Info className="h-5 w-5" />
                                 </div>
                                 <div>
-                                    <div className="font-black text-black text-lg uppercase">{warn.count} {warn.title}</div>
-                                    <div className="text-slate-600 font-bold text-sm mt-0.5">{warn.desc}</div>
+                                    <div className="text-lg font-black uppercase text-black">{issue.count} {issue.title}</div>
+                                    <div className="mt-0.5 text-sm font-bold text-slate-600">{issue.desc}</div>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-2 text-black font-black text-sm bg-yellow-100 px-4 py-2 border-2 border-black group-hover:bg-black group-hover:text-white transition-colors uppercase">
-                                Review <ChevronRight className="w-4 h-4" />
+                            <div className="flex items-center gap-2 border-2 border-black bg-yellow-100 px-4 py-2 text-sm font-black uppercase text-black transition-colors group-hover:bg-black group-hover:text-white">
+                                Review <ChevronRight className="h-4 w-4" />
                             </div>
-                        </div>
+                        </button>
                     ))}
                     {warnings.length === 0 && (
-                        <div className="p-6 bg-slate-50 border-2 border-black text-center text-slate-500 font-bold italic shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)]">
+                        <div className="border-2 border-black bg-slate-50 p-6 text-center font-bold italic text-slate-500 shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)]">
                             No warnings found.
                         </div>
                     )}
                 </div>
-                {/* Link Doctor Section */}
+
                 <div>
-                    <h3 className="text-sm font-black text-black uppercase tracking-wider mb-4 flex items-center gap-2 bg-blue-100 w-fit px-2 border-2 border-black">
-                        <AlertTriangle className="w-4 h-4 text-blue-600" />
-                        Link Health ({results.filter(r => (r.incomingLinks || 0) === 0).length > 0 ? 1 : 0})
+                    <h3 className="mb-4 flex w-fit items-center gap-2 border-2 border-black bg-blue-100 px-2 text-sm font-black uppercase tracking-wider text-black">
+                        <AlertTriangle className="h-4 w-4 text-blue-600" />
+                        Link Health ({orphanCount > 0 ? 1 : 0})
                     </h3>
                     <div className="space-y-3">
-                        {/* Orphaned Pages */}
-                        {results.filter(r => (r.incomingLinks || 0) === 0).length > 0 && (
-                            <div
+                        {orphanCount > 0 && (
+                            <button
+                                type="button"
                                 onClick={() => onReview('orphans')}
-                                className="bg-white p-4 border-2 border-black shadow-[4px_4px_0px_0px_#000] hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[6px_6px_0px_0px_#000] transition-all flex items-center justify-between group cursor-pointer"
+                                className="group flex w-full cursor-pointer items-center justify-between border-2 border-black bg-white p-4 text-left shadow-[4px_4px_0px_0px_#000] transition-all hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[6px_6px_0px_0px_#000] focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
                             >
                                 <div className="flex items-center gap-4">
-                                    <div className="p-3 bg-blue-300 text-black border-2 border-black">
-                                        <AlertTriangle className="w-5 h-5" />
+                                    <div className="border-2 border-black bg-blue-300 p-3 text-black">
+                                        <AlertTriangle className="h-5 w-5" />
                                     </div>
                                     <div>
-                                        <div className="font-black text-black text-lg uppercase">
-                                            {results.filter(r => (r.incomingLinks || 0) === 0).length} Orphaned Pages
-                                        </div>
-                                        <div className="text-slate-600 font-bold text-sm mt-0.5">Pages with ZERO internal links (Ghosts).</div>
+                                        <div className="text-lg font-black uppercase text-black">{orphanCount} Orphaned Pages</div>
+                                        <div className="mt-0.5 text-sm font-bold text-slate-600">Pages with ZERO internal links (Ghosts).</div>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-2 text-black font-black text-sm bg-blue-100 px-4 py-2 border-2 border-black group-hover:bg-black group-hover:text-white transition-colors uppercase">
-                                    Connect <ChevronRight className="w-4 h-4" />
+                                <div className="flex items-center gap-2 border-2 border-black bg-blue-100 px-4 py-2 text-sm font-black uppercase text-black transition-colors group-hover:bg-black group-hover:text-white">
+                                    Connect <ChevronRight className="h-4 w-4" />
                                 </div>
-                            </div>
+                            </button>
                         )}
                     </div>
                 </div>

@@ -6,6 +6,11 @@ function normalizeProjectId(projectId) {
 
 function buildHistoryQuery(user, options = {}) {
     const projectId = normalizeProjectId(options.projectId);
+
+    if (user.role === 'admin' && projectId) {
+        return { projectId };
+    }
+
     const query = user.role === 'admin'
         ? {
             $or: [

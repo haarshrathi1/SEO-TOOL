@@ -1,4 +1,6 @@
-﻿const { AnalysisHistory } = require('./models');
+const { AnalysisHistory } = require('./models');
+
+const LEGACY_DEFAULT_PROJECT_ID = 'laserlift';
 
 function normalizeProjectId(projectId) {
     return typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null;
@@ -24,6 +26,13 @@ function buildHistoryQuery(user, options = {}) {
         } else {
             query.projectId = { $in: user.projectIds };
         }
+    } else if (projectId === LEGACY_DEFAULT_PROJECT_ID) {
+        delete query.projectId;
+        query.$or = [
+            { projectId },
+            { projectId: { $exists: false } },
+            { projectId: null },
+        ];
     }
 
     return query;

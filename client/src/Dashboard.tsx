@@ -1,7 +1,14 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-    Activity, AlertCircle,
-    Download, Globe, Layout, Zap, History
+    Activity,
+    AlertCircle,
+    Download,
+    Globe,
+    History,
+    Layout,
+    Loader2,
+    RefreshCw,
+    Zap,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
@@ -17,6 +24,8 @@ import PerformanceSummary from './components/dashboard/PerformanceSummary';
 import { downloadCsv } from './csv';
 import { useRouter } from './router';
 import { useToast } from './toast';
+import { OperatorPageHero, OperatorStatePanel } from './components/common/OperatorUi';
+import { OperatorComparisonCard, OperatorMetricTile } from './components/common/OperatorStats';
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -30,6 +39,18 @@ function formatDashboardError(e: unknown) {
     }
 
     return message;
+}
+
+function formatSurfaceLoadError(e: unknown, fallback: string) {
+    if (e instanceof Error && e.message) {
+        if (import.meta.env.DEV && e.message === 'Access Denied') {
+            return 'Signed in as viewer. Enable DEV_ADMIN_BYPASS=true in server/.env or sign in with ADMIN_EMAIL.';
+        }
+
+        return e.message;
+    }
+
+    return fallback;
 }
 
 function toNumber(value: string | number | undefined) {
@@ -60,6 +81,10 @@ function buildComparison(current: AnalysisData, previous: AnalysisData) {
     ];
 }
 
+function sortByTimestampDesc<T extends { timestamp: string }>(items: T[]) {
+    return [...items].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+}
+
 interface AuditHistoryItem {
     id: string;
     timestamp: string;
@@ -84,7 +109,13 @@ export default function Dashboard({ user }: DashboardProps) {
 
     const [data, setData] = useState<AnalysisData | null>(null);
     const [loading, setLoading] = useState(false);
+    const [projectsLoading, setProjectsLoading] = useState(true);
+    const [projectDataLoading, setProjectDataLoading] = useState(false);
     const [error, setError] = useState('');
+    const [projectsError, setProjectsError] = useState('');
+    const [projectDataError, setProjectDataError] = useState('');
+    const [projectsRetryKey, setProjectsRetryKey] = useState(0);
+    const [projectSurfaceRetryKey, setProjectSurfaceRetryKey] = useState(0);
     const [activeTab, setActiveTab] = useState<'dashboard' | 'audit'>(canViewDashboard ? 'dashboard' : 'audit');
     const [history, setHistory] = useState<HistoryItem[]>([]);
     const [selectedHistoryId, setSelectedHistoryId] = useState<string>('live');
@@ -100,9 +131,18 @@ export default function Dashboard({ user }: DashboardProps) {
     }, [activeTab, canViewAudit, canViewDashboard]);
 
     useEffect(() => {
+        let cancelled = false;
+
         const init = async () => {
+            setProjectsLoading(true);
+            setProjectsError('');
+
             try {
                 const nextProjects = await api.getProjects();
+                if (cancelled) {
+                    return;
+                }
+
                 setProjects(nextProjects);
                 setSelectedProjectId((current) => {
                     if (current && nextProjects.some((project) => project.id === current)) {
@@ -110,23 +150,72 @@ export default function Dashboard({ user }: DashboardProps) {
                     }
                     return nextProjects[0]?.id || '';
                 });
+            } catch (e) {
+                if (cancelled) {
+                    return;
+                }
 
+                console.error('Initialization failed', e);
+                setProjects([]);
+                setSelectedProjectId('');
+                setHistory([]);
+                setAuditHistory([]);
+                setData(null);
+                setSelectedHistoryId('live');
+                setProjectsError(formatSurfaceLoadError(e, 'Failed to load projects.'));
+            } finally {
+                if (!cancelled) {
+                    setProjectsLoading(false);
+                }
+            }
+        };
+
+        void init();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [projectsRetryKey]);
+
+    useEffect(() => {
+        if (!selectedProjectId) {
+            setHistory([]);
+            setAuditHistory([]);
+            setData(null);
+            setSelectedHistoryId('live');
+            setProjectDataError('');
+            setProjectDataLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+
+        const loadProjectSurface = async () => {
+            setProjectDataLoading(true);
+            setProjectDataError('');
+
+            try {
                 const [historyData, auditData] = await Promise.all([
-                    canViewDashboard ? api.getHistory() : Promise.resolve([]),
-                    canViewAudit ? api.getAuditHistory() : Promise.resolve([]),
+                    canViewDashboard ? api.getHistory(selectedProjectId) : Promise.resolve([]),
+                    canViewAudit ? api.getAuditHistory(selectedProjectId) : Promise.resolve([]),
                 ]);
-                setHistory(historyData);
-                setAuditHistory(auditData);
 
-                const defaultProjectId = nextProjects[0]?.id || '';
-                if (canViewDashboard && defaultProjectId) {
-                    const latestHistory = historyData
-                        .filter((item) => item.projectId === defaultProjectId || (!item.projectId && defaultProjectId === 'laserlift'))
-                        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null;
+                if (cancelled) {
+                    return;
+                }
 
+                const nextHistory = sortByTimestampDesc(historyData);
+                const nextAuditHistory = sortByTimestampDesc(auditData);
+
+                setHistory(nextHistory);
+                setAuditHistory(nextAuditHistory);
+
+                if (canViewDashboard) {
+                    const latestHistory = nextHistory[0] || null;
                     if (latestHistory) {
                         setSelectedHistoryId(latestHistory.id);
                         setData(latestHistory.data);
+                        setError('');
                     } else {
                         setSelectedHistoryId('live');
                         setData(null);
@@ -136,19 +225,40 @@ export default function Dashboard({ user }: DashboardProps) {
                     setData(null);
                 }
             } catch (e) {
-                console.error('Initialization failed', e);
+                if (cancelled) {
+                    return;
+                }
+
+                console.error('Failed to load project surface', e);
+                setHistory([]);
+                setAuditHistory([]);
+                setSelectedHistoryId('live');
+                setProjectDataError(formatSurfaceLoadError(e, 'Failed to load saved project data.'));
+                if (canViewDashboard) {
+                    setData(null);
+                }
+            } finally {
+                if (!cancelled) {
+                    setProjectDataLoading(false);
+                }
             }
         };
-        void init();
-    }, [canViewAudit, canViewDashboard]);
+
+        void loadProjectSurface();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [selectedProjectId, canViewAudit, canViewDashboard, projectSurfaceRetryKey]);
 
     const fetchHistory = async (projectId?: string) => {
-        if (!canViewDashboard) {
+        if (!canViewDashboard || !projectId) {
+            setHistory([]);
             return;
         }
 
         try {
-            const nextHistory = await api.getHistory(projectId);
+            const nextHistory = sortByTimestampDesc(await api.getHistory(projectId));
             setHistory(nextHistory);
         } catch (e) {
             console.error('Failed to fetch history', e);
@@ -174,36 +284,36 @@ export default function Dashboard({ user }: DashboardProps) {
     const handleHistorySelect = (id: string) => {
         setSelectedHistoryId(id);
         if (id === 'live') {
+            setError('');
+            if (canRunDashboardActions) {
+                setData(null);
+            } else {
+                setData(history[0]?.data || null);
+            }
             return;
         }
-        const item = history.find(h => h.id === id);
+        const item = history.find((entry) => entry.id === id);
         if (item) {
             setData(item.data);
             setError('');
         }
     };
 
-    const projectHistory = useMemo(
-        () => history.filter((item) => item.projectId === selectedProjectId || (!item.projectId && selectedProjectId === 'laserlift')),
-        [history, selectedProjectId],
-    );
-    const sortedProjectHistory = useMemo(
-        () => [...projectHistory].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
-        [projectHistory],
-    );
+    const sortedProjectHistory = history;
     const selectedHistory = sortedProjectHistory.find((item) => item.id === selectedHistoryId) || null;
     const previousSnapshot = selectedHistoryId === 'live'
         ? sortedProjectHistory[0] || null
-        : sortedProjectHistory.find((item) => item.id !== selectedHistoryId) || null;
+        : sortedProjectHistory.find((item) => item.id !== selectedHistoryId) || null;
 
-    const projectAuditHistory = useMemo(
-        () => auditHistory.filter((item) => item.projectId === selectedProjectId),
-        [auditHistory, selectedProjectId],
-    );
-    const latestAudit = useMemo(
-        () => [...projectAuditHistory].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null,
-        [projectAuditHistory],
-    );
+    const projectAuditHistory = auditHistory;
+    const latestAudit = projectAuditHistory[0] || null;
+    const selectedProject = projects.find((project) => project.id === selectedProjectId) || null;
+    const showDashboardBootstrapLoading = activeTab === 'dashboard' && projectsLoading;
+    const showDashboardProjectsError = activeTab === 'dashboard' && !projectsLoading && Boolean(projectsError);
+    const showDashboardNoProject = activeTab === 'dashboard' && !projectsLoading && !projectsError && !selectedProject;
+    const showDashboardProjectLoading = activeTab === 'dashboard' && !projectsLoading && projectDataLoading && Boolean(selectedProject) && !data;
+    const showDashboardProjectError = activeTab === 'dashboard' && !projectsLoading && !projectDataLoading && Boolean(selectedProject) && Boolean(projectDataError);
+    const showDashboardEmpty = activeTab === 'dashboard' && !projectsLoading && !projectDataLoading && !projectsError && !projectDataError && Boolean(selectedProject) && !data;
 
     const comparisonMetrics = useMemo(
         () => (data && previousSnapshot ? buildComparison(data, previousSnapshot.data) : []),
@@ -211,6 +321,12 @@ export default function Dashboard({ user }: DashboardProps) {
     );
 
     const formatDate = (iso: string) => new Date(iso).toLocaleString();
+    const dashboardEmptyTitle = canRunDashboardActions ? 'Run a fresh analysis' : 'No saved snapshot yet';
+    const dashboardEmptyDescription = canRunDashboardActions
+        ? sortedProjectHistory.length > 0
+            ? 'Choose a saved report from history or run a fresh analysis to refresh this project.'
+            : 'This project does not have a saved dashboard snapshot yet. Run the first analysis to populate it.'
+        : 'This project does not have a saved dashboard snapshot yet. Ask an admin to run the first analysis.';
 
     const handleRequestIndexing = async (url: string) => {
         if (!canRequestIndexing) {
@@ -249,9 +365,9 @@ export default function Dashboard({ user }: DashboardProps) {
     };
 
     return (
-        <div className="min-h-screen bg-[#e0e7ff] text-slate-900 font-sans selection:bg-black selection:text-white pb-20">
+        <div className="operator-shell text-slate-900 font-sans selection:bg-black selection:text-white pb-20">
             {/* Brutalist Header */}
-            <header className="sticky top-0 z-50 bg-white border-b-2 border-black">
+            <header className="sticky top-0 z-50 border-b-2 border-black bg-white/90 backdrop-blur-md">
                 <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row items-center justify-between gap-4">
                     <div className="w-full md:w-auto flex items-center gap-6">
                         {/* Logo / Title Area */}
@@ -268,7 +384,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                 </h1>
                             </div>
                             <p className="text-xs font-bold text-slate-500 mt-1 pl-[52px] font-mono uppercase">
-                                {data?.domain || (projects.find(p => p.id === selectedProjectId)?.domain || 'Select a project')}
+                                {data?.domain || selectedProject?.domain || 'Select a project'}
                                 {data?.week && <span className="ml-2 bg-black text-white px-1">WEEK {data.week}</span>}
                             </p>
                         </div>
@@ -311,27 +427,14 @@ export default function Dashboard({ user }: DashboardProps) {
                                     onChange={(e) => {
                                         const nextProjectId = e.target.value;
                                         setSelectedProjectId(nextProjectId);
-
-                                        if (!canViewDashboard) {
-                                            setData(null);
-                                            setSelectedHistoryId('live');
-                                            return;
-                                        }
-
-                                        const latestHistory = history
-                                            .filter((item) => item.projectId === nextProjectId || (!item.projectId && nextProjectId === 'laserlift'))
-                                            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null;
-
-                                        if (latestHistory) {
-                                            setSelectedHistoryId(latestHistory.id);
-                                            setData(latestHistory.data);
-                                            setError('');
-                                        } else {
-                                            setData(null);
-                                            setSelectedHistoryId('live');
-                                        }
+                                        setError('');
+                                        setSelectedHistoryId('live');
+                                        setHistory([]);
+                                        setAuditHistory([]);
+                                        setData(null);
                                     }}
-                                    className="appearance-none bg-white hover:bg-slate-50 border-2 border-black text-black text-sm font-bold py-2 pl-4 pr-10 shadow-[4px_4px_0px_0px_#000] focus:outline-none focus:translate-x-[2px] focus:translate-y-[2px] focus:shadow-none transition-all cursor-pointer uppercase"
+                                    disabled={projectsLoading || projectDataLoading}
+                                    className="operator-control appearance-none cursor-pointer py-2 pl-4 pr-10 text-sm font-bold uppercase"
                                 >
                                     {projects.map(p => (
                                         <option key={p.id} value={p.id}>{p.name}</option>
@@ -344,7 +447,7 @@ export default function Dashboard({ user }: DashboardProps) {
                 </div>
             </header>
 
-            {activeTab === 'audit' && (
+            {activeTab === 'audit' && selectedProjectId && (
                 <main className="max-w-7xl mx-auto mt-8 px-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
                     <Audit key={selectedProjectId} projectId={selectedProjectId} canRunAudit={user.role === 'admin' && canViewAudit} canRequestIndexing={canRequestIndexing} />
                 </main>
@@ -359,44 +462,112 @@ export default function Dashboard({ user }: DashboardProps) {
                 </div>
             )}
 
-            {/* SEO COMMANDER BANNER */}
-            {activeTab === 'dashboard' && (
+            {showDashboardBootstrapLoading && (
                 <div className="max-w-7xl mx-auto mt-8 px-6">
-                    <div className="bg-white border-2 border-black shadow-[8px_8px_0px_0px_#000] flex flex-col md:flex-row items-stretch">
-                        <div className="p-6 bg-[#FF6B6B] border-b-2 md:border-b-0 md:border-r-2 border-black flex items-center justify-center min-w-[100px]">
-                            <Activity className="w-10 h-10 text-black" />
-                        </div>
-                        <div className="p-6 flex-1 flex flex-col md:flex-row items-center justify-between gap-6">
-                            <div className="text-center md:text-left">
-                                <h2 className="text-4xl font-black text-black uppercase tracking-tighter leading-none mb-2">
-                                    SEO COMMANDER
-                                </h2>
-                                <span className="inline-block bg-yellow-300 text-black text-xs font-bold px-3 py-1 border border-black uppercase tracking-wider shadow-[2px_2px_0px_0px_#000]">
-                                    Unified Intelligence & Audit System
-                                </span>
-                            </div>
+                    <OperatorStatePanel
+                        icon={Loader2}
+                        iconClassName="animate-spin"
+                        title="Loading projects..."
+                        titleAs="p"
+                        description="Preparing your dashboard workspace."
+                    />
+                </div>
+            )}
 
-                            <div className="flex items-center gap-4 w-full md:w-auto">
+            {showDashboardProjectsError && (
+                <div className="max-w-7xl mx-auto mt-8 px-6">
+                    <OperatorStatePanel
+                        icon={AlertCircle}
+                        title="Could not load projects"
+                        description={projectsError}
+                        variant="warm"
+                        action={(
+                            <button
+                                onClick={() => setProjectsRetryKey((current) => current + 1)}
+                                className="operator-button-primary px-4 py-2"
+                            >
+                                <RefreshCw className="h-4 w-4" /> Retry
+                            </button>
+                        )}
+                    />
+                </div>
+            )}
+
+            {showDashboardNoProject && (
+                <div className="max-w-7xl mx-auto mt-8 px-6">
+                    <OperatorStatePanel
+                        icon={History}
+                        title="No projects available"
+                        description="Add a project first to start loading dashboard and audit snapshots."
+                    />
+                </div>
+            )}
+
+            {showDashboardProjectLoading && (
+                <div className="max-w-7xl mx-auto mt-8 px-6">
+                    <OperatorStatePanel
+                        icon={Loader2}
+                        iconClassName="animate-spin"
+                        title="Loading project snapshots..."
+                        titleAs="p"
+                        className="p-4"
+                    />
+                </div>
+            )}
+
+            {showDashboardProjectError && (
+                <div className="max-w-7xl mx-auto mt-8 px-6">
+                    <OperatorStatePanel
+                        icon={AlertCircle}
+                        title="Saved data could not be loaded"
+                        description={projectDataError}
+                        variant="warm"
+                        action={(
+                            <button
+                                onClick={() => setProjectSurfaceRetryKey((current) => current + 1)}
+                                className="operator-button-primary px-4 py-2"
+                            >
+                                <RefreshCw className="h-4 w-4" /> Retry
+                            </button>
+                        )}
+                    />
+                </div>
+            )}
+
+            {/* SEO COMMANDER BANNER */}
+            {activeTab === 'dashboard' && !showDashboardBootstrapLoading && !showDashboardProjectsError && !showDashboardNoProject && (
+                <div className="max-w-7xl mx-auto mt-8 px-6">
+                    <OperatorPageHero
+                        icon={Activity}
+                        title="SEO COMMANDER"
+                        supportingContent={(
+                            <span className="inline-block border border-black bg-yellow-300 px-3 py-1 text-xs font-bold uppercase tracking-wider text-black shadow-[2px_2px_0px_0px_#000]">
+                                Unified Intelligence & Audit System
+                            </span>
+                        )}
+                        actions={(
+                            <>
                                 <div className="relative flex-1 md:w-64">
-                                    <div className="relative flex items-center border-2 border-black bg-white h-12 px-4 shadow-[4px_4px_0px_0px_#000] focus-within:translate-x-[2px] focus-within:translate-y-[2px] focus-within:shadow-none transition-all group">
-                                        <Zap className="w-4 h-4 text-orange-500 mr-2 pointer-events-none z-10" />
+                                    <div className="operator-control relative flex h-12 items-center px-4 group">
+                                        <Zap className="mr-2 w-4 h-4 pointer-events-none z-10 text-orange-500" />
                                         <select
                                             value={selectedHistoryId}
                                             onChange={(e) => handleHistorySelect(e.target.value)}
-                                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
+                                            disabled={projectDataLoading || !selectedProjectId}
+                                            className="absolute inset-0 z-20 h-full w-full cursor-pointer opacity-0 disabled:cursor-wait"
                                         >
                                             <option value="live">{canRunDashboardActions ? 'New Analysis' : 'Latest Snapshot'}</option>
                                             <optgroup label="Previous Reports">
-                                                {projectHistory.map((h) => (
+                                                {sortedProjectHistory.map((h) => (
                                                     <option key={h.id} value={h.id}>
                                                         {formatDate(h.timestamp)}
                                                     </option>
                                                 ))}
                                             </optgroup>
                                         </select>
-                                        <span className="font-bold text-sm uppercase truncate pr-6 pointer-events-none z-10 select-none">
+                                        <span className="pointer-events-none z-10 select-none truncate pr-6 text-sm font-bold uppercase">
                                             {selectedHistoryId === 'live'
-                                                ? 'New Analysis'
+                                                ? (canRunDashboardActions ? 'New Analysis' : 'Latest Snapshot')
                                                 : selectedHistory
                                                     ? formatDate(selectedHistory.timestamp)
                                                     : 'Select Report'
@@ -410,7 +581,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                 {data && (
                                     <button
                                         onClick={exportSummary}
-                                        className="h-12 border-2 border-black bg-white px-5 text-sm font-black uppercase tracking-wider text-black shadow-[4px_4px_0px_0px_#000] transition-all hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none flex items-center gap-2 whitespace-nowrap"
+                                        className="operator-button-secondary h-12 whitespace-nowrap px-5"
                                     >
                                         <Download className="w-4 h-4" />
                                         Export CSV
@@ -418,20 +589,38 @@ export default function Dashboard({ user }: DashboardProps) {
                                 )}
                                 <button
                                     onClick={runAnalysis}
-                                    disabled={loading}
-                                    className="h-12 px-8 bg-black text-white text-sm font-black uppercase tracking-wider border-2 border-black shadow-[4px_4px_0px_0px_#888] hover:bg-slate-800 active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all disabled:opacity-50 disabled:pointer-events-none flex items-center gap-2 whitespace-nowrap"
+                                    disabled={loading || !selectedProjectId || projectDataLoading}
+                                    className="operator-button-primary h-12 whitespace-nowrap px-8"
                                 >
-                                    {loading ? (
-                                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                    ) : (
-                                        <Activity className="w-4 h-4" />
-                                    )}
+                                    {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="w-4 h-4" />}
                                     {loading ? 'Running...' : 'UPDATE TRAFFIC'}
                                 </button>
-                            </div>
-                        </div>
-                    </div>
+                            </>
+                        )}
+                    />
                 </div>
+            )}
+
+            {showDashboardEmpty && (
+                <main className="max-w-7xl mx-auto p-6 space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-700">
+                    <OperatorStatePanel
+                        icon={History}
+                        title={dashboardEmptyTitle}
+                        description={dashboardEmptyDescription}
+                        variant="panel"
+                        align="center"
+                        action={canRunDashboardActions ? (
+                            <button
+                                onClick={runAnalysis}
+                                disabled={loading || !selectedProjectId}
+                                className="operator-button-primary px-5 py-3"
+                            >
+                                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
+                                {loading ? 'Starting...' : 'Run analysis'}
+                            </button>
+                        ) : undefined}
+                    />
+                </main>
             )}
 
             {activeTab === 'dashboard' && data && (
@@ -460,16 +649,16 @@ export default function Dashboard({ user }: DashboardProps) {
                         </motion.div>
                     )}
 
-                    {comparisonMetrics.length > 0 && (
+                                        {comparisonMetrics.length > 0 && (
                         <div className="grid gap-4 md:grid-cols-3">
                             {comparisonMetrics.map((item) => (
-                                <div key={item.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{item.label}</p>
-                                    <p className="mt-2 text-3xl font-black text-slate-900">{item.current}</p>
-                                    <p className={`mt-2 text-sm font-semibold ${item.delta === 0 ? 'text-slate-400' : item.delta > 0 ? 'text-emerald-600' : 'text-rose-600'}`}> 
-                                        {item.delta === 0 ? 'No change vs previous' : `${item.delta > 0 ? '+' : ''}${item.delta.toFixed(2).replace(/\.00$/, '')} vs previous`}
-                                    </p>
-                                </div>
+                                <OperatorComparisonCard
+                                    key={item.label}
+                                    label={item.label}
+                                    value={item.current}
+                                    deltaTone={item.delta === 0 ? 'neutral' : item.delta > 0 ? 'positive' : 'negative'}
+                                    deltaLabel={item.delta === 0 ? 'No change vs previous' : `${item.delta > 0 ? '+' : ''}${item.delta.toFixed(2).replace(/\.00$/, '')} vs previous`}
+                                />
                             ))}
                         </div>
                     )}
@@ -482,7 +671,7 @@ export default function Dashboard({ user }: DashboardProps) {
                             {latestAudit ? (
                                 <HealthGauge results={latestAudit.results} />
                             ) : (
-                                <div className="h-full bg-white border-2 border-black p-8 shadow-[8px_8px_0px_0px_#000] flex flex-col items-center justify-center text-center">
+                                <div className="operator-panel flex h-full flex-col items-center justify-center p-8 text-center">
                                     <AlertCircle className="w-12 h-12 text-slate-300 mb-4" />
                                     <h3 className="text-xl font-black uppercase text-slate-400">No Audit Data</h3>
                                     <p className="text-sm text-slate-500 font-bold mt-2">Run a "Deep Audit" to see health score.</p>
@@ -491,7 +680,7 @@ export default function Dashboard({ user }: DashboardProps) {
                         </div>
 
                         {/* Right: Traffic Metrics Grid */}
-                        <div className="lg:col-span-8 bg-white border-2 border-black p-8 shadow-[8px_8px_0px_0px_#000]">
+                        <div className="operator-panel lg:col-span-8 p-8">
                             <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-8 gap-y-12">
                                 {[
                                     { label: 'Total Clicks', value: data.metrics.clicks, sub: 'Organic', color: 'bg-blue-200' },
@@ -502,14 +691,13 @@ export default function Dashboard({ user }: DashboardProps) {
                                     { label: 'Engagement', value: data.metrics.engagementRate, sub: 'Active', color: 'bg-rose-200' },
                                     { label: 'Visibility', value: data.metrics.visibility, sub: 'Index', color: 'bg-sky-200' }
                                 ].map((m, i) => (
-                                    <div key={i} className="flex flex-col gap-2 group hover:translate-x-1 hover:translate-y-1 transition-transform">
-                                        <div className="flex items-center justify-between">
-                                            <span className="text-xs font-black uppercase text-slate-500 tracking-wider bg-slate-100 px-1">{m.label}</span>
-                                            <div className={`w-3 h-3 border border-black ${m.color}`}></div>
-                                        </div>
-                                        <span className="text-4xl font-mono font-bold text-black tracking-tighter">{m.value}</span>
-                                        <span className="text-[10px] font-bold uppercase text-black border border-black w-fit px-1 bg-white shadow-[2px_2px_0px_0px_#000]">{m.sub}</span>
-                                    </div>
+                                                                        <OperatorMetricTile
+                                        key={i}
+                                        label={m.label}
+                                        value={m.value}
+                                        sublabel={m.sub}
+                                        accentClassName={m.color}
+                                    />
                                 ))}
                             </div>
                         </div>
@@ -541,7 +729,7 @@ export default function Dashboard({ user }: DashboardProps) {
                         </div>
 
                         {/* 3. Issues List (GSC) - Adjusted to fit 3rd column */}
-                        <div className="bg-white border-2 border-black p-6 shadow-[8px_8px_0px_0px_#000] flex flex-col justify-between">
+                        <div className="operator-panel flex flex-col justify-between p-6">
                             <div>
                                 <div className="flex items-center gap-2 mb-4 border-b-2 border-black/10 pb-4">
                                     <div className="p-2 bg-[#FF6B6B] border-2 border-black">
@@ -556,7 +744,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                     <div className="space-y-4">
                                         <div
                                             className={cn(
-                                                "flex items-center justify-between p-3 bg-red-50 border-2 border-black shadow-[4px_4px_0px_0px_#000] transition-transform",
+                                                "group flex items-center justify-between p-3 bg-red-50 border-2 border-black shadow-[4px_4px_0px_0px_#000] transition-transform",
                                                 data.issues.failedUrls?.length ? "hover:translate-x-1 hover:bg-red-100" : ""
                                             )}
                                         >
@@ -604,7 +792,7 @@ export default function Dashboard({ user }: DashboardProps) {
                     {/* Top Content Row */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                         {/* Top Performing Pages (GSC) */}
-                        <div className="bg-white border-2 border-black p-6 shadow-[8px_8px_0px_0px_#000] flex flex-col">
+                        <div className="operator-panel flex flex-col p-6">
                             <div className="flex items-center gap-2 mb-6 border-b-2 border-black/10 pb-4">
                                 <div className="p-2 bg-blue-300 border-2 border-black">
                                     <Globe className="w-5 h-5 text-black" />
@@ -671,7 +859,7 @@ export default function Dashboard({ user }: DashboardProps) {
                         </div>
 
                         {/* Keyword Tracker (Now Active) */}
-                        <div className="bg-white border-2 border-black p-6 shadow-[8px_8px_0px_0px_#000] flex flex-col">
+                        <div className="operator-panel flex flex-col p-6">
                             <div className="flex items-center gap-2 mb-6 border-b-2 border-black/10 pb-4">
                                 <div className="p-2 bg-purple-300 border-2 border-black">
                                     <Globe className="w-5 h-5 text-black" />
@@ -713,6 +901,8 @@ export default function Dashboard({ user }: DashboardProps) {
         </div>
     );
 }
+
+
 
 
 

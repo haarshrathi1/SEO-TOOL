@@ -126,34 +126,73 @@ async function isAdminEmail(email) {
     return Boolean(admin);
 }
 
-async function loadFreshUser(decoded) {
+function buildAdminUser(email, tokenPayload = {}) {
+    return {
+        email,
+        role: 'admin',
+        name: tokenPayload.name || email,
+        picture: tokenPayload.picture || '',
+        access: ['keywords', 'dashboard', 'audit'],
+        projectIds: [],
+    };
+}
+
+function resolveLoginRole({ adminAllowed, viewerExists, allowDevAdmin }) {
+    if (adminAllowed) {
+        return 'admin';
+    }
+
+    if (viewerExists) {
+        return 'viewer';
+    }
+
+    if (allowDevAdmin) {
+        return 'admin';
+    }
+
+    return null;
+}
+
+function resolveFreshRole({ tokenRole, adminAllowed, viewerExists, allowDevAdmin }) {
+    if (adminAllowed) {
+        return 'admin';
+    }
+
+    if (viewerExists) {
+        return 'viewer';
+    }
+
+    if (tokenRole === 'admin' && allowDevAdmin) {
+        return 'admin';
+    }
+
+    return null;
+}
+
+async function loadFreshUser(decoded, req) {
     const email = normalizeEmail(decoded.email);
     if (!email) {
         return null;
     }
 
-    if (decoded.role === 'admin') {
-        const adminAllowed = await isAdminEmail(email);
-        if (!adminAllowed) {
-            return null;
-        }
+    const adminAllowed = await isAdminEmail(email);
+    const viewer = adminAllowed ? null : await Viewer.findOne({ email }).lean();
+    const role = resolveFreshRole({
+        tokenRole: decoded.role,
+        adminAllowed,
+        viewerExists: Boolean(viewer),
+        allowDevAdmin: shouldBypassAdmin(req),
+    });
 
-        return {
-            email,
-            role: 'admin',
-            name: decoded.name || email,
-            picture: decoded.picture || '',
-            access: ['keywords', 'dashboard', 'audit'],
-            projectIds: [],
-        };
+    if (role === 'admin') {
+        return buildAdminUser(email, decoded);
     }
 
-    const viewer = await Viewer.findOne({ email }).lean();
-    if (!viewer) {
-        return null;
+    if (role === 'viewer' && viewer) {
+        return getPublicViewer(viewer, decoded);
     }
 
-    return getPublicViewer(viewer, decoded);
+    return null;
 }
 
 async function requireAuth(req, res, next) {
@@ -165,7 +204,7 @@ async function requireAuth(req, res, next) {
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
-        const user = await loadFreshUser(decoded);
+        const user = await loadFreshUser(decoded, req);
         if (!user) {
             return res.status(403).json({ error: 'Access revoked or no longer authorized' });
         }
@@ -232,8 +271,15 @@ router.post('/google-login', async (req, res) => {
         const email = normalizeEmail(payload.email);
         const name = payload.name || email;
         const picture = payload.picture || '';
+        const adminAllowed = await isAdminEmail(email);
+        const viewer = adminAllowed ? null : await Viewer.findOne({ email }).lean();
+        const role = resolveLoginRole({
+            adminAllowed,
+            viewerExists: Boolean(viewer),
+            allowDevAdmin: shouldBypassAdmin(req),
+        });
 
-        if (await isAdminEmail(email) || shouldBypassAdmin(req)) {
+        if (role === 'admin') {
             const token = jwt.sign(
                 { email, role: 'admin', name, picture },
                 JWT_SECRET,
@@ -241,11 +287,10 @@ router.post('/google-login', async (req, res) => {
             );
 
             res.cookie('seo_token', token, getCookieOptions());
-            return res.json({ user: { email, role: 'admin', name, picture, access: ['keywords', 'dashboard', 'audit'], projectIds: [] } });
+            return res.json({ user: buildAdminUser(email, { name, picture }) });
         }
 
-        const viewer = await Viewer.findOne({ email }).lean();
-        if (viewer) {
+        if (role === 'viewer' && viewer) {
             const token = jwt.sign(
                 { email, role: 'viewer', name, picture },
                 JWT_SECRET,
@@ -399,6 +444,10 @@ module.exports = {
         normalizeAccess,
         resolveProjectId,
         getRequiredJwtSecret,
+        shouldBypassAdmin,
+        buildAdminUser,
+        resolveLoginRole,
+        resolveFreshRole,
     },
 };
 

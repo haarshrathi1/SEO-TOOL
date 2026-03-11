@@ -1,5 +1,5 @@
-﻿import { useEffect, useRef, useState } from 'react';
-import { Search, Loader2, Target, BarChart3, Layers, Sparkles, ExternalLink, Zap, Save, History, ChevronRight, TrendingUp, Brain, Lightbulb, Crosshair, Rocket, ArrowRight, ChevronDown, ChevronUp, HelpCircle, Star, Shield, Eye, BookOpen, Filter, Download, type LucideIcon } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Search, Loader2, Target, BarChart3, Layers, Sparkles, ExternalLink, Zap, Save, History, ChevronRight, TrendingUp, Brain, Lightbulb, Crosshair, Rocket, ArrowRight, ChevronDown, ChevronUp, HelpCircle, Star, Shield, Eye, BookOpen, Filter, Download, Check, type LucideIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from './api';
 import { downloadCsv } from './csv';
@@ -52,6 +52,13 @@ const LAYER_BANTER: Record<number, string[]> = {
     ],
 };
 
+const SAMPLE_SEEDS = [
+    'crm software',
+    'email marketing automation',
+    'project management for agencies',
+    'best payroll software',
+];
+
 function pickNextMessageIndex(messages: string[], previousIndex: number) {
     if (messages.length <= 1) return 0;
     let nextIndex = previousIndex;
@@ -63,6 +70,21 @@ function pickNextMessageIndex(messages: string[], previousIndex: number) {
 
 function getErrorMessage(error: unknown, fallback: string) {
     return error instanceof Error ? error.message : fallback;
+}
+
+function formatLabel(value: string) {
+    return value
+        .replace(/_/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function getOpportunityTier(score: number) {
+    if (score >= 80) return 'Breakout';
+    if (score >= 65) return 'Strong';
+    if (score >= 45) return 'Workable';
+    return 'Defensive';
 }
 
 function isKeywordDataV2(item: KeywordHistoryItem): item is KeywordDataV2 & { id: string; timestamp: string } {
@@ -235,6 +257,21 @@ export default function KeywordResearch() {
 
     const filteredKeywords = data?.keywordUniverse?.keywords?.filter((k: KeywordItem) => kwFilter === 'all' || k.intent?.toLowerCase() === kwFilter) || [];
     const sortedKeywords = [...filteredKeywords].sort((a, b) => kwSort === 'opportunityScore' ? (b.opportunityScore - a.opportunityScore) : a.term.localeCompare(b.term));
+    const topOpportunityKeywords = sortedKeywords.slice(0, 3);
+    const questionKeywords = data?.keywordUniverse?.questionKeywords || [];
+    const relatedSearches = data?.serpRaw?.relatedSearches || [];
+    const serpFeatures = data?.serpRaw?.serpFeatures || [];
+    const easyKeywordCount = filteredKeywords.filter((keyword) => keyword.difficulty === 'Easy').length;
+    const scoreLeaderCount = filteredKeywords.filter((keyword) => keyword.opportunityScore >= 70).length;
+    const buyerStageCount = new Set(filteredKeywords.map((keyword) => keyword.buyerStage).filter(Boolean)).size;
+    const highestScoringKeyword = sortedKeywords[0] || null;
+    const intentMix = filteredKeywords.reduce<Record<string, number>>((acc, keyword) => {
+        const key = keyword.intent?.toLowerCase() || 'unknown';
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+    }, {});
+    const dominantIntent = Object.entries(intentMix).sort(([, a], [, b]) => b - a)[0] || null;
+
     const exportKeywordCsv = () => {
         if (!data) return;
         downloadCsv(
@@ -272,14 +309,18 @@ export default function KeywordResearch() {
                         </div>
                         <div className="p-3 space-y-2">
                             {history.map(item => (
-                                <div key={item.id} onClick={() => loadFromHistory(item)}
-                                    className="p-3.5 rounded-xl hover:bg-indigo-50 cursor-pointer transition-all border border-transparent hover:border-indigo-100 group">
+                                <button
+                                    key={item.id}
+                                    type="button"
+                                    onClick={() => loadFromHistory(item)}
+                                    className="w-full p-3.5 rounded-xl hover:bg-indigo-50 cursor-pointer transition-all border border-transparent hover:border-indigo-100 group text-left focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                                >
                                     <div className="flex justify-between items-center">
                                         <span className="font-semibold text-slate-800 group-hover:text-indigo-700">{item.seed}</span>
                                         <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-indigo-500" />
                                     </div>
                                     <span className="text-xs text-slate-400 mt-1 block">{new Date(item.timestamp).toLocaleDateString()}</span>
-                                </div>
+                                </button>
                             ))}
                             {history.length === 0 && <p className="text-sm text-slate-400 text-center py-8">No saved research yet</p>}
                         </div>
@@ -289,32 +330,132 @@ export default function KeywordResearch() {
 
             <div className="max-w-7xl mx-auto px-6 py-12 space-y-8">
                 {/* Hero */}
-                <div className="text-center space-y-5 pt-4 pb-2">
-                    <h1 className="text-4xl md:text-5xl font-extrabold text-slate-900 tracking-tight">
-                        Keyword <span className="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">Intelligence</span>
-                    </h1>
-                    <form onSubmit={handleSearch} className="max-w-2xl mx-auto flex gap-3">
-                        <div className="flex-1 relative">
-                            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                            <input type="text" value={seed} onChange={e => setSeed(e.target.value)} placeholder="Enter a topic or keyword (e.g., CRM software)..."
-                                className="premium-input pl-12 pr-4" />
+                <div className="premium-card relative overflow-hidden">
+                    <div className="absolute -top-16 left-8 h-36 w-36 rounded-full bg-indigo-200/40 blur-3xl" />
+                    <div className="absolute right-0 top-0 h-48 w-48 rounded-full bg-sky-200/30 blur-3xl" />
+                    <div className="relative grid gap-6 p-6 md:p-8 lg:grid-cols-[1.35fr_0.85fr] lg:items-start">
+                        <div className="space-y-5">
+                            <span className="premium-badge bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                5-layer keyword research workflow
+                            </span>
+                            <div className="space-y-3">
+                                <h1 className="text-4xl md:text-5xl font-extrabold text-slate-900 tracking-tight">
+                                    Keyword <span className="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">Intelligence</span>
+                                </h1>
+                                <p className="max-w-2xl text-base md:text-lg text-slate-600 leading-relaxed">
+                                    Turn one seed term into a usable SEO brief: SERP patterns, intent mix, content gaps, quick wins, and a keyword universe you can actually prioritize.
+                                </p>
+                            </div>
+                            <form onSubmit={handleSearch} className="flex flex-col gap-3 md:flex-row">
+                                <div className="flex-1 relative">
+                                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                                    <input
+                                        type="text"
+                                        value={seed}
+                                        onChange={e => setSeed(e.target.value)}
+                                        placeholder="Enter a topic or keyword (e.g., CRM software)..."
+                                        className="premium-input pl-12 pr-4"
+                                    />
+                                </div>
+                                <div className="flex flex-wrap gap-3">
+                                    <button type="submit" disabled={loading} className="premium-button bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-200 disabled:opacity-60">
+                                        {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ArrowRight className="w-5 h-5" /> Analyze</>}
+                                    </button>
+                                    {data && (
+                                        <>
+                                            <button onClick={handleSave} disabled={saving} type="button" className="premium-button bg-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-200">
+                                                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                                            </button>
+                                            <button onClick={exportKeywordCsv} type="button" className="premium-button border border-slate-200 bg-white text-slate-700 hover:bg-slate-50">
+                                                <Download className="w-4 h-4" /> Export
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+                            </form>
+                            <div className="space-y-3">
+                                <div className="flex flex-wrap gap-2">
+                                    {SAMPLE_SEEDS.map((sample) => (
+                                        <button
+                                            key={sample}
+                                            type="button"
+                                            onClick={() => setSeed(sample)}
+                                            className="premium-badge border border-slate-200 bg-white/80 text-slate-600 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 transition-colors"
+                                        >
+                                            {sample}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="flex flex-wrap gap-2 text-xs text-slate-500">
+                                    <span className="premium-badge bg-slate-100 text-slate-600">SERP DNA</span>
+                                    <span className="premium-badge bg-slate-100 text-slate-600">Intent decomposition</span>
+                                    <span className="premium-badge bg-slate-100 text-slate-600">Quick wins</span>
+                                    <span className="premium-badge bg-slate-100 text-slate-600">CSV export</span>
+                                </div>
+                            </div>
                         </div>
-                        <button type="submit" disabled={loading} className="premium-button bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-200 disabled:opacity-60">
-                            {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ArrowRight className="w-5 h-5" /> Analyze</>}
-                        </button>
-                        {data && (
-                            <>
-                                <button onClick={handleSave} disabled={saving} type="button" className="premium-button bg-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-200">
-                                    {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                                </button>
-                                <button onClick={exportKeywordCsv} type="button" className="premium-button border border-slate-200 bg-white text-slate-700 hover:bg-slate-50">
-                                    <Download className="w-4 h-4" /> Export
-                                </button>
-                            </>
-                        )}
-                    </form>
+
+                        <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+                            <div className="rounded-2xl border border-white/70 bg-white/80 p-4 shadow-sm backdrop-blur-sm">
+                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Primary Intent</p>
+                                <p className="mt-2 text-lg font-bold text-slate-900">
+                                    {data?.intentData?.primaryIntent ? formatLabel(data.intentData.primaryIntent) : 'Map the dominant search intent'}
+                                </p>
+                                <p className="mt-1 text-sm text-slate-500">
+                                    {data?.intentData?.intentInsight || 'Separate what searchers want, what Google rewards, and where your content can win.'}
+                                </p>
+                            </div>
+                            <div className="rounded-2xl border border-white/70 bg-white/80 p-4 shadow-sm backdrop-blur-sm">
+                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Opportunity Signal</p>
+                                <p className="mt-2 text-lg font-bold text-slate-900">
+                                    {highestScoringKeyword ? `${getOpportunityTier(highestScoringKeyword.opportunityScore)} lane` : 'Spot the best attack angle'}
+                                </p>
+                                <p className="mt-1 text-sm text-slate-500">
+                                    {highestScoringKeyword ? `${highestScoringKeyword.term} leads with a score of ${highestScoringKeyword.opportunityScore}.` : 'Rank opportunities by difficulty, volume, and buying stage before you commit.'}
+                                </p>
+                            </div>
+                            <div className="rounded-2xl border border-white/70 bg-white/80 p-4 shadow-sm backdrop-blur-sm">
+                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Research Memory</p>
+                                <p className="mt-2 text-lg font-bold text-slate-900">{history.length} saved runs</p>
+                                <p className="mt-1 text-sm text-slate-500">
+                                    Re-open old research, compare angles, and keep the strongest keyword plays close.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
+                {!data && !loading && (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                        <div className="premium-card p-5">
+                            <div className="w-10 h-10 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mb-4">
+                                <Brain className="w-5 h-5" />
+                            </div>
+                            <h2 className="text-lg font-bold text-slate-900">Read the SERP before writing</h2>
+                            <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                                Surface the formats, trust signals, and gaps already shaping page-one results for the keyword.
+                            </p>
+                        </div>
+                        <div className="premium-card p-5">
+                            <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-4">
+                                <Crosshair className="w-5 h-5" />
+                            </div>
+                            <h2 className="text-lg font-bold text-slate-900">Separate intent from noise</h2>
+                            <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                                Understand whether the query is education-heavy, comparison-heavy, or ready to convert before planning content.
+                            </p>
+                        </div>
+                        <div className="premium-card p-5">
+                            <div className="w-10 h-10 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mb-4">
+                                <Rocket className="w-5 h-5" />
+                            </div>
+                            <h2 className="text-lg font-bold text-slate-900">Leave with an execution plan</h2>
+                            <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                                Move from raw keyword ideas to clusters, quick wins, and a content blueprint you can ship.
+                            </p>
+                        </div>
+                    </div>
+                )}
                 {/* Loading */}
                 <AnimatePresence>
                     {loading && (
@@ -327,7 +468,7 @@ export default function KeywordResearch() {
                                     return (
                                         <div key={step.id} className={`flex items-center gap-4 p-3 rounded-xl transition-all duration-500 ${active ? 'bg-indigo-50 border border-indigo-100' : done ? 'opacity-60' : 'opacity-30'}`}>
                                             <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${done ? 'bg-emerald-100' : active ? 'bg-indigo-100 animate-pulse' : 'bg-slate-100'}`}>
-                                                {done ? <span className="text-emerald-600 font-bold text-sm">✓</span> : <Icon className={`w-5 h-5 ${active ? 'text-indigo-600' : 'text-slate-400'}`} />}
+                                                {done ? <Check className="w-5 h-5 text-emerald-600" /> : <Icon className={`w-5 h-5 ${active ? 'text-indigo-600' : 'text-slate-400'}`} />}
                                             </div>
                                             <div className="flex-1">
                                                 <p className={`font-semibold text-sm ${active ? 'text-indigo-700' : done ? 'text-emerald-700' : 'text-slate-500'}`}>Layer {step.id}: {step.label}</p>
@@ -382,6 +523,89 @@ export default function KeywordResearch() {
                                 <p className="text-xs text-slate-400 mt-1">{data.strategy?.quickWins?.length || 0} quick wins identified</p>
                             </div>
                         </div>
+
+                        <Section icon={Target} title="Strategic Snapshot" badge={highestScoringKeyword ? getOpportunityTier(highestScoringKeyword.opportunityScore) : 'Overview'}>
+                            <div className="space-y-4">
+                                <div className="grid gap-4 lg:grid-cols-[1.4fr_0.9fr]">
+                                    <div className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-sky-50 p-5">
+                                        <div className="flex flex-wrap gap-2">
+                                            <span className="premium-badge bg-indigo-100 text-indigo-700">
+                                                {formatLabel(data.intentData?.primaryIntent || 'Unknown intent')}
+                                            </span>
+                                            <span className="premium-badge bg-emerald-100 text-emerald-700">
+                                                {data.strategy?.contentBlueprint?.confidence || 'Unknown'} confidence
+                                            </span>
+                                            {highestScoringKeyword && (
+                                                <span className="premium-badge bg-amber-100 text-amber-800">
+                                                    Lead term: {highestScoringKeyword.term}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="mt-4">
+                                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-500">Best angle to attack</p>
+                                            <p className="mt-2 text-xl font-bold text-slate-900 leading-tight">{data.strategy?.contentBlueprint?.uniqueAngle}</p>
+                                            <p className="mt-3 text-sm leading-relaxed text-slate-600">{data.intentData?.intentInsight}</p>
+                                        </div>
+                                        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                                            <div className="rounded-xl border border-white/80 bg-white/80 p-4">
+                                                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Biggest Gap</p>
+                                                <p className="mt-2 text-sm font-semibold leading-relaxed text-slate-800">{data.strategy?.contentGap}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-white/80 bg-white/80 p-4">
+                                                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Primary Format</p>
+                                                <p className="mt-2 text-sm font-semibold leading-relaxed text-slate-800">{data.strategy?.contentBlueprint?.primaryFormat}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-white/80 bg-white/80 p-4">
+                                                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Time To Impact</p>
+                                                <p className="mt-2 text-sm font-semibold leading-relaxed text-slate-800">{data.strategy?.contentBlueprint?.timeToImpact}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-4">
+                                        <div className="rounded-2xl border border-rose-100 bg-rose-50/70 p-4">
+                                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-500">Competition Reality</p>
+                                            <p className="mt-2 text-sm font-semibold leading-relaxed text-rose-900">{data.strategy?.difficulty?.reason}</p>
+                                        </div>
+                                        <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-4">
+                                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-500">Alternative Lane</p>
+                                            <p className="mt-2 text-sm font-semibold text-slate-900">{data.strategy?.alternativeStrategy?.angle}</p>
+                                            <p className="mt-2 text-sm leading-relaxed text-slate-600">{data.strategy?.alternativeStrategy?.reason}</p>
+                                            {data.strategy?.alternativeStrategy?.keywords?.length > 0 && (
+                                                <div className="mt-3 flex flex-wrap gap-2">
+                                                    {data.strategy.alternativeStrategy.keywords.map((keyword, index) => (
+                                                        <span key={`${keyword}-${index}`} className="premium-badge bg-white text-violet-700 border border-violet-100">
+                                                            {keyword}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {topOpportunityKeywords.length > 0 && (
+                                    <div className="grid gap-3 md:grid-cols-3">
+                                        {topOpportunityKeywords.map((keyword, index) => (
+                                            <div key={`${keyword.term}-${index}`} className="rounded-2xl border border-slate-200 bg-white p-4">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <span className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Top Play {index + 1}</span>
+                                                    <span className="premium-badge bg-indigo-100 text-indigo-700">
+                                                        {keyword.opportunityScore}
+                                                    </span>
+                                                </div>
+                                                <p className="mt-3 text-base font-bold text-slate-900">{keyword.term}</p>
+                                                <div className="mt-3 flex flex-wrap gap-2">
+                                                    <span className={`premium-badge ${intentColors[keyword.intent?.toLowerCase()] || 'bg-slate-100 text-slate-600'}`}>{keyword.intent}</span>
+                                                    <span className={`premium-badge ${diffColors[keyword.difficulty] || 'bg-slate-100 text-slate-600'}`}>{keyword.difficulty}</span>
+                                                    <span className="premium-badge bg-slate-100 text-slate-600">{keyword.buyerStage}</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </Section>
 
                         {/* SERP DNA */}
                         {data.serpDna && (
@@ -460,6 +684,32 @@ export default function KeywordResearch() {
                         {data.keywordUniverse && (
                             <Section icon={Sparkles} title="Keyword Universe" badge={`${data.keywordUniverse.totalKeywords} keywords`}>
                                 <div className="space-y-4">
+                                    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+                                        <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4">
+                                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Opportunity Leaders</p>
+                                            <p className="mt-2 text-2xl font-bold text-slate-900">{scoreLeaderCount}</p>
+                                            <p className="mt-1 text-xs text-slate-500">
+                                                {highestScoringKeyword ? `${highestScoringKeyword.term} is currently the strongest bet.` : 'No keyword signals yet.'}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-xl border border-emerald-100 bg-emerald-50/80 p-4">
+                                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-600">Easy To Win</p>
+                                            <p className="mt-2 text-2xl font-bold text-emerald-800">{easyKeywordCount}</p>
+                                            <p className="mt-1 text-xs text-emerald-700">Lower-friction terms that can help you build traction faster.</p>
+                                        </div>
+                                        <div className="rounded-xl border border-amber-100 bg-amber-50/80 p-4">
+                                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-600">Question-Led Topics</p>
+                                            <p className="mt-2 text-2xl font-bold text-amber-800">{questionKeywords.length}</p>
+                                            <p className="mt-1 text-xs text-amber-700">Great for FAQ blocks, comparison pages, and mid-funnel trust builders.</p>
+                                        </div>
+                                        <div className="rounded-xl border border-violet-100 bg-violet-50/80 p-4">
+                                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-violet-600">Journey Coverage</p>
+                                            <p className="mt-2 text-2xl font-bold text-violet-800">{buyerStageCount}</p>
+                                            <p className="mt-1 text-xs text-violet-700">
+                                                {dominantIntent ? `${formatLabel(dominantIntent[0])} intent dominates this set.` : 'Buyer stages will appear once keywords load.'}
+                                            </p>
+                                        </div>
+                                    </div>
                                     <div className="flex flex-wrap items-center gap-2">
                                         <Filter className="w-4 h-4 text-slate-400" />
                                         {['all', 'informational', 'commercial', 'transactional', 'comparison'].map(f => (
@@ -473,22 +723,73 @@ export default function KeywordResearch() {
                                         </div>
                                     </div>
                                     <div className="rounded-xl border border-slate-200 overflow-hidden">
-                                        <div className="grid grid-cols-12 gap-2 px-4 py-2.5 bg-slate-50 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-200">
-                                            <div className="col-span-4">Keyword</div><div className="col-span-2">Intent</div><div className="col-span-1">Vol</div><div className="col-span-2">Difficulty</div><div className="col-span-1">Score</div><div className="col-span-2">Stage</div>
+                                        <div className="hidden md:block">
+                                            <div className="grid grid-cols-12 gap-2 px-4 py-2.5 bg-slate-50 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-200">
+                                                <div className="col-span-4">Keyword</div><div className="col-span-2">Intent</div><div className="col-span-1">Vol</div><div className="col-span-2">Difficulty</div><div className="col-span-1">Score</div><div className="col-span-2">Stage</div>
+                                            </div>
+                                            <div className="max-h-[400px] overflow-y-auto divide-y divide-slate-100">
+                                                {sortedKeywords.length > 0 ? sortedKeywords.map((k, i) => (
+                                                    <div key={i} className="grid grid-cols-12 gap-2 px-4 py-3 items-center hover:bg-indigo-50/30 transition-colors text-sm">
+                                                        <div className="col-span-4">
+                                                            <p className="font-medium text-slate-800 font-mono text-xs">{k.term}</p>
+                                                            <p className="mt-1 text-[11px] text-slate-400">{formatLabel(k.source || 'Unknown source')}</p>
+                                                        </div>
+                                                        <div className="col-span-2"><span className={`premium-badge text-[10px] ${intentColors[k.intent?.toLowerCase()] || 'bg-slate-100 text-slate-600'}`}>{k.intent}</span></div>
+                                                        <div className={`col-span-1 font-semibold text-xs ${volColors[k.volume] || ''}`}>{k.volume}</div>
+                                                        <div className="col-span-2"><span className={`premium-badge text-[10px] ${diffColors[k.difficulty] || ''}`}>{k.difficulty}</span></div>
+                                                        <div className="col-span-1"><span className="font-bold text-indigo-600">{k.opportunityScore}</span></div>
+                                                        <div className="col-span-2 text-xs text-slate-500">{k.buyerStage}</div>
+                                                    </div>
+                                                )) : (
+                                                    <div className="px-4 py-10 text-center text-sm text-slate-500">
+                                                        No keywords match the current filter.
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
-                                        <div className="max-h-[400px] overflow-y-auto divide-y divide-slate-100">
-                                            {sortedKeywords.map((k, i) => (
-                                                <div key={i} className="grid grid-cols-12 gap-2 px-4 py-3 items-center hover:bg-indigo-50/30 transition-colors text-sm">
-                                                    <div className="col-span-4 font-medium text-slate-800 font-mono text-xs">{k.term}</div>
-                                                    <div className="col-span-2"><span className={`premium-badge text-[10px] ${intentColors[k.intent?.toLowerCase()] || 'bg-slate-100 text-slate-600'}`}>{k.intent}</span></div>
-                                                    <div className={`col-span-1 font-semibold text-xs ${volColors[k.volume] || ''}`}>{k.volume}</div>
-                                                    <div className="col-span-2"><span className={`premium-badge text-[10px] ${diffColors[k.difficulty] || ''}`}>{k.difficulty}</span></div>
-                                                    <div className="col-span-1"><span className="font-bold text-indigo-600">{k.opportunityScore}</span></div>
-                                                    <div className="col-span-2 text-xs text-slate-500">{k.buyerStage}</div>
+                                        <div className="divide-y divide-slate-100 md:hidden">
+                                            {sortedKeywords.length > 0 ? sortedKeywords.map((keyword, index) => (
+                                                <div key={`${keyword.term}-${index}`} className="p-4 space-y-3">
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div>
+                                                            <p className="font-mono text-xs font-semibold text-slate-800">{keyword.term}</p>
+                                                            <p className="mt-1 text-[11px] text-slate-400">{formatLabel(keyword.source || 'Unknown source')}</p>
+                                                        </div>
+                                                        <span className="premium-badge bg-indigo-100 text-indigo-700">{keyword.opportunityScore}</span>
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <span className={`premium-badge ${intentColors[keyword.intent?.toLowerCase()] || 'bg-slate-100 text-slate-600'}`}>{keyword.intent}</span>
+                                                        <span className={`premium-badge ${diffColors[keyword.difficulty] || 'bg-slate-100 text-slate-600'}`}>{keyword.difficulty}</span>
+                                                        <span className="premium-badge bg-slate-100 text-slate-600">{keyword.volume}</span>
+                                                    </div>
+                                                    <div className="text-xs text-slate-500">Buyer stage: {keyword.buyerStage}</div>
                                                 </div>
-                                            ))}
+                                            )) : (
+                                                <div className="px-4 py-10 text-center text-sm text-slate-500">
+                                                    No keywords match the current filter.
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
+                                    {questionKeywords.length > 0 && (
+                                        <div>
+                                            <div className="flex items-center justify-between gap-3 mb-2">
+                                                <p className="text-xs font-semibold text-slate-500 uppercase">Question Keywords</p>
+                                                <p className="text-xs text-slate-400">Useful for FAQ blocks, section headers, and comparison pages.</p>
+                                            </div>
+                                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                                                {questionKeywords.slice(0, 6).map((keyword, index) => (
+                                                    <div key={`${keyword.question}-${index}`} className="rounded-xl border border-amber-100 bg-amber-50/70 p-3">
+                                                        <p className="text-sm font-semibold text-amber-900">{keyword.question}</p>
+                                                        <div className="mt-2 flex items-center gap-2 text-xs">
+                                                            <span className={`premium-badge ${intentColors[keyword.intent?.toLowerCase()] || 'bg-white text-amber-700'}`}>{keyword.intent}</span>
+                                                            <span className={`font-semibold ${volColors[keyword.volume] || 'text-amber-700'}`}>{keyword.volume}</span>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                     {/* LSI Terms */}
                                     {data.keywordUniverse.lsiTerms?.length > 0 && (
                                         <div><p className="text-xs font-semibold text-slate-500 uppercase mb-2">Semantic / LSI Terms</p>
@@ -510,7 +811,6 @@ export default function KeywordResearch() {
                                 </div>
                             </Section>
                         )}
-
                         {/* Strategic Clusters */}
                         {data.strategy?.clusters && (
                             <Section icon={Layers} title="Strategic Clusters" badge={`${data.strategy.clusters.length} clusters`}>
@@ -523,7 +823,7 @@ export default function KeywordResearch() {
                                             </div>
                                             <div className="flex items-center gap-2 mb-3">
                                                 <span className="text-xs text-slate-500">{cluster.intent}</span>
-                                                <span className="text-xs text-slate-300">•</span>
+                                                <span className="text-xs text-slate-300">&middot;</span>
                                                 <span className="text-xs text-slate-500">{cluster.contentFormat}</span>
                                             </div>
                                             <div className="flex flex-wrap gap-1.5">
@@ -638,6 +938,48 @@ export default function KeywordResearch() {
                             </Section>
                         )}
 
+                        {(relatedSearches.length > 0 || serpFeatures.length > 0 || data.serpRaw?.knowledgeGraph) && (
+                            <Section icon={Search} title="Demand Signals" badge="SERP pulse" defaultOpen={false}>
+                                <div className="grid gap-4 md:grid-cols-2">
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Related Searches</p>
+                                        <div className="mt-3 flex flex-wrap gap-2">
+                                            {relatedSearches.length > 0 ? relatedSearches.slice(0, 10).map((term, index) => (
+                                                <span key={`${term}-${index}`} className="premium-badge bg-white text-slate-700 border border-slate-200">
+                                                    {term}
+                                                </span>
+                                            )) : (
+                                                <p className="text-sm text-slate-500">No related searches were returned for this query.</p>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">SERP Features</p>
+                                            <div className="mt-3 flex flex-wrap gap-2">
+                                                {serpFeatures.length > 0 ? serpFeatures.map((feature, index) => (
+                                                    <span key={`${feature}-${index}`} className="premium-badge bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                                        {formatLabel(feature)}
+                                                    </span>
+                                                )) : (
+                                                    <p className="text-sm text-slate-500">This SERP is relatively plain compared to richer result pages.</p>
+                                                )}
+                                            </div>
+                                            <p className="mt-3 text-xs text-slate-400">Approx. results: {data.serpRaw?.totalResults?.toLocaleString?.() || 'N/A'}</p>
+                                        </div>
+                                        {data.serpRaw?.knowledgeGraph && (
+                                            <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-600">Knowledge Graph</p>
+                                                <p className="mt-2 text-sm font-semibold text-emerald-900">{data.serpRaw.knowledgeGraph.title}</p>
+                                                <p className="mt-1 text-xs uppercase tracking-[0.14em] text-emerald-500">{data.serpRaw.knowledgeGraph.type}</p>
+                                                <p className="mt-2 text-sm leading-relaxed text-emerald-800">{data.serpRaw.knowledgeGraph.description}</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </Section>
+                        )}
+
                         {/* SERP Results */}
                         <Section icon={BarChart3} title="Top Search Results" badge={`${data.serp?.length || 0}`} defaultOpen={false}>
                             <div className="space-y-3">
@@ -668,7 +1010,7 @@ export default function KeywordResearch() {
                 {/* Metadata */}
                 {data?.metadata && (
                     <div className="text-center text-xs text-slate-400 pb-8">
-                        Analyzed with {data.metadata.model} • {data.metadata.layers} reasoning layers • {new Date(data.metadata.timestamp).toLocaleString()}
+                        Analyzed with {data.metadata.model} &middot; {data.metadata.layers} reasoning layers &middot; {new Date(data.metadata.timestamp).toLocaleString()}
                     </div>
                 )}
             </div>
@@ -714,6 +1056,7 @@ export default function KeywordResearch() {
         </div>
     );
 }
+
 
 
 

@@ -25,6 +25,16 @@ test('buildHistoryQuery lets admins see their own records and legacy unowned ent
     );
 });
 
+test('buildHistoryQuery lets admins scope project history across all owners', () => {
+    assert.deepEqual(
+        __internal.buildHistoryQuery(
+            { role: 'admin', email: 'admin@example.com' },
+            { projectId: 'laserlift' }
+        ),
+        { projectId: 'laserlift' }
+    );
+});
+
 test('normalizeProjectId trims empty values to null', () => {
     assert.equal(__internal.normalizeProjectId('  '), null);
     assert.equal(__internal.normalizeProjectId(' fleetflow '), 'fleetflow');

@@ -23,6 +23,22 @@ test('dashboard history query limits viewers to their assigned projects', () => 
     );
 });
 
+test('dashboard history query keeps legacy laserlift snapshots available for admins', () => {
+    assert.deepEqual(
+        history.__internal.buildHistoryQuery(
+            { role: 'admin' },
+            { projectId: 'laserlift' }
+        ),
+        {
+            $or: [
+                { projectId: 'laserlift' },
+                { projectId: { $exists: false } },
+                { projectId: null },
+            ],
+        }
+    );
+});
+
 test('audit history query respects explicit viewer project scope', () => {
     assert.deepEqual(
         auditHistory.__internal.buildAuditHistoryQuery(
