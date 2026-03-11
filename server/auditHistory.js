@@ -2,13 +2,21 @@
 
 const addAudit = async (results, projectId) => {
     try {
-        await AuditHistory.create({
+        const doc = await AuditHistory.create({
             projectId,
             results,
             timestamp: new Date(),
         });
+
+        return {
+            id: doc._id.toString(),
+            timestamp: doc.timestamp,
+            projectId: doc.projectId,
+            results: doc.results,
+        };
     } catch (error) {
         console.error('Failed to save audit history:', error);
+        return null;
     }
 };
 

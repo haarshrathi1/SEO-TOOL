@@ -1,4 +1,4 @@
-export interface AnalysisData {
+﻿export interface AnalysisData {
     week: string;
     project: string;
     domain: string;
@@ -58,6 +58,13 @@ export interface Project {
     name: string;
     domain: string;
     url: string;
+    ga4PropertyId: string;
+    spreadsheetId: string;
+    sheetGid: number;
+    auditMaxPages: number;
+    isActive: boolean;
+    createdAt?: string;
+    updatedAt?: string;
 }
 
 export interface AuthUser {
@@ -66,11 +73,13 @@ export interface AuthUser {
     name?: string;
     picture?: string;
     access?: string[];
+    projectIds?: string[];
 }
 
 export interface ViewerRecord {
     email: string;
     access: string[];
+    projectIds: string[];
     createdAt: string;
 }
 
@@ -83,7 +92,6 @@ export interface AuthSessionResponse {
 }
 
 export interface GoogleLoginResponse {
-    token: string;
     user: AuthUser;
 }
 
@@ -140,7 +148,29 @@ export interface AuditResult {
     brokenLinks?: string[];
 }
 
-// ─── V1 Legacy Types ──────────────────────────────────────────────────────
+export interface AuditJobProgress {
+    stage: string;
+    completed: number;
+    total: number;
+    percent: number;
+    message: string;
+    currentUrl?: string;
+}
+
+export interface AuditJob {
+    id: string;
+    projectId: string;
+    ownerEmail: string;
+    status: 'queued' | 'running' | 'completed' | 'failed';
+    progress: AuditJobProgress;
+    error: string;
+    auditHistoryId?: string | null;
+    createdAt: string;
+    updatedAt: string;
+    startedAt?: string | null;
+    completedAt?: string | null;
+    result?: AuditResult[] | null;
+}
 
 export interface SerpSummary {
     dominantPageType: string;
@@ -164,6 +194,7 @@ export interface SerpSummary {
 
 export interface KeywordData {
     seed: string;
+    projectId?: string | null;
     serp: { title: string; url: string; snippet: string }[];
     serpSummary?: SerpSummary;
     analysis: {
@@ -188,9 +219,8 @@ export interface KeywordData {
 export interface SavedResearch extends KeywordData {
     id: string;
     timestamp: string;
+    ownerEmail?: string;
 }
-
-// ─── V2 Advanced Types ────────────────────────────────────────────────────
 
 export interface SerpDnaProfile {
     serpPersonality: string;
@@ -333,6 +363,7 @@ export interface SerpRawData {
 
 export interface KeywordDataV2 {
     seed: string;
+    projectId?: string | null;
     serp: { title: string; url: string; snippet: string; position?: number; displayed_link?: string; sitelinks?: boolean }[];
     serpRaw: SerpRawData;
     serpSummary: SerpSummary;
@@ -340,7 +371,7 @@ export interface KeywordDataV2 {
     intentData: IntentDecomposition;
     keywordUniverse: KeywordUniverse;
     strategy: StrategicSynthesis;
-    analysis: KeywordData['analysis']; // backward compat
+    analysis: KeywordData['analysis'];
     metadata: {
         model: string;
         layers: number;
@@ -351,6 +382,7 @@ export interface KeywordDataV2 {
 export interface SavedResearchV2 extends KeywordDataV2 {
     id: string;
     timestamp: string;
+    ownerEmail?: string;
 }
 
 export type KeywordHistoryItem = SavedResearch | SavedResearchV2;
@@ -363,4 +395,12 @@ export interface KeywordScanResult {
         count: number;
         density: string;
     }[];
+}
+
+export interface MetricDelta {
+    label: string;
+    current: string | number;
+    previous: string | number;
+    delta: number;
+    direction: 'up' | 'down' | 'flat';
 }

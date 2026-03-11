@@ -1,7 +1,7 @@
-﻿import { useState, useEffect } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import {
     Activity, AlertCircle,
-    Globe, Layout, Zap, History
+    Download, Globe, Layout, Zap, History
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
@@ -13,6 +13,9 @@ import { getUrlPathLabel } from './url';
 import HealthGauge from './components/dashboard/HealthGauge';
 import CrawlStatus from './components/dashboard/CrawlStatus';
 import PerformanceSummary from './components/dashboard/PerformanceSummary';
+import { downloadCsv } from './csv';
+import { useRouter } from './router';
+import { useToast } from './toast';
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -27,7 +30,35 @@ function formatDashboardError(e: unknown) {
 
     return message;
 }
-// Interface for Audit History (matching Audit.tsx)
+
+function toNumber(value: string | number | undefined) {
+    if (typeof value === 'number') return value;
+    return Number.parseFloat(String(value || '0').replace(/[^0-9.-]/g, '')) || 0;
+}
+
+function buildComparison(current: AnalysisData, previous: AnalysisData) {
+    return [
+        {
+            label: 'Clicks',
+            current: current.metrics.clicks,
+            previous: previous.metrics.clicks,
+            delta: current.metrics.clicks - previous.metrics.clicks,
+        },
+        {
+            label: 'Impressions',
+            current: current.metrics.impressions,
+            previous: previous.metrics.impressions,
+            delta: current.metrics.impressions - previous.metrics.impressions,
+        },
+        {
+            label: 'CTR',
+            current: current.metrics.ctr,
+            previous: previous.metrics.ctr,
+            delta: toNumber(current.metrics.ctr) - toNumber(previous.metrics.ctr),
+        },
+    ];
+}
+
 interface AuditHistoryItem {
     id: string;
     timestamp: string;
@@ -36,6 +67,8 @@ interface AuditHistoryItem {
 }
 
 export default function Dashboard() {
+    const { navigate } = useRouter();
+    const { push } = useToast();
     const [projects, setProjects] = useState<Project[]>([]);
     const [selectedProjectId, setSelectedProjectId] = useState<string>('');
 
@@ -43,12 +76,8 @@ export default function Dashboard() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [activeTab, setActiveTab] = useState<'dashboard' | 'audit'>('dashboard');
-
-    // History State
     const [history, setHistory] = useState<HistoryItem[]>([]);
     const [selectedHistoryId, setSelectedHistoryId] = useState<string>('live');
-
-    // Audit State (Merged)
     const [auditHistory, setAuditHistory] = useState<AuditHistoryItem[]>([]);
 
     // Fetch Projects & History on Mount
@@ -79,8 +108,8 @@ export default function Dashboard() {
 
     const fetchHistory = async () => {
         try {
-            const data = await api.getHistory();
-            setHistory(data);
+            const nextHistory = await api.getHistory();
+            setHistory(nextHistory);
         } catch (e) {
             console.error('Failed to fetch history', e);
         }
@@ -93,8 +122,8 @@ export default function Dashboard() {
         try {
             const json = await api.analyzeSite(selectedProjectId);
             setData(json);
-            setSelectedHistoryId('live'); // Switch to live view
-            fetchHistory(); // Refresh history dropdown
+            setSelectedHistoryId('live');
+            void fetchHistory();
         } catch (e) {
             setError(formatDashboardError(e));
         } finally {
@@ -114,19 +143,53 @@ export default function Dashboard() {
         }
     };
 
-    // Filter history for current project
-    const projectHistory = history.filter(h => h.projectId === selectedProjectId || (!h.projectId && selectedProjectId === 'laserlift'));
-    const selectedHistory = projectHistory.find(h => h.id === selectedHistoryId) || null;
+    const projectHistory = useMemo(
+        () => history.filter((item) => item.projectId === selectedProjectId || (!item.projectId && selectedProjectId === 'laserlift')),
+        [history, selectedProjectId],
+    );
+    const sortedProjectHistory = useMemo(
+        () => [...projectHistory].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
+        [projectHistory],
+    );
+    const selectedHistory = sortedProjectHistory.find((item) => item.id === selectedHistoryId) || null;
+    const previousSnapshot = selectedHistoryId === 'live'
+        ? sortedProjectHistory[0] || null
+        : sortedProjectHistory.find((item) => item.id !== selectedHistoryId) || null;
 
-    // Get Latest Audit for this project
-    const projectAuditHistory = auditHistory.filter(h => h.projectId === selectedProjectId);
-    const latestAudit = projectAuditHistory.length > 0
-        ? projectAuditHistory.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
-        : null;
+    const projectAuditHistory = useMemo(
+        () => auditHistory.filter((item) => item.projectId === selectedProjectId),
+        [auditHistory, selectedProjectId],
+    );
+    const latestAudit = useMemo(
+        () => [...projectAuditHistory].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] || null,
+        [projectAuditHistory],
+    );
 
-    // Format timestamp for display
-    const formatDate = (iso: string) => {
-        return new Date(iso).toLocaleString();
+    const comparisonMetrics = useMemo(
+        () => (data && previousSnapshot ? buildComparison(data, previousSnapshot.data) : []),
+        [data, previousSnapshot],
+    );
+
+    const formatDate = (iso: string) => new Date(iso).toLocaleString();
+
+    const handleRequestIndexing = async (url: string) => {
+        try {
+            await api.requestIndexing(url);
+            push({ tone: 'success', title: 'Indexing requested', description: url });
+        } catch (issue) {
+            push({ tone: 'error', title: 'Indexing request failed', description: issue instanceof Error ? issue.message : 'Unknown error' });
+        }
+    };
+
+    const exportSummary = () => {
+        if (!data) return;
+        const rows = Object.entries(data.report || {}).map(([key, value]) => [key, String(value ?? '')]);
+        downloadCsv(
+            `dashboard-${selectedProjectId}-${new Date().toISOString().slice(0, 10)}.csv`,
+            ['Metric', 'Value'],
+            rows,
+        );
+        push({ tone: 'success', title: 'Dashboard exported', description: 'CSV download started.' });
     };
 
     return (
@@ -168,7 +231,7 @@ export default function Dashboard() {
                                     key={tab.id}
                                     onClick={() => {
                                         if (tab.id === 'keywords') {
-                                            window.location.hash = '#/keywords';
+                                            navigate('/keywords');
                                             return;
                                         }
                                         setActiveTab(tab.id as 'dashboard' | 'audit');
@@ -213,7 +276,7 @@ export default function Dashboard() {
 
             {activeTab === 'audit' && (
                 <main className="max-w-7xl mx-auto mt-8 px-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                    <Audit projectId={selectedProjectId} />
+                    <Audit key={selectedProjectId} projectId={selectedProjectId} />
                 </main>
             )}
 
@@ -274,6 +337,15 @@ export default function Dashboard() {
                                         </div>
                                     </div>
                                 </div>
+                                {data && (
+                                    <button
+                                        onClick={exportSummary}
+                                        className="h-12 border-2 border-black bg-white px-5 text-sm font-black uppercase tracking-wider text-black shadow-[4px_4px_0px_0px_#000] transition-all hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none flex items-center gap-2 whitespace-nowrap"
+                                    >
+                                        <Download className="w-4 h-4" />
+                                        Export CSV
+                                    </button>
+                                )}
                                 <button
                                     onClick={runAnalysis}
                                     disabled={loading}
@@ -316,6 +388,20 @@ export default function Dashboard() {
                                 </div>
                             </div>
                         </motion.div>
+                    )}
+
+                    {comparisonMetrics.length > 0 && (
+                        <div className="grid gap-4 md:grid-cols-3">
+                            {comparisonMetrics.map((item) => (
+                                <div key={item.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">{item.label}</p>
+                                    <p className="mt-2 text-3xl font-black text-slate-900">{item.current}</p>
+                                    <p className={`mt-2 text-sm font-semibold ${item.delta === 0 ? 'text-slate-400' : item.delta > 0 ? 'text-emerald-600' : 'text-rose-600'}`}> 
+                                        {item.delta === 0 ? 'No change vs previous' : `${item.delta > 0 ? '+' : ''}${item.delta.toFixed(2).replace(/\.00$/, '')} vs previous`}
+                                    </p>
+                                </div>
+                            ))}
+                        </div>
                     )}
 
 
@@ -399,15 +485,9 @@ export default function Dashboard() {
                                     {/* Indexing Errors */}
                                     <div className="space-y-4">
                                         <div
-                                            onClick={() => {
-                                                if (data.issues.failedUrls?.length) {
-                                                    const msg = data.issues.failedUrls.map(f => `${f.url}\n-> ${f.reason}`).join('\n\n');
-                                                    alert(`Detailed GSC Errors:\n\n${msg}`);
-                                                }
-                                            }}
                                             className={cn(
                                                 "flex items-center justify-between p-3 bg-red-50 border-2 border-black shadow-[4px_4px_0px_0px_#000] transition-transform",
-                                                data.issues.failedUrls?.length ? "cursor-pointer hover:translate-x-1 hover:bg-red-100" : ""
+                                                data.issues.failedUrls?.length ? "hover:translate-x-1 hover:bg-red-100" : ""
                                             )}
                                         >
                                             <div className="flex flex-col">
@@ -477,7 +557,7 @@ export default function Dashboard() {
                                                     </span>
                                                 </div>
                                                 <button
-                                                    onClick={() => api.requestIndexing(page.url).then(() => alert('Requested!')).catch((e: Error) => alert(e.message))}
+                                                    onClick={() => void handleRequestIndexing(page.url)}
                                                     className="opacity-0 group-hover:opacity-100 transition-all p-2 bg-black text-white hover:bg-gray-800" title="Request Indexing"
                                                 >
                                                     <Zap className="w-4 h-4" />
@@ -499,7 +579,7 @@ export default function Dashboard() {
                                                         <span className="text-[10px] text-black font-bold uppercase bg-yellow-200 px-1.5 py-0.5 border border-black mt-2 inline-block shadow-[2px_2px_0px_0px_#000]">{metrics}</span>
                                                     </div>
                                                     <button
-                                                        onClick={() => api.requestIndexing(url).then(() => alert('Requested!')).catch((e: Error) => alert(e.message))}
+                                                        onClick={() => void handleRequestIndexing(url)}
                                                         className="opacity-0 group-hover:opacity-100 transition-all p-2 bg-black text-white hover:bg-gray-800" title="Request Indexing"
                                                     >
                                                         <Zap className="w-4 h-4" />
@@ -558,6 +638,12 @@ export default function Dashboard() {
         </div>
     );
 }
+
+
+
+
+
+
 
 
 

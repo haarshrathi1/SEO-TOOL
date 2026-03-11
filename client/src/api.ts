@@ -1,6 +1,7 @@
-import type {
+﻿import type {
     AIAnalysisResult,
     AnalysisData,
+    AuditJob,
     AuditResult,
     AuthConfigResponse,
     AuthSessionResponse,
@@ -21,35 +22,14 @@ const API_BASE_URL = configuredApiBaseUrl || (import.meta.env.PROD
 
 export const getApiUrl = (endpoint: string) => `${API_BASE_URL}${endpoint}`;
 
-function getToken(): string | null {
-    return localStorage.getItem('seo_token');
-}
-
-export function setToken(token: string) {
-    localStorage.setItem('seo_token', token);
-}
-
-export function clearToken() {
-    localStorage.removeItem('seo_token');
-}
-
-function authHeaders(): Record<string, string> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    const token = getToken();
-    if (token) {
-        headers.Authorization = `Bearer ${token}`;
-    }
-    return headers;
-}
-
 async function handleResponse<T>(res: Response): Promise<T> {
     if (res.status === 401) {
-        clearToken();
         throw new Error('Unauthorized');
     }
 
     if (res.status === 403) {
-        throw new Error('Access Denied');
+        const json = await res.json().catch(() => ({} as Record<string, string>));
+        throw new Error(json.error || 'Access Denied');
     }
 
     if (!res.ok) {
@@ -60,144 +40,131 @@ async function handleResponse<T>(res: Response): Promise<T> {
     return res.json() as Promise<T>;
 }
 
+async function request<T>(endpoint: string, init: RequestInit = {}): Promise<T> {
+    const headers = new Headers(init.headers);
+    if (init.body && !headers.has('Content-Type')) {
+        headers.set('Content-Type', 'application/json');
+    }
+
+    const res = await fetch(getApiUrl(endpoint), {
+        ...init,
+        headers,
+        credentials: 'include',
+    });
+
+    return handleResponse<T>(res);
+}
+
+function createQuery(params: Record<string, string | boolean | number | null | undefined>) {
+    const search = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+        if (value === undefined || value === null || value === '') {
+            return;
+        }
+        search.set(key, String(value));
+    });
+    const query = search.toString();
+    return query ? `?${query}` : '';
+}
+
 export const api = {
-    googleLogin: (credential: string) =>
-        fetch(getApiUrl('/api/auth/google-login'), {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ credential }),
-        }).then((res) => handleResponse<GoogleLoginResponse>(res)),
+    googleLogin: (credential: string) => request<GoogleLoginResponse>('/api/auth/google-login', {
+        method: 'POST',
+        body: JSON.stringify({ credential }),
+    }),
 
-    getAuthConfig: () =>
-        fetch(getApiUrl('/api/auth/config'), { credentials: 'include' }).then((res) => handleResponse<AuthConfigResponse>(res)),
+    getAuthConfig: () => request<AuthConfigResponse>('/api/auth/config'),
 
-    authMe: () =>
-        fetch(getApiUrl('/api/auth/me'), {
-            headers: authHeaders(),
-            credentials: 'include',
-        }).then((res) => handleResponse<AuthSessionResponse>(res)),
+    authMe: () => request<AuthSessionResponse>('/api/auth/me'),
 
-    logout: () =>
-        fetch(getApiUrl('/api/auth/logout'), {
-            method: 'POST',
-            headers: authHeaders(),
-            credentials: 'include',
-        }).then((res) => handleResponse<{ message: string }>(res)),
+    logout: () => request<{ message: string }>('/api/auth/logout', { method: 'POST' }),
 
-    addViewer: (email: string, access: string[] = ['keywords']) =>
-        fetch(getApiUrl('/api/auth/viewers'), {
-            method: 'POST',
-            headers: authHeaders(),
-            credentials: 'include',
-            body: JSON.stringify({ email, access }),
-        }).then((res) => handleResponse<{ message: string; viewer: ViewerRecord }>(res)),
+    addViewer: (email: string, access: string[] = ['keywords'], projectIds: string[] = []) => request<{ message: string; viewer: ViewerRecord }>('/api/auth/viewers', {
+        method: 'POST',
+        body: JSON.stringify({ email, access, projectIds }),
+    }),
 
-    getViewers: () =>
-        fetch(getApiUrl('/api/auth/viewers'), {
-            headers: authHeaders(),
-            credentials: 'include',
-        }).then((res) => handleResponse<ViewerRecord[]>(res)),
+    updateViewer: (email: string, access: string[], projectIds: string[]) => request<{ message: string; viewer: ViewerRecord }>(`/api/auth/viewers/${encodeURIComponent(email)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ access, projectIds }),
+    }),
 
-    removeViewer: (email: string) =>
-        fetch(getApiUrl(`/api/auth/viewers/${encodeURIComponent(email)}`), {
-            method: 'DELETE',
-            headers: authHeaders(),
-            credentials: 'include',
-        }).then((res) => handleResponse<{ message: string }>(res)),
+    getViewers: () => request<ViewerRecord[]>('/api/auth/viewers'),
 
-    checkHealth: () =>
-        fetch(getApiUrl('/health'), { credentials: 'include' }).then((res) => handleResponse<{ status: string; authenticated: boolean }>(res)),
+    removeViewer: (email: string) => request<{ message: string }>(`/api/auth/viewers/${encodeURIComponent(email)}`, {
+        method: 'DELETE',
+    }),
+
+    checkHealth: () => request<{ status: string; authenticated: boolean }>('/health'),
 
     loginGoogle: () => {
         window.location.href = getApiUrl('/auth/google/login');
     },
 
-    getProjects: () =>
-        fetch(getApiUrl('/api/projects'), {
-            headers: authHeaders(),
-            credentials: 'include',
-        }).then((res) => handleResponse<Project[]>(res)),
+    getProjects: (includeInactive = false) => request<Project[]>(`/api/projects${createQuery({ includeInactive: includeInactive ? 'true' : undefined })}`),
 
-    analyzeSite: (projectId: string) =>
-        fetch(getApiUrl(`/api/analyze?projectId=${projectId}`), {
-            headers: authHeaders(),
-            credentials: 'include',
-        }).then((res) => handleResponse<AnalysisData>(res)),
+    createProject: (project: Partial<Project>) => request<Project>('/api/projects', {
+        method: 'POST',
+        body: JSON.stringify(project),
+    }),
 
-    getHistory: () =>
-        fetch(getApiUrl('/api/history'), {
-            headers: authHeaders(),
-            credentials: 'include',
-        }).then((res) => handleResponse<HistoryItem[]>(res)),
+    updateProject: (projectId: string, project: Partial<Project>) => request<Project>(`/api/projects/${encodeURIComponent(projectId)}`, {
+        method: 'PUT',
+        body: JSON.stringify(project),
+    }),
 
-    getAuditHistory: () =>
-        fetch(getApiUrl('/api/audit/history'), {
-            headers: authHeaders(),
-            credentials: 'include',
-        }).then((res) => handleResponse<{ id: string; timestamp: string; projectId: string; results: AuditResult[] }[]>(res)),
+    archiveProject: (projectId: string) => request<Project>(`/api/projects/${encodeURIComponent(projectId)}`, {
+        method: 'DELETE',
+    }),
 
-    runAudit: (projectId: string) =>
-        fetch(getApiUrl('/api/audit'), {
-            method: 'POST',
-            headers: authHeaders(),
-            credentials: 'include',
-            body: JSON.stringify({ projectId }),
-        }).then((res) => handleResponse<AuditResult[]>(res)),
+    analyzeSite: (projectId: string) => request<AnalysisData>(`/api/analyze${createQuery({ projectId })}`),
 
-    requestIndexing: (url: string) =>
-        fetch(getApiUrl('/api/indexing/publish'), {
-            method: 'POST',
-            headers: authHeaders(),
-            credentials: 'include',
-            body: JSON.stringify({ url }),
-        }).then((res) => handleResponse<AIAnalysisResult>(res)),
+    getHistory: () => request<HistoryItem[]>('/api/history'),
 
-    researchKeywords: (seed: string) =>
-        fetch(getApiUrl('/api/keywords/research'), {
-            method: 'POST',
-            headers: authHeaders(),
-            credentials: 'include',
-            body: JSON.stringify({ seed }),
-        }).then((res) => handleResponse<KeywordData>(res)),
+    getAuditHistory: () => request<{ id: string; timestamp: string; projectId: string; results: AuditResult[] }[]>('/api/audit/history'),
 
-    researchKeywordsV2: (seed: string) =>
-        fetch(getApiUrl('/api/keywords/research-v2'), {
-            method: 'POST',
-            headers: authHeaders(),
-            credentials: 'include',
-            body: JSON.stringify({ seed }),
-        }).then((res) => handleResponse<KeywordDataV2>(res)),
+    createAuditJob: (projectId: string) => request<AuditJob>('/api/audit/jobs', {
+        method: 'POST',
+        body: JSON.stringify({ projectId }),
+    }),
 
-    getKeywordHistory: () =>
-        fetch(getApiUrl('/api/keywords/history'), {
-            headers: authHeaders(),
-            credentials: 'include',
-        }).then((res) => handleResponse<KeywordHistoryItem[]>(res)),
+    getAuditJobs: (projectId?: string) => request<AuditJob[]>(`/api/audit/jobs${createQuery({ projectId })}`),
 
-    saveKeywordResearch: (data: KeywordData | KeywordDataV2) =>
-        fetch(getApiUrl('/api/keywords/save'), {
-            method: 'POST',
-            headers: authHeaders(),
-            credentials: 'include',
-            body: JSON.stringify(data),
-        }).then((res) => handleResponse<KeywordHistoryItem>(res)),
+    getAuditJob: (jobId: string) => request<AuditJob>(`/api/audit/jobs/${encodeURIComponent(jobId)}`),
 
-    analyzeContent: (url: string, content?: string) =>
-        fetch(getApiUrl('/api/ai/analyze'), {
-            method: 'POST',
-            headers: authHeaders(),
-            credentials: 'include',
-            body: JSON.stringify({ url, content }),
-        }).then((res) => handleResponse<Record<string, unknown>>(res)),
+    getAuditJobResult: (jobId: string) => request<AuditJob>(`/api/audit/jobs/${encodeURIComponent(jobId)}/result`),
 
-    analyzePageKeywords: (url: string) =>
-        fetch(getApiUrl('/api/keywords/analyze-content'), {
-            method: 'POST',
-            headers: authHeaders(),
-            credentials: 'include',
-            body: JSON.stringify({ url }),
-        }).then((res) => handleResponse<KeywordScanResult>(res)),
+    requestIndexing: (url: string) => request<AIAnalysisResult>('/api/indexing/publish', {
+        method: 'POST',
+        body: JSON.stringify({ url }),
+    }),
+
+    researchKeywords: (seed: string) => request<KeywordData>('/api/keywords/research', {
+        method: 'POST',
+        body: JSON.stringify({ seed }),
+    }),
+
+    researchKeywordsV2: (seed: string) => request<KeywordDataV2>('/api/keywords/research-v2', {
+        method: 'POST',
+        body: JSON.stringify({ seed }),
+    }),
+
+    getKeywordHistory: (projectId?: string | null) => request<KeywordHistoryItem[]>(`/api/keywords/history${createQuery({ projectId: projectId || undefined })}`),
+
+    saveKeywordResearch: (data: KeywordData | KeywordDataV2, projectId?: string | null) => request<KeywordHistoryItem>('/api/keywords/save', {
+        method: 'POST',
+        body: JSON.stringify({ ...data, projectId: projectId ?? data.projectId ?? null }),
+    }),
+
+    analyzeContent: (url: string, content?: string) => request<Record<string, unknown>>('/api/ai/analyze', {
+        method: 'POST',
+        body: JSON.stringify({ url, content }),
+    }),
+
+    analyzePageKeywords: (url: string) => request<KeywordScanResult>('/api/keywords/analyze-content', {
+        method: 'POST',
+        body: JSON.stringify({ url }),
+    }),
 };
 
 export const requestIndexing = api.requestIndexing;

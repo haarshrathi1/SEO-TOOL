@@ -1,11 +1,37 @@
 ﻿const { KeywordResearch } = require('./models');
 
-async function getHistory() {
+function normalizeProjectId(projectId) {
+    return typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null;
+}
+
+function buildHistoryQuery(user, options = {}) {
+    const projectId = normalizeProjectId(options.projectId);
+    const query = user.role === 'admin'
+        ? {
+            $or: [
+                { ownerEmail: user.email },
+                { ownerEmail: { $exists: false } },
+            ],
+        }
+        : { ownerEmail: user.email };
+
+    if (projectId) {
+        query.projectId = projectId;
+    }
+
+    return query;
+}
+
+async function getHistory(user, options = {}) {
+    const query = buildHistoryQuery(user, options);
+
     try {
-        const records = await KeywordResearch.find({}).sort({ timestamp: -1 }).lean();
+        const records = await KeywordResearch.find(query).sort({ timestamp: -1 }).lean();
         return records.map((record) => ({
             id: record._id.toString(),
             timestamp: record.timestamp,
+            ownerEmail: record.ownerEmail || user.email,
+            projectId: record.projectId || null,
             ...(record.payload || {}),
         }));
     } catch (e) {
@@ -14,18 +40,34 @@ async function getHistory() {
     }
 }
 
-async function saveResearch(data) {
+async function saveResearch(user, data, options = {}) {
+    const projectId = normalizeProjectId(options.projectId || data?.projectId);
     const doc = await KeywordResearch.create({
         seed: data?.seed || null,
-        payload: data,
+        ownerEmail: user.email,
+        projectId,
+        payload: {
+            ...(data || {}),
+            projectId,
+        },
         timestamp: new Date(),
     });
 
     return {
         id: doc._id.toString(),
         timestamp: doc.timestamp,
+        ownerEmail: doc.ownerEmail,
+        projectId: doc.projectId,
         ...data,
+        projectId,
     };
 }
 
-module.exports = { getHistory, saveResearch };
+module.exports = {
+    getHistory,
+    saveResearch,
+    __internal: {
+        normalizeProjectId,
+        buildHistoryQuery,
+    },
+};

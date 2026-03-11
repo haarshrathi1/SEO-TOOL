@@ -1,4 +1,6 @@
-const projects = [
+﻿const { Project } = require('./models');
+
+const DEFAULT_PROJECTS = [
     {
         id: 'laserlift',
         name: 'Laserlift Solutions',
@@ -6,7 +8,9 @@ const projects = [
         url: 'https://laserliftsolutions.com/',
         ga4PropertyId: '503587971',
         spreadsheetId: '1VpSfz6pVmGbgltxcs4UNmDEhHfo0Vh4kMDwtFUaOaWM',
-        sheetGid: 0
+        sheetGid: 0,
+        auditMaxPages: 200,
+        isActive: true,
     },
     {
         id: 'fleetflow',
@@ -15,13 +19,203 @@ const projects = [
         url: 'https://fleetflow.hyvikk.com/',
         ga4PropertyId: '518947686',
         spreadsheetId: '1VpSfz6pVmGbgltxcs4UNmDEhHfo0Vh4kMDwtFUaOaWM',
-        sheetGid: 1772579534
-    }
+        sheetGid: 1772579534,
+        auditMaxPages: 200,
+        isActive: true,
+    },
 ];
 
-const getProject = (id) => {
-    if (!id) return projects[0] || null;
-    return projects.find(p => p.id === id) || null;
+function normalizeText(value) {
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeUrl(value) {
+    const raw = normalizeText(value);
+    if (!raw) return '';
+
+    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const parsed = new URL(withProtocol);
+    return parsed.toString();
+}
+
+function normalizeDomain(value, url) {
+    const direct = normalizeText(value).toLowerCase();
+    if (direct) return direct;
+    if (!url) return '';
+    return new URL(url).hostname.toLowerCase();
+}
+
+function slugifyId(value) {
+    const slug = normalizeText(value)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+
+    return slug || `project-${Date.now()}`;
+}
+
+function toProjectDto(record) {
+    return {
+        id: record.id,
+        name: record.name,
+        domain: record.domain,
+        url: record.url,
+        ga4PropertyId: record.ga4PropertyId || '',
+        spreadsheetId: record.spreadsheetId || '',
+        sheetGid: Number.isFinite(record.sheetGid) ? record.sheetGid : 0,
+        auditMaxPages: record.auditMaxPages || 200,
+        isActive: record.isActive !== false,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+    };
+}
+
+function buildProjectPayload(input, existing = null) {
+    const url = normalizeUrl(input.url || existing?.url || '');
+    if (!url) {
+        throw new Error('Project URL is required');
+    }
+
+    const name = normalizeText(input.name || existing?.name || '');
+    if (!name) {
+        throw new Error('Project name is required');
+    }
+
+    const domain = normalizeDomain(input.domain, url);
+    const auditMaxPages = Number(input.auditMaxPages ?? existing?.auditMaxPages ?? 200);
+
+    return {
+        id: existing?.id || slugifyId(input.id || name),
+        name,
+        domain,
+        url,
+        ga4PropertyId: normalizeText(input.ga4PropertyId || existing?.ga4PropertyId || ''),
+        spreadsheetId: normalizeText(input.spreadsheetId || existing?.spreadsheetId || ''),
+        sheetGid: Number.isFinite(Number(input.sheetGid)) ? Number(input.sheetGid) : Number(existing?.sheetGid || 0),
+        auditMaxPages: Number.isFinite(auditMaxPages) && auditMaxPages > 0 ? Math.min(auditMaxPages, 500) : 200,
+        isActive: typeof input.isActive === 'boolean' ? input.isActive : existing?.isActive !== false,
+    };
+}
+
+function buildListProjectsQuery(user, options = {}) {
+    const includeInactive = options.includeInactive === true && user?.role === 'admin';
+    const query = includeInactive ? {} : { isActive: true };
+
+    if (user?.role === 'viewer') {
+        if (!Array.isArray(user.projectIds) || user.projectIds.length === 0) {
+            return null;
+        }
+        query.id = { $in: user.projectIds };
+    }
+
+    return query;
+}
+
+function buildGetProjectQuery(id, user) {
+    const query = {};
+
+    if (id) {
+        query.id = id;
+    } else {
+        query.isActive = true;
+    }
+
+    if (user?.role === 'viewer') {
+        if (!Array.isArray(user.projectIds) || user.projectIds.length === 0) {
+            return null;
+        }
+        if (id && !user.projectIds.includes(id)) {
+            return null;
+        }
+        query.id = id || { $in: user.projectIds };
+    }
+
+    return query;
+}
+
+async function initializeProjects() {
+    const count = await Project.countDocuments({});
+    if (count > 0) {
+        return;
+    }
+
+    await Project.insertMany(DEFAULT_PROJECTS, { ordered: false });
+}
+
+async function listProjects(user, options = {}) {
+    const query = buildListProjectsQuery(user, options);
+    if (!query) {
+        return [];
+    }
+
+    const records = await Project.find(query).sort({ name: 1 }).lean();
+    return records.map(toProjectDto);
+}
+
+async function getProject(id, user) {
+    const query = buildGetProjectQuery(id, user);
+    if (!query) {
+        return null;
+    }
+
+    const record = await Project.findOne(query).sort({ name: 1 }).lean();
+    return record ? toProjectDto(record) : null;
+}
+
+async function createProject(input) {
+    const payload = buildProjectPayload(input);
+    const existing = await Project.findOne({ id: payload.id }).lean();
+    if (existing) {
+        throw new Error('Project ID already exists');
+    }
+
+    const doc = await Project.create(payload);
+    return toProjectDto(doc.toObject());
+}
+
+async function updateProject(id, input) {
+    const existing = await Project.findOne({ id });
+    if (!existing) {
+        throw new Error('Project not found');
+    }
+
+    const payload = buildProjectPayload(input, existing.toObject());
+    payload.id = existing.id;
+
+    existing.set(payload);
+    await existing.save();
+    return toProjectDto(existing.toObject());
+}
+
+async function archiveProject(id) {
+    const doc = await Project.findOneAndUpdate(
+        { id },
+        { isActive: false },
+        { new: true }
+    ).lean();
+
+    if (!doc) {
+        throw new Error('Project not found');
+    }
+
+    return toProjectDto(doc);
+}
+
+module.exports = {
+    initializeProjects,
+    listProjects,
+    getProject,
+    createProject,
+    updateProject,
+    archiveProject,
+    __internal: {
+        normalizeUrl,
+        normalizeDomain,
+        slugifyId,
+        buildProjectPayload,
+        buildListProjectsQuery,
+        buildGetProjectQuery,
+        toProjectDto,
+    },
 };
 
-module.exports = { projects, getProject };

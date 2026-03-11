@@ -1,4 +1,4 @@
-const { google } = require('googleapis');
+﻿const { google } = require('googleapis');
 const gsc = require('./gsc');
 const ga4 = require('./ga4');
 const psi = require('./psi');
@@ -11,7 +11,7 @@ const { getProject } = require('./projects');
 const analyzeSite = async (req, res) => {
     try {
         const projectId = req.query.projectId;
-        const project = getProject(projectId);
+        const project = await getProject(projectId, req.user);
 
         if (!project) {
             return res.status(404).json({ error: 'Project not found' });
@@ -315,3 +315,4 @@ const analyzeSite = async (req, res) => {
     }
 };
 module.exports = { analyzeSite };
+

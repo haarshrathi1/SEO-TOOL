@@ -1,30 +1,45 @@
 ﻿const jwt = require('jsonwebtoken');
 const express = require('express');
 const { OAuth2Client } = require('google-auth-library');
-const { Viewer } = require('./models');
+const { AdminUser, Viewer } = require('./models');
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 const router = express.Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_change_me';
+function getRequiredJwtSecret(env = process.env) {
+    const secret = env.JWT_SECRET?.trim();
+    if (!secret) {
+        throw new Error('JWT_SECRET is required. Add it to server/.env before starting the server.');
+    }
+    return secret;
+}
+
+const JWT_SECRET = getRequiredJwtSecret();
+
 const GOOGLE_CLIENT_ID = process.env.CLIENT_ID;
 const TOKEN_EXPIRY = '7d';
-const LEGACY_ADMIN_EMAIL = 'harshrathi.hyvikk@gmail.com';
 const DEV_ADMIN_BYPASS = /^(1|true|yes|on)$/i.test(process.env.DEV_ADMIN_BYPASS || '');
-
-const adminEmails = new Set(
-    [
-        process.env.ADMIN_EMAIL || LEGACY_ADMIN_EMAIL,
-        ...(process.env.ADMIN_EMAILS || '').split(','),
-    ]
-        .map((email) => email.toLowerCase().trim())
-        .filter(Boolean)
-);
+const ALLOWED_ACCESS = new Set(['keywords', 'dashboard', 'audit']);
+const DEFAULT_VIEWER_ACCESS = ['keywords'];
 
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
-function isAdminEmail(email) {
-    return adminEmails.has(email.toLowerCase().trim());
+function normalizeEmail(value) {
+    return typeof value === 'string' ? value.toLowerCase().trim() : '';
+}
+
+function normalizeProjectIds(projectIds) {
+    if (!Array.isArray(projectIds)) return [];
+    return [...new Set(projectIds.map((projectId) => String(projectId || '').trim()).filter(Boolean))];
+}
+
+function normalizeAccess(access) {
+    if (!Array.isArray(access) || access.length === 0) {
+        return [...DEFAULT_VIEWER_ACCESS];
+    }
+
+    const normalized = [...new Set(access.map((entry) => String(entry || '').trim()).filter((entry) => ALLOWED_ACCESS.has(entry)))];
+    return normalized.length > 0 ? normalized : [...DEFAULT_VIEWER_ACCESS];
 }
 
 function extractHostname(value) {
@@ -67,15 +82,82 @@ function getCookieOptions() {
     };
 }
 
-function requireAuth(req, res, next) {
-    const authHeader = req.headers.authorization;
-    const bearerToken = authHeader && authHeader.startsWith('Bearer ')
-        ? authHeader.split(' ')[1]
-        : null;
+function getSeedAdminEmails() {
+    return [...new Set(
+        [process.env.ADMIN_EMAIL, ...(process.env.ADMIN_EMAILS || '').split(',')]
+            .map(normalizeEmail)
+            .filter(Boolean)
+    )];
+}
 
-    const cookieToken = req.cookies?.seo_token || null;
-    const headerToken = req.headers['x-access-token'] || null;
-    const token = bearerToken || cookieToken || headerToken;
+function getPublicViewer(viewer, tokenPayload = {}) {
+    return {
+        email: viewer.email,
+        role: 'viewer',
+        name: tokenPayload.name || viewer.email,
+        picture: tokenPayload.picture || '',
+        access: normalizeAccess(viewer.access),
+        projectIds: normalizeProjectIds(viewer.projectIds),
+    };
+}
+
+async function initializeUserAccess() {
+    const seedAdminEmails = getSeedAdminEmails();
+    const adminCount = await AdminUser.countDocuments({});
+
+    if (adminCount === 0 && seedAdminEmails.length === 0) {
+        throw new Error('Configure ADMIN_EMAIL or ADMIN_EMAILS, or create an AdminUser record before starting the server.');
+    }
+
+    if (seedAdminEmails.length === 0) {
+        return;
+    }
+
+    await Promise.all(seedAdminEmails.map((email) => AdminUser.findOneAndUpdate(
+        { email },
+        { email },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+    )));
+}
+
+async function isAdminEmail(email) {
+    if (!email) return false;
+    const admin = await AdminUser.findOne({ email: normalizeEmail(email) }).lean();
+    return Boolean(admin);
+}
+
+async function loadFreshUser(decoded) {
+    const email = normalizeEmail(decoded.email);
+    if (!email) {
+        return null;
+    }
+
+    if (decoded.role === 'admin') {
+        const adminAllowed = await isAdminEmail(email);
+        if (!adminAllowed) {
+            return null;
+        }
+
+        return {
+            email,
+            role: 'admin',
+            name: decoded.name || email,
+            picture: decoded.picture || '',
+            access: ['keywords', 'dashboard', 'audit'],
+            projectIds: [],
+        };
+    }
+
+    const viewer = await Viewer.findOne({ email }).lean();
+    if (!viewer) {
+        return null;
+    }
+
+    return getPublicViewer(viewer, decoded);
+}
+
+async function requireAuth(req, res, next) {
+    const token = req.cookies?.seo_token || null;
 
     if (!token) {
         return res.status(401).json({ error: 'Authentication required' });
@@ -83,7 +165,12 @@ function requireAuth(req, res, next) {
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
-        req.user = decoded;
+        const user = await loadFreshUser(decoded);
+        if (!user) {
+            return res.status(403).json({ error: 'Access revoked or no longer authorized' });
+        }
+
+        req.user = user;
         next();
     } catch (e) {
         return res.status(401).json({ error: 'Invalid or expired token' });
@@ -95,6 +182,38 @@ function requireAdmin(req, res, next) {
         return res.status(403).json({ error: 'Admin access required' });
     }
     next();
+}
+
+function resolveProjectId(req) {
+    const sources = [req.body?.projectId, req.query?.projectId, req.params?.projectId];
+    const projectId = sources.find((value) => typeof value === 'string' && value.trim());
+    return projectId ? projectId.trim() : null;
+}
+
+function requireAccess(accessName) {
+    return (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
+        if (req.user.role === 'admin') {
+            return next();
+        }
+
+        if (!Array.isArray(req.user.access) || !req.user.access.includes(accessName)) {
+            return res.status(403).json({ error: `${accessName} access required` });
+        }
+
+        const projectId = resolveProjectId(req);
+        if (projectId) {
+            const projectIds = Array.isArray(req.user.projectIds) ? req.user.projectIds : [];
+            if (!projectIds.length || !projectIds.includes(projectId)) {
+                return res.status(403).json({ error: 'Project access required' });
+            }
+        }
+
+        return next();
+    };
 }
 
 router.post('/google-login', async (req, res) => {
@@ -110,11 +229,11 @@ router.post('/google-login', async (req, res) => {
         });
 
         const payload = ticket.getPayload();
-        const email = payload.email.toLowerCase().trim();
+        const email = normalizeEmail(payload.email);
         const name = payload.name || email;
         const picture = payload.picture || '';
 
-        if (isAdminEmail(email) || shouldBypassAdmin(req)) {
+        if (await isAdminEmail(email) || shouldBypassAdmin(req)) {
             const token = jwt.sign(
                 { email, role: 'admin', name, picture },
                 JWT_SECRET,
@@ -122,22 +241,20 @@ router.post('/google-login', async (req, res) => {
             );
 
             res.cookie('seo_token', token, getCookieOptions());
-            return res.json({ token, user: { email, role: 'admin', name, picture } });
+            return res.json({ user: { email, role: 'admin', name, picture, access: ['keywords', 'dashboard', 'audit'], projectIds: [] } });
         }
 
         const viewer = await Viewer.findOne({ email }).lean();
         if (viewer) {
             const token = jwt.sign(
-                { email, role: 'viewer', name, picture, access: viewer.access || ['keywords'] },
+                { email, role: 'viewer', name, picture },
                 JWT_SECRET,
                 { expiresIn: TOKEN_EXPIRY }
             );
 
+            const user = getPublicViewer(viewer, { name, picture });
             res.cookie('seo_token', token, getCookieOptions());
-            return res.json({
-                token,
-                user: { email, role: 'viewer', name, picture, access: viewer.access || ['keywords'] },
-            });
+            return res.json({ user });
         }
 
         return res.status(403).json({ error: 'Access denied. Your email is not authorized. Contact the admin.' });
@@ -167,13 +284,12 @@ router.post('/logout', (req, res) => {
 });
 
 router.post('/viewers', requireAuth, requireAdmin, async (req, res) => {
-    const { email, access } = req.body;
-    if (!email) {
+    const normalizedEmail = normalizeEmail(req.body.email);
+    if (!normalizedEmail) {
         return res.status(400).json({ error: 'Email required' });
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
-    if (isAdminEmail(normalizedEmail)) {
+    if (await isAdminEmail(normalizedEmail)) {
         return res.status(400).json({ error: 'Admin email cannot be added as viewer' });
     }
 
@@ -185,24 +301,69 @@ router.post('/viewers', requireAuth, requireAdmin, async (req, res) => {
 
         const newViewer = await Viewer.create({
             email: normalizedEmail,
-            access: Array.isArray(access) && access.length ? access : ['keywords'],
+            access: normalizeAccess(req.body.access),
+            projectIds: normalizeProjectIds(req.body.projectIds),
             createdAt: new Date(),
         });
 
-        res.json({ message: 'Viewer added', viewer: { email: normalizedEmail, access: newViewer.access } });
+        res.json({
+            message: 'Viewer added',
+            viewer: {
+                email: normalizedEmail,
+                access: normalizeAccess(newViewer.access),
+                projectIds: normalizeProjectIds(newViewer.projectIds),
+                createdAt: newViewer.createdAt,
+            },
+        });
     } catch (e) {
         console.error('Failed to add viewer:', e.message);
         res.status(500).json({ error: 'Failed to add viewer' });
     }
 });
 
+router.put('/viewers/:email', requireAuth, requireAdmin, async (req, res) => {
+    const targetEmail = normalizeEmail(decodeURIComponent(req.params.email));
+    if (!targetEmail) {
+        return res.status(400).json({ error: 'Viewer email is required' });
+    }
+
+    try {
+        const viewer = await Viewer.findOneAndUpdate(
+            { email: targetEmail },
+            {
+                access: normalizeAccess(req.body.access),
+                projectIds: normalizeProjectIds(req.body.projectIds),
+            },
+            { new: true }
+        ).lean();
+
+        if (!viewer) {
+            return res.status(404).json({ error: 'Viewer not found' });
+        }
+
+        return res.json({
+            message: 'Viewer updated',
+            viewer: {
+                email: viewer.email,
+                access: normalizeAccess(viewer.access),
+                projectIds: normalizeProjectIds(viewer.projectIds),
+                createdAt: viewer.createdAt,
+            },
+        });
+    } catch (e) {
+        console.error('Failed to update viewer:', e.message);
+        return res.status(500).json({ error: 'Failed to update viewer' });
+    }
+});
+
 router.get('/viewers', requireAuth, requireAdmin, async (req, res) => {
     try {
         const viewers = await Viewer.find({}).sort({ createdAt: -1 }).lean();
-        res.json(viewers.map((v) => ({
-            email: v.email,
-            access: v.access,
-            createdAt: v.createdAt,
+        res.json(viewers.map((viewer) => ({
+            email: viewer.email,
+            access: normalizeAccess(viewer.access),
+            projectIds: normalizeProjectIds(viewer.projectIds),
+            createdAt: viewer.createdAt,
         })));
     } catch (e) {
         console.error('Failed to list viewers:', e.message);
@@ -211,7 +372,7 @@ router.get('/viewers', requireAuth, requireAdmin, async (req, res) => {
 });
 
 router.delete('/viewers/:email', requireAuth, requireAdmin, async (req, res) => {
-    const targetEmail = decodeURIComponent(req.params.email).toLowerCase().trim();
+    const targetEmail = normalizeEmail(decodeURIComponent(req.params.email));
 
     try {
         const result = await Viewer.deleteOne({ email: targetEmail });
@@ -226,4 +387,18 @@ router.delete('/viewers/:email', requireAuth, requireAdmin, async (req, res) => 
     }
 });
 
-module.exports = { router, requireAuth, requireAdmin };
+module.exports = {
+    router,
+    requireAuth,
+    requireAdmin,
+    requireAccess,
+    initializeUserAccess,
+    __internal: {
+        normalizeEmail,
+        normalizeProjectIds,
+        normalizeAccess,
+        resolveProjectId,
+        getRequiredJwtSecret,
+    },
+};
+

@@ -1,4 +1,4 @@
-{
+﻿{
     "name": "seo-server",
     "version": "1.0.0",
     "description": "SEO Analytics Server",
@@ -6,6 +6,7 @@
     "scripts": {
         "start": "node index.js",
         "dev": "nodemon index.js",
+        "test": "node --test",
         "postinstall": "npx puppeteer browsers install chrome"
     },
     "keywords": [],

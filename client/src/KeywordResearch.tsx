@@ -1,7 +1,9 @@
-﻿import { useState, useEffect, useRef } from 'react';
-import { Search, Loader2, Target, BarChart3, Layers, Sparkles, ExternalLink, Zap, Save, History, ChevronRight, TrendingUp, Brain, Lightbulb, Crosshair, Rocket, ArrowRight, ChevronDown, ChevronUp, HelpCircle, Star, Shield, Eye, BookOpen, Filter, type LucideIcon } from 'lucide-react';
+﻿import { useEffect, useRef, useState } from 'react';
+import { Search, Loader2, Target, BarChart3, Layers, Sparkles, ExternalLink, Zap, Save, History, ChevronRight, TrendingUp, Brain, Lightbulb, Crosshair, Rocket, ArrowRight, ChevronDown, ChevronUp, HelpCircle, Star, Shield, Eye, BookOpen, Filter, Download, type LucideIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from './api';
+import { downloadCsv } from './csv';
+import { useToast } from './toast';
 import type { KeywordDataV2, KeywordHistoryItem, KeywordItem, KeywordScanResult, StrategicSynthesis } from './types';
 
 const LAYER_STEPS = [
@@ -128,6 +130,7 @@ function Section({ icon: Icon, title, badge, children, defaultOpen = true }: { i
 }
 
 export default function KeywordResearch() {
+    const { push } = useToast();
     const [seed, setSeed] = useState('');
     const [data, setData] = useState<KeywordDataV2 | null>(null);
     const [history, setHistory] = useState<KeywordHistoryItem[]>([]);
@@ -183,9 +186,9 @@ export default function KeywordResearch() {
         try {
             await api.saveKeywordResearch(data);
             await fetchHistory();
-            alert('Research saved!');
+            push({ tone: 'success', title: 'Research saved', description: 'The current analysis was added to your history.' });
         } catch (error) {
-            alert(getErrorMessage(error, 'Failed to save research.'));
+            push({ tone: 'error', title: 'Failed to save research', description: getErrorMessage(error, 'Unknown error') });
         } finally {
             setSaving(false);
         }
@@ -193,7 +196,7 @@ export default function KeywordResearch() {
 
     const loadFromHistory = (item: KeywordHistoryItem) => {
         if (!isKeywordDataV2(item)) {
-            alert('This saved research uses the legacy format and cannot be opened in the new interface.');
+            push({ tone: 'info', title: 'Legacy research', description: 'This saved research uses the legacy format and cannot be opened in the new interface.' });
             return;
         }
 
@@ -207,7 +210,7 @@ export default function KeywordResearch() {
         try {
             setScanResult(await api.analyzePageKeywords(url));
         } catch (error) {
-            alert(getErrorMessage(error, 'Scan failed.'));
+            push({ tone: 'error', title: 'Scan failed', description: getErrorMessage(error, 'Unknown error') });
         } finally {
             setScanningUrl(null);
         }
@@ -223,7 +226,7 @@ export default function KeywordResearch() {
             setData(json);
             setCurrentLayer(5);
         } catch (error) {
-            alert(getErrorMessage(error, 'Analysis failed. Please try again.'));
+            push({ tone: 'error', title: 'Analysis failed', description: getErrorMessage(error, 'Please try again.') });
         } finally {
             clearInterval(layerTimer);
             setLoading(false);
@@ -232,6 +235,16 @@ export default function KeywordResearch() {
 
     const filteredKeywords = data?.keywordUniverse?.keywords?.filter((k: KeywordItem) => kwFilter === 'all' || k.intent?.toLowerCase() === kwFilter) || [];
     const sortedKeywords = [...filteredKeywords].sort((a, b) => kwSort === 'opportunityScore' ? (b.opportunityScore - a.opportunityScore) : a.term.localeCompare(b.term));
+    const exportKeywordCsv = () => {
+        if (!data) return;
+        downloadCsv(
+            `keywords-${seed.trim().replace(/\s+/g, '-').toLowerCase() || 'research'}-${new Date().toISOString().slice(0, 10)}.csv`,
+            ['Keyword', 'Intent', 'Volume', 'Difficulty', 'Opportunity Score', 'Buyer Stage'],
+            sortedKeywords.map((keyword) => [keyword.term, keyword.intent, keyword.volume, keyword.difficulty, keyword.opportunityScore, keyword.buyerStage]),
+        );
+        push({ tone: 'success', title: 'Keyword export ready', description: 'CSV download started.' });
+    };
+
     const viabilityAudiences: Array<{ key: keyof StrategicSynthesis['viability']; label: string }> = [
         { key: 'soloCreator', label: 'Solo Creator' },
         { key: 'smallBusiness', label: 'Small Business' },
@@ -241,7 +254,7 @@ export default function KeywordResearch() {
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-indigo-50/30 relative">
             {/* History Toggle */}
-            <button onClick={() => setShowHistory(!showHistory)} className="fixed left-4 top-4 z-50 w-10 h-10 rounded-xl bg-white border border-slate-200 shadow-md flex items-center justify-center hover:bg-indigo-50 hover:border-indigo-200 transition-all">
+            <button onClick={() => setShowHistory(!showHistory)} className="fixed left-4 top-24 z-50 w-10 h-10 rounded-xl bg-white border border-slate-200 shadow-md flex items-center justify-center hover:bg-indigo-50 hover:border-indigo-200 transition-all">
                 <History className="w-4 h-4 text-slate-600" />
             </button>
 
@@ -290,9 +303,14 @@ export default function KeywordResearch() {
                             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ArrowRight className="w-5 h-5" /> Analyze</>}
                         </button>
                         {data && (
-                            <button onClick={handleSave} disabled={saving} type="button" className="premium-button bg-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-200">
-                                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                            </button>
+                            <>
+                                <button onClick={handleSave} disabled={saving} type="button" className="premium-button bg-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-200">
+                                    {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                                </button>
+                                <button onClick={exportKeywordCsv} type="button" className="premium-button border border-slate-200 bg-white text-slate-700 hover:bg-slate-50">
+                                    <Download className="w-4 h-4" /> Export
+                                </button>
+                            </>
                         )}
                     </form>
                 </div>
@@ -696,6 +714,10 @@ export default function KeywordResearch() {
         </div>
     );
 }
+
+
+
+
 
 
 
