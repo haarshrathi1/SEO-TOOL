@@ -6,13 +6,48 @@ const BACKEND_VERTEX = 'vertex';
 const BACKEND_GEMINI = 'gemini';
 const DEFAULT_API_VERSION = process.env.GENAI_API_VERSION || 'v1';
 const DEFAULT_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || 'global';
-const DEFAULT_PAGE_MODEL = process.env.GENAI_PAGE_MODEL || process.env.GEMINI_PAGE_MODEL || 'gemini-2.5-flash';
-const DEFAULT_KEYWORD_MODEL = process.env.GENAI_KEYWORD_MODEL || process.env.GEMINI_KEYWORD_MODEL || process.env.GEMINI_KEYWORD_MODEL || 'gemini-2.5-flash';
 const MAX_ATTEMPTS = Math.max(1, Number(process.env.GENAI_RETRY_ATTEMPTS || 4));
 const BASE_RETRY_DELAY_MS = Math.max(250, Number(process.env.GENAI_RETRY_BASE_DELAY_MS || 1200));
 
 let vertexClient = null;
 let geminiClient = null;
+
+function parseModelList(value) {
+    if (!value) {
+        return [];
+    }
+
+    if (Array.isArray(value)) {
+        return value
+            .flatMap((item) => parseModelList(item))
+            .filter(Boolean);
+    }
+
+    return String(value)
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+}
+
+function uniqueValues(values) {
+    return [...new Set((values || []).filter(Boolean))];
+}
+
+const DEFAULT_PAGE_MODEL = parseModelList(
+    process.env.GENAI_PAGE_MODEL || process.env.GEMINI_PAGE_MODEL || 'gemini-2.5-flash'
+)[0] || 'gemini-2.5-flash';
+const DEFAULT_PAGE_MODEL_FALLBACKS = uniqueValues(parseModelList(
+    process.env.GENAI_PAGE_MODEL_FALLBACKS || process.env.GEMINI_PAGE_MODEL_FALLBACKS || ''
+));
+const DEFAULT_KEYWORD_MODELS = uniqueValues([
+    ...parseModelList(process.env.GENAI_KEYWORD_MODEL || process.env.GEMINI_KEYWORD_MODEL || 'gemini-3.1-pro-preview'),
+    ...parseModelList(process.env.GENAI_KEYWORD_MODEL_FALLBACKS || process.env.GEMINI_KEYWORD_MODEL_FALLBACKS || 'gemini-2.5-pro'),
+]);
+const DEFAULT_KEYWORD_MODEL = DEFAULT_KEYWORD_MODELS[0] || 'gemini-3.1-pro-preview';
+const DEFAULT_KEYWORD_MODEL_FALLBACKS = DEFAULT_KEYWORD_MODELS.slice(1);
+const DEFAULT_GROUNDED_SEARCH_MODEL = parseModelList(
+    process.env.GENAI_GROUNDED_SEARCH_MODEL || process.env.GEMINI_GROUNDED_SEARCH_MODEL || 'gemini-2.5-flash'
+)[0] || 'gemini-2.5-flash';
 
 function getVertexApiKey() {
     return process.env.VERTEX_AI_API_KEY || process.env.GOOGLE_VERTEX_API_KEY || '';
@@ -46,7 +81,10 @@ function getProviderRuntime() {
         allowGeminiFallback: process.env.GENAI_ENABLE_GEMINI_FALLBACK !== 'false',
         retryAttempts: MAX_ATTEMPTS,
         pageModel: DEFAULT_PAGE_MODEL,
+        pageModelFallbacks: DEFAULT_PAGE_MODEL_FALLBACKS,
         keywordModel: DEFAULT_KEYWORD_MODEL,
+        keywordModelFallbacks: DEFAULT_KEYWORD_MODEL_FALLBACKS,
+        groundedSearchModel: DEFAULT_GROUNDED_SEARCH_MODEL,
         location: DEFAULT_LOCATION,
     };
 }
@@ -211,14 +249,36 @@ function sanitizeConfigForBackend(backend, config = {}) {
 
     const nextConfig = { ...config };
 
-    // Compatibility mode:
-    // prompt-driven JSON plus manual parsing is more reliable across Vertex Express Mode
-    // and Gemini fallback than relying on optional generation config fields.
-    delete nextConfig.responseMimeType;
-    delete nextConfig.responseSchema;
+    // Some backends lag behind the latest thinking options, so keep tool / JSON
+    // config intact but strip the most compatibility-sensitive setting.
     delete nextConfig.thinkingConfig;
 
     return nextConfig;
+}
+
+function buildModelOrder(options = {}) {
+    const explicitModels = uniqueValues([
+        ...parseModelList(options.model),
+        ...parseModelList(options.modelFallbacks),
+    ]);
+
+    if (explicitModels.length > 0) {
+        return explicitModels;
+    }
+
+    if (options.modelType === 'page') {
+        return uniqueValues([DEFAULT_PAGE_MODEL, ...DEFAULT_PAGE_MODEL_FALLBACKS]);
+    }
+
+    if (options.useGoogleSearchGrounding) {
+        return uniqueValues([
+            DEFAULT_GROUNDED_SEARCH_MODEL,
+            DEFAULT_KEYWORD_MODEL,
+            ...DEFAULT_KEYWORD_MODEL_FALLBACKS,
+        ]);
+    }
+
+    return uniqueValues([DEFAULT_KEYWORD_MODEL, ...DEFAULT_KEYWORD_MODEL_FALLBACKS]);
 }
 
 function emitEvent(onEvent, event) {
@@ -358,36 +418,55 @@ async function requestContentFromBackend(backend, options) {
 }
 
 async function generateContent(options) {
-    const order = buildBackendOrder(options.preferredBackend, options.allowFallback !== false);
+    const backendOrder = buildBackendOrder(options.preferredBackend, options.allowFallback !== false);
+    const modelOrder = buildModelOrder(options);
 
-    if (!order.length) {
+    if (!backendOrder.length) {
         throw new Error('No AI backend is configured. Add VERTEX_AI_API_KEY for Vertex AI and optionally GEMINI_API_KEY as fallback.');
+    }
+    if (!modelOrder.length) {
+        throw new Error('No AI model is configured for this request.');
     }
 
     let lastError = null;
 
-    for (let index = 0; index < order.length; index += 1) {
-        const backend = order[index];
-        const model = options.model || (options.modelType === 'page' ? DEFAULT_PAGE_MODEL : DEFAULT_KEYWORD_MODEL);
+    for (let modelIndex = 0; modelIndex < modelOrder.length; modelIndex += 1) {
+        const model = modelOrder[modelIndex];
 
-        try {
-            return await requestContentFromBackend(backend, {
-                ...options,
-                model,
-            });
-        } catch (error) {
-            lastError = error;
-            const nextBackend = order[index + 1];
-            if (!nextBackend) {
-                continue;
+        for (let backendIndex = 0; backendIndex < backendOrder.length; backendIndex += 1) {
+            const backend = backendOrder[backendIndex];
+
+            try {
+                return await requestContentFromBackend(backend, {
+                    ...options,
+                    model,
+                });
+            } catch (error) {
+                lastError = error;
+                const nextBackend = backendOrder[backendIndex + 1];
+                if (!nextBackend) {
+                    continue;
+                }
+
+                emitEvent(options.onEvent, {
+                    type: 'fallback',
+                    from: backend,
+                    to: nextBackend,
+                    taskName: options.taskName || 'content generation',
+                    model,
+                    message: extractErrorMessage(error),
+                });
             }
+        }
 
+        const nextModel = modelOrder[modelIndex + 1];
+        if (nextModel) {
             emitEvent(options.onEvent, {
-                type: 'fallback',
-                from: backend,
-                to: nextBackend,
+                type: 'model_fallback',
+                fromModel: model,
+                toModel: nextModel,
                 taskName: options.taskName || 'content generation',
-                message: extractErrorMessage(error),
+                message: extractErrorMessage(lastError),
             });
         }
     }

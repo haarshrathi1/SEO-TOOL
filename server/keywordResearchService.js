@@ -87,6 +87,13 @@ function createProviderEventHandler({ onProgress, layer, label }) {
                 phase: 'mid',
                 provider: `${toLabel} active`,
             }));
+            return;
+        }
+
+        if (event.type === 'model_fallback') {
+            void pushProgress(onProgress, buildProgressUpdate(layer, `${event.fromModel} was unavailable. Retrying ${label.toLowerCase()} with ${event.toModel}.`, {
+                phase: 'mid',
+            }));
         }
     };
 }
@@ -124,6 +131,79 @@ function buildAnalysisMapping(strategy) {
 
 function normalizeSeed(seed) {
     return typeof seed === 'string' ? seed.trim() : '';
+}
+
+function shouldUseGroundedSearchFallback(suggestions, serpData) {
+    const organicCount = serpData?.organic?.length || 0;
+    const questionCount = serpData?.paaQuestions?.length || 0;
+    const relatedCount = serpData?.relatedSearches?.length || 0;
+    const suggestionCount = suggestions?.length || 0;
+
+    if (organicCount === 0) {
+        return true;
+    }
+
+    if (organicCount < 5) {
+        return true;
+    }
+
+    return suggestionCount < 5 && (questionCount + relatedCount) < 4;
+}
+
+function hasUsableKeywordSourceData(suggestions, serpData, groundedSearch) {
+    const organicCount = serpData?.organic?.length || 0;
+    const groundedSignals = (groundedSearch?.topDomains?.length || 0)
+        + (groundedSearch?.relatedQueries?.length || 0)
+        + (groundedSearch?.questions?.length || 0);
+
+    return organicCount > 0 || groundedSignals > 0;
+}
+
+async function fetchGroundedSearchSnapshot(seed, options = {}) {
+    const runtime = getProviderRuntime();
+    const prompt = `
+You are a search research verifier using Google Search grounding.
+
+TASK: Verify the live search landscape for "${seed}" and return only grounded, non-speculative output.
+
+RULES:
+1. Do not invent search volume, CPC, keyword difficulty, or ranking metrics.
+2. Use short, factual phrases only when supported by Google Search grounding.
+3. If a field is uncertain, return an empty array or "Unknown".
+4. Keep "topDomains" to at most 5 items.
+5. Keep "relatedQueries", "questions", and "searchHighlights" to at most 6 items each.
+
+Return this exact JSON schema:
+{
+  "summary": "string",
+  "topDomains": ["string"],
+  "relatedQueries": ["string"],
+  "questions": ["string"],
+  "searchHighlights": ["string"],
+  "freshness": "Evergreen | Mixed | Fresh | Unknown"
+}`;
+
+    const response = await generateJson({
+        modelType: 'keyword',
+        model: runtime.groundedSearchModel,
+        modelFallbacks: [runtime.keywordModel, ...runtime.keywordModelFallbacks],
+        preferredBackend: options.preferredBackend || BACKEND_VERTEX,
+        taskName: 'grounded search verification',
+        contents: prompt,
+        useGoogleSearchGrounding: true,
+        config: {
+            temperature: 0.2,
+            maxOutputTokens: 4096,
+            tools: [{ type: 'google_search' }],
+        },
+        onEvent: createProviderEventHandler({
+            onProgress: options.onProgress,
+            layer: 1,
+            label: 'grounded search verification',
+        }),
+    });
+
+    return { data: response.data, meta: response };
 }
 
 async function fetchAutocomplete(seed) {
@@ -361,7 +441,7 @@ async function analyzeSERP(organic, suggestions = []) {
     };
 }
 
-async function layer2SerpDna(seed, serpData, serpSummary, suggestions, options = {}) {
+async function layer2SerpDna(seed, serpData, serpSummary, suggestions, groundedSearch, options = {}) {
     console.log(`[Layer 2] SERP DNA Intelligence for: ${seed}`);
 
     const prompt = `
@@ -378,6 +458,7 @@ DATA PROVIDED:
 - SERP Features Detected: ${JSON.stringify(serpData.serpFeatures)}
 - Autocomplete Suggestions: ${JSON.stringify(suggestions.slice(0, 20))}
 - Heuristic Summary: ${JSON.stringify(serpSummary)}
+- Grounded Search Verification: ${JSON.stringify(groundedSearch)}
 
 Think deeply about:
 1. What is Google's ideal result for this query?
@@ -418,7 +499,7 @@ Return this exact JSON schema:
             taskName: 'SERP DNA analysis',
             contents: prompt,
             config: {
-                temperature: 1,
+                temperature: 0.2,
                 maxOutputTokens: 65536,
                 thinkingConfig: { thinkingBudget: 8192 },
             },
@@ -449,7 +530,7 @@ Return this exact JSON schema:
     }
 }
 
-async function layer3IntentDecomposition(seed, serpData, serpDna, suggestions, options = {}) {
+async function layer3IntentDecomposition(seed, serpData, serpDna, suggestions, groundedSearch, options = {}) {
     console.log(`[Layer 3] Intent Decomposition for: ${seed}`);
 
     const prompt = `
@@ -462,6 +543,7 @@ CONTEXT:
 - People Also Ask: ${JSON.stringify(serpData.paaQuestions)}
 - Related Searches: ${JSON.stringify(serpData.relatedSearches)}
 - Autocomplete: ${JSON.stringify(suggestions.slice(0, 20))}
+- Grounded Search Verification: ${JSON.stringify(groundedSearch)}
 
 Think deeply about:
 1. The full spectrum of why someone searches for "${seed}".
@@ -512,7 +594,7 @@ Return this exact JSON schema:
             taskName: 'intent decomposition',
             contents: prompt,
             config: {
-                temperature: 1,
+                temperature: 0.2,
                 maxOutputTokens: 65536,
                 thinkingConfig: { thinkingBudget: 8192 },
             },
@@ -540,7 +622,7 @@ Return this exact JSON schema:
     }
 }
 
-async function layer4KeywordUniverse(seed, serpData, serpDna, intentData, suggestions, options = {}) {
+async function layer4KeywordUniverse(seed, serpData, serpDna, intentData, suggestions, groundedSearch, options = {}) {
     console.log(`[Layer 4] Keyword Universe Expansion for: ${seed}`);
 
     const prompt = `
@@ -555,6 +637,7 @@ DATA PROVIDED:
 - SERP titles/snippets: ${JSON.stringify(serpData.organic.slice(0, 10).map((result) => ({ title: result.title, snippet: result.snippet })))}
 - SERP DNA: ${JSON.stringify(serpDna)}
 - Intent Analysis: ${JSON.stringify(intentData)}
+- Grounded Search Verification: ${JSON.stringify(groundedSearch)}
 
 RULES:
 1. Use only keywords visible in the provided data or semantically implied by titles/snippets.
@@ -601,7 +684,7 @@ Return this exact JSON schema:
             taskName: 'keyword universe expansion',
             contents: prompt,
             config: {
-                temperature: 1,
+                temperature: 0.2,
                 maxOutputTokens: 65536,
                 thinkingConfig: { thinkingBudget: 16384 },
             },
@@ -628,7 +711,7 @@ Return this exact JSON schema:
     }
 }
 
-async function layer5StrategicSynthesis(seed, serpDna, intentData, keywordUniverse, serpSummary, options = {}) {
+async function layer5StrategicSynthesis(seed, serpDna, intentData, keywordUniverse, serpSummary, groundedSearch, options = {}) {
     console.log(`[Layer 5] Strategic Synthesis for: ${seed}`);
 
     const prompt = `
@@ -643,6 +726,7 @@ ANALYSIS INPUTS:
 - Long-tail gems: ${JSON.stringify(keywordUniverse.longTailGems)}
 - Question keywords: ${JSON.stringify(keywordUniverse.questionKeywords)}
 - Heuristic Summary: ${JSON.stringify(serpSummary)}
+- Grounded Search Verification: ${JSON.stringify(groundedSearch)}
 
 Think deeply to produce the most actionable, realistic strategy. Avoid optimism bias and be honest about difficulty and timeline.
 
@@ -714,7 +798,7 @@ Return this exact JSON schema:
             taskName: 'strategic synthesis',
             contents: prompt,
             config: {
-                temperature: 1,
+                temperature: 0.2,
                 maxOutputTokens: 65536,
                 thinkingConfig: { thinkingBudget: 16384 },
             },
@@ -822,9 +906,28 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         fetchSERP(seed),
     ]);
 
+    let groundedSearch = null;
+
     await pushProgress(options.onProgress, buildProgressUpdate(1, `Fetched ${suggestions.length} autocomplete ideas and ${serpData.organic.length} top SERP results.`, {
         phase: 'mid',
     }));
+
+    if (shouldUseGroundedSearchFallback(suggestions, serpData)) {
+        await pushProgress(options.onProgress, buildProgressUpdate(1, 'Live keyword signals are thin. Verifying the query with Google Search grounding...', {
+            phase: 'mid',
+        }));
+        try {
+            const groundedSearchResponse = await fetchGroundedSearchSnapshot(seed, options);
+            groundedSearch = groundedSearchResponse.data;
+            lastAiMeta = groundedSearchResponse.meta || lastAiMeta;
+        } catch (error) {
+            console.error('[Grounded Search] Error:', error.message);
+        }
+    }
+
+    if (!hasUsableKeywordSourceData(suggestions, serpData, groundedSearch)) {
+        throw new Error(`Keyword research stopped because no reliable search data was available for "${seed}".`);
+    }
 
     const serpSummary = await analyzeSERP(serpData.organic, suggestions);
 
@@ -835,7 +938,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
     await pushProgress(options.onProgress, buildProgressUpdate(2, 'Mapping SERP DNA and authority patterns...', {
         phase: 'start',
     }));
-    const serpDnaResponse = await layer2SerpDna(seed, serpData, serpSummary, suggestions, options);
+    const serpDnaResponse = await layer2SerpDna(seed, serpData, serpSummary, suggestions, groundedSearch, options);
     const serpDna = serpDnaResponse.data;
     lastAiMeta = serpDnaResponse.meta || lastAiMeta;
     await pushProgress(options.onProgress, buildProgressUpdate(2, `Layer 2 complete. SERP personality: ${serpDna.serpPersonality}.`, {
@@ -847,7 +950,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         phase: 'start',
         provider: serpDnaResponse.meta?.provider || getRuntimeProviderLabel(),
     }));
-    const intentResponse = await layer3IntentDecomposition(seed, serpData, serpDna, suggestions, options);
+    const intentResponse = await layer3IntentDecomposition(seed, serpData, serpDna, suggestions, groundedSearch, options);
     const intentData = intentResponse.data;
     lastAiMeta = intentResponse.meta || lastAiMeta;
     await pushProgress(options.onProgress, buildProgressUpdate(3, `Layer 3 complete. Primary intent: ${intentData.primaryIntent}.`, {
@@ -859,7 +962,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         phase: 'start',
         provider: intentResponse.meta?.provider || getRuntimeProviderLabel(),
     }));
-    const keywordUniverseResponse = await layer4KeywordUniverse(seed, serpData, serpDna, intentData, suggestions, options);
+    const keywordUniverseResponse = await layer4KeywordUniverse(seed, serpData, serpDna, intentData, suggestions, groundedSearch, options);
     const keywordUniverse = keywordUniverseResponse.data;
     lastAiMeta = keywordUniverseResponse.meta || lastAiMeta;
     await pushProgress(options.onProgress, buildProgressUpdate(4, `Layer 4 complete. ${keywordUniverse.totalKeywords} keywords surfaced for prioritization.`, {
@@ -871,7 +974,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         phase: 'start',
         provider: keywordUniverseResponse.meta?.provider || getRuntimeProviderLabel(),
     }));
-    const strategyResponse = await layer5StrategicSynthesis(seed, serpDna, intentData, keywordUniverse, serpSummary, options);
+    const strategyResponse = await layer5StrategicSynthesis(seed, serpDna, intentData, keywordUniverse, serpSummary, groundedSearch, options);
     const strategy = strategyResponse.data;
     lastAiMeta = strategyResponse.meta || lastAiMeta;
     await pushProgress(options.onProgress, buildProgressUpdate(5, `Layer 5 complete. Difficulty scored at ${strategy.difficulty.score}/100.`, {
@@ -895,13 +998,17 @@ async function runKeywordResearchV2(seedInput, options = {}) {
             serpFeatures: serpData.serpFeatures,
             totalResults: serpData.totalResults,
         },
+        groundedSearch,
         serpSummary,
         serpDna,
         intentData,
         keywordUniverse,
         strategy,
         analysis: buildAnalysisMapping(strategy),
-        metadata: buildMetadata(lastAiMeta),
+        metadata: {
+            ...buildMetadata(lastAiMeta),
+            groundedSearchUsed: Boolean(groundedSearch),
+        },
     };
 }
 
