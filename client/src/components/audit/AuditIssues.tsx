@@ -1,4 +1,5 @@
 import { AlertTriangle, ChevronRight, Info, XCircle } from 'lucide-react';
+import { isHighValueUnderlinked, isIndexedOrphan } from '../../internalLinkRecommendations';
 import type { AuditResult } from '../../types';
 
 interface IssuesProps {
@@ -7,7 +8,8 @@ interface IssuesProps {
 }
 
 export default function AuditIssues({ results, onReview }: IssuesProps) {
-    const orphanCount = results.filter((result) => (result.incomingLinks || 0) === 0).length;
+    const orphanCount = results.filter((result) => isIndexedOrphan(result)).length;
+    const highValueUnderlinkedCount = results.filter((result) => isHighValueUnderlinked(result)).length;
 
     const errors = [
         {
@@ -131,13 +133,13 @@ export default function AuditIssues({ results, onReview }: IssuesProps) {
                 <div>
                     <h3 className="mb-4 flex w-fit items-center gap-2 border-2 border-black bg-blue-100 px-2 text-sm font-black uppercase tracking-wider text-black">
                         <AlertTriangle className="h-4 w-4 text-blue-600" />
-                        Link Health ({orphanCount > 0 ? 1 : 0})
+                        Link Opportunities ({(orphanCount > 0 ? 1 : 0) + (highValueUnderlinkedCount > 0 ? 1 : 0)})
                     </h3>
                     <div className="space-y-3">
                         {orphanCount > 0 && (
                             <button
                                 type="button"
-                                onClick={() => onReview('orphans')}
+                                onClick={() => onReview('links-indexed-orphans')}
                                 className="group flex w-full cursor-pointer items-center justify-between border-2 border-black bg-white p-4 text-left shadow-[4px_4px_0px_0px_#000] transition-all hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[6px_6px_0px_0px_#000] focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
                             >
                                 <div className="flex items-center gap-4">
@@ -145,14 +147,39 @@ export default function AuditIssues({ results, onReview }: IssuesProps) {
                                         <AlertTriangle className="h-5 w-5" />
                                     </div>
                                     <div>
-                                        <div className="text-lg font-black uppercase text-black">{orphanCount} Orphaned Pages</div>
-                                        <div className="mt-0.5 text-sm font-bold text-slate-600">Pages with ZERO internal links (Ghosts).</div>
+                                        <div className="text-lg font-black uppercase text-black">{orphanCount} Indexed Orphan Pages</div>
+                                        <div className="mt-0.5 text-sm font-bold text-slate-600">Indexed pages with zero internal support.</div>
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2 border-2 border-black bg-blue-100 px-4 py-2 text-sm font-black uppercase text-black transition-colors group-hover:bg-black group-hover:text-white">
                                     Connect <ChevronRight className="h-4 w-4" />
                                 </div>
                             </button>
+                        )}
+                        {highValueUnderlinkedCount > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => onReview('links-high-value-underlinked')}
+                                className="group flex w-full cursor-pointer items-center justify-between border-2 border-black bg-white p-4 text-left shadow-[4px_4px_0px_0px_#000] transition-all hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[6px_6px_0px_0px_#000] focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                            >
+                                <div className="flex items-center gap-4">
+                                    <div className="border-2 border-black bg-blue-300 p-3 text-black">
+                                        <Info className="h-5 w-5" />
+                                    </div>
+                                    <div>
+                                        <div className="text-lg font-black uppercase text-black">{highValueUnderlinkedCount} High-Value Underlinked Pages</div>
+                                        <div className="mt-0.5 text-sm font-bold text-slate-600">Pages with traffic or substantial content that only have one or two internal links.</div>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2 border-2 border-black bg-blue-100 px-4 py-2 text-sm font-black uppercase text-black transition-colors group-hover:bg-black group-hover:text-white">
+                                    Review <ChevronRight className="h-4 w-4" />
+                                </div>
+                            </button>
+                        )}
+                        {orphanCount === 0 && highValueUnderlinkedCount === 0 && (
+                            <div className="border-2 border-black bg-slate-50 p-6 text-center font-bold italic text-slate-500 shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)]">
+                                No priority internal linking gaps found.
+                            </div>
                         )}
                     </div>
                 </div>

@@ -128,8 +128,31 @@ export interface PSIData {
     };
 }
 
+export interface StructuredDataIssue {
+    code: string;
+    severity: 'error' | 'warning' | 'info';
+    type: string;
+    message: string;
+}
+
+export interface StructuredDataSummary {
+    hasStructuredData: boolean;
+    valid: boolean;
+    totalItems: number;
+    jsonLdCount: number;
+    microdataCount: number;
+    itemTypes: string[];
+    richResultTypes: string[];
+    parseErrors: string[];
+    issues: StructuredDataIssue[];
+}
+
 export interface AuditResult {
     url: string;
+    finalUrl?: string;
+    httpStatus?: number;
+    redirected?: boolean;
+    redirectCount?: number;
     status: string;
     coverageState: string;
     indexingState: string;
@@ -140,10 +163,15 @@ export interface AuditResult {
     psi_data?: PSIData;
     title?: string;
     description?: string;
+    canonicalUrl?: string;
+    canonicalCount?: number;
+    canonicalIssues?: string[];
+    structuredData?: StructuredDataSummary;
     h1Count?: number;
     wordCount?: number;
     internalLinksOut?: number;
     externalLinksOut?: number;
+    internalLinks?: string[];
     incomingLinks?: number;
     brokenLinks?: string[];
 }
@@ -170,6 +198,33 @@ export interface AuditJob {
     startedAt?: string | null;
     completedAt?: string | null;
     result?: AuditResult[] | null;
+}
+
+export interface KeywordJobProgress {
+    stage: string;
+    label: string;
+    currentLayer: number;
+    totalLayers: number;
+    completed: number;
+    total: number;
+    percent: number;
+    message: string;
+    provider?: string;
+}
+
+export interface KeywordJob {
+    id: string;
+    seed: string;
+    projectId?: string | null;
+    ownerEmail: string;
+    status: 'queued' | 'running' | 'completed' | 'failed';
+    progress: KeywordJobProgress;
+    error: string;
+    createdAt: string;
+    updatedAt: string;
+    startedAt?: string | null;
+    completedAt?: string | null;
+    result?: KeywordDataV2 | null;
 }
 
 export interface SerpSummary {
@@ -376,6 +431,8 @@ export interface KeywordDataV2 {
         model: string;
         layers: number;
         timestamp: string;
+        provider?: string;
+        backend?: string;
     };
 }
 

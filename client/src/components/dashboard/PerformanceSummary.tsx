@@ -1,4 +1,7 @@
 import { Area, AreaChart, ResponsiveContainer } from 'recharts';
+import { hasCriticalCanonicalIssue, hasWarningCanonicalIssue } from '../../canonicalAudit';
+import { hasLinkingGapWarning } from '../../internalLinkRecommendations';
+import { hasStructuredDataError, hasStructuredDataWarning } from '../../structuredDataAudit';
 import type { AuditResult } from '../../types';
 
 interface PerformanceSummaryProps {
@@ -19,10 +22,22 @@ function calculateScore(auditResults: AuditResult[]) {
 
     let score = 100;
     const total = auditResults.length;
-    const criticalCount = auditResults.filter((result) => result.status !== 'PASS' || result.h1Count === 0).length;
+    const criticalCount = auditResults.filter((result) =>
+        result.status !== 'PASS'
+        || result.h1Count === 0
+        || hasCriticalCanonicalIssue(result)
+        || hasStructuredDataError(result)
+    ).length;
     score -= (criticalCount / total) * 40;
 
-    const warningCount = auditResults.filter((result) => result.status === 'PARTIAL' || !result.description || (result.wordCount || 0) < 300).length;
+    const warningCount = auditResults.filter((result) =>
+        result.status === 'PARTIAL'
+        || !result.description
+        || (result.wordCount || 0) < 300
+        || hasWarningCanonicalIssue(result)
+        || hasStructuredDataWarning(result)
+        || hasLinkingGapWarning(result)
+    ).length;
     score -= (warningCount / total) * 30;
 
     const avgPsi = auditResults.reduce((acc, result) => acc + getNormalizedDesktopPsi(result), 0) / total;

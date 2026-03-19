@@ -10,6 +10,7 @@ const { connectMongo } = require('./db');
 
 const keywords = require('./keywords');
 const keywordHistory = require('./keywordHistory');
+const keywordJobs = require('./keywordJobs');
 const analyze = require('./analyze');
 const history = require('./history');
 const projects = require('./projects');
@@ -115,6 +116,61 @@ app.get('/health', (req, res) => {
 app.post('/api/keywords/research', userAuth.requireAuth, userAuth.requireAccess('keywords'), keywords.researchKeyword);
 app.post('/api/keywords/research-v2', userAuth.requireAuth, userAuth.requireAccess('keywords'), keywords.researchKeywordV2);
 app.post('/api/keywords/analyze-content', userAuth.requireAuth, userAuth.requireAccess('keywords'), keywords.analyzePageContent);
+
+app.get('/api/keywords/jobs', userAuth.requireAuth, userAuth.requireAccess('keywords'), async (req, res) => {
+    try {
+        res.json(await keywordJobs.listKeywordJobs(req.user, { projectId: req.query.projectId }));
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/keywords/jobs', userAuth.requireAuth, userAuth.requireAccess('keywords'), async (req, res) => {
+    try {
+        const seed = typeof req.body?.seed === 'string' ? req.body.seed.trim() : '';
+        if (!seed) {
+            return res.status(400).json({ error: 'Seed keyword required' });
+        }
+
+        const job = await keywordJobs.createKeywordJob(seed, req.user, { projectId: req.body?.projectId });
+        return res.status(202).json(job);
+    } catch (e) {
+        return res.status(400).json({ error: e.message });
+    }
+});
+
+app.get('/api/keywords/jobs/:jobId', userAuth.requireAuth, userAuth.requireAccess('keywords'), async (req, res) => {
+    try {
+        const job = await keywordJobs.getKeywordJob(req.params.jobId, req.user, { projectId: req.query.projectId });
+        if (!job) {
+            return res.status(404).json({ error: 'Keyword job not found' });
+        }
+
+        return res.json(job);
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/keywords/jobs/:jobId/result', userAuth.requireAuth, userAuth.requireAccess('keywords'), async (req, res) => {
+    try {
+        const job = await keywordJobs.getKeywordJob(req.params.jobId, req.user, {
+            projectId: req.query.projectId,
+            includeResult: true,
+        });
+        if (!job) {
+            return res.status(404).json({ error: 'Keyword job not found' });
+        }
+
+        if (job.status !== 'completed') {
+            return res.status(409).json({ error: 'Keyword job is not complete yet' });
+        }
+
+        return res.json(job);
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
 
 app.get('/api/keywords/history', userAuth.requireAuth, userAuth.requireAccess('keywords'), async (req, res) => {
     try {
@@ -337,6 +393,7 @@ async function startServer() {
         await connectMongo();
         await projects.initializeProjects();
         await userAuth.initializeUserAccess();
+        await keywordJobs.initializeKeywordJobs();
         await auditJobs.initializeAuditJobs();
         await auth.initializeAuth();
 

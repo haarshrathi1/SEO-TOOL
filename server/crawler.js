@@ -5,6 +5,9 @@ const cheerio = require('cheerio');
 const { URL } = require('url');
 const gsc = require('./gsc');
 const psi = require('./psi');
+const { summarizeStructuredData } = require('./structuredData');
+
+const MAX_INTERNAL_LINK_TARGETS = 100;
 
 const fetchSitemapUrls = async (siteUrl) => {
     try {
@@ -28,6 +31,192 @@ const fetchSitemapUrls = async (siteUrl) => {
         return [siteUrl];
     }
 };
+
+function normalizeComparableUrl(value) {
+    if (typeof value !== 'string' || !value.trim()) {
+        return '';
+    }
+
+    try {
+        const parsed = new URL(value);
+        parsed.hash = '';
+        parsed.protocol = parsed.protocol.toLowerCase();
+        parsed.hostname = parsed.hostname.toLowerCase();
+
+        const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+        return `${parsed.protocol}//${parsed.host}${pathname}${parsed.search}`;
+    } catch {
+        return value.trim().replace(/\/+$/, '') || value.trim();
+    }
+}
+
+function isInternalUrl(value, siteUrl) {
+    try {
+        const candidate = new URL(value);
+        const site = new URL(siteUrl);
+        return candidate.origin.toLowerCase() === site.origin.toLowerCase();
+    } catch {
+        return false;
+    }
+}
+
+function uniqueNormalizedLinks(links, siteUrl, options = {}) {
+    const includeInternal = options.includeInternal !== false;
+    const includeExternal = options.includeExternal === true;
+    const limit = Number(options.limit || MAX_INTERNAL_LINK_TARGETS);
+    const seen = new Set();
+    const normalized = [];
+
+    for (const link of Array.isArray(links) ? links : []) {
+        const normalizedLink = normalizeComparableUrl(link);
+        if (!normalizedLink || seen.has(normalizedLink)) {
+            continue;
+        }
+
+        const internal = isInternalUrl(normalizedLink, siteUrl);
+        if ((internal && !includeInternal) || (!internal && !includeExternal)) {
+            continue;
+        }
+
+        seen.add(normalizedLink);
+        normalized.push(normalizedLink);
+
+        if (normalized.length >= limit) {
+            break;
+        }
+    }
+
+    return normalized;
+}
+
+function sameOrigin(left, right) {
+    try {
+        return new URL(left).origin.toLowerCase() === new URL(right).origin.toLowerCase();
+    } catch {
+        return false;
+    }
+}
+
+function findCycleNodes(graph) {
+    const visited = new Set();
+    const active = new Set();
+    const stack = [];
+    const cycleNodes = new Set();
+
+    function visit(node) {
+        if (active.has(node)) {
+            const startIndex = stack.indexOf(node);
+            if (startIndex >= 0) {
+                for (let index = startIndex; index < stack.length; index += 1) {
+                    cycleNodes.add(stack[index]);
+                }
+            }
+            return;
+        }
+
+        if (visited.has(node)) {
+            return;
+        }
+
+        visited.add(node);
+        active.add(node);
+        stack.push(node);
+
+        const next = graph.get(node);
+        if (next) {
+            visit(next);
+        }
+
+        stack.pop();
+        active.delete(node);
+    }
+
+    for (const node of graph.keys()) {
+        visit(node);
+    }
+
+    return cycleNodes;
+}
+
+function annotateCanonicalSignals(results) {
+    const requestedUrlMap = new Map();
+    const finalUrlMap = new Map();
+    const canonicalGraph = new Map();
+
+    results.forEach((result) => {
+        const requestedKey = normalizeComparableUrl(result.url);
+        const finalKey = normalizeComparableUrl(result.finalUrl || result.url);
+
+        if (requestedKey) {
+            requestedUrlMap.set(requestedKey, result);
+        }
+
+        if (finalKey && !finalUrlMap.has(finalKey)) {
+            finalUrlMap.set(finalKey, result);
+        }
+    });
+
+    results.forEach((result) => {
+        const finalKey = normalizeComparableUrl(result.finalUrl || result.url);
+        const canonicalKey = normalizeComparableUrl(result.canonicalUrl || '');
+
+        if (finalKey && canonicalKey && canonicalKey !== finalKey && finalUrlMap.has(canonicalKey)) {
+            canonicalGraph.set(finalKey, canonicalKey);
+        }
+    });
+
+    const cycleNodes = findCycleNodes(canonicalGraph);
+
+    results.forEach((result) => {
+        const issues = new Set();
+        const requestedKey = normalizeComparableUrl(result.url);
+        const finalKey = normalizeComparableUrl(result.finalUrl || result.url);
+        const canonicalKey = normalizeComparableUrl(result.canonicalUrl || '');
+
+        if (result.redirected) {
+            issues.add('redirected-url');
+        }
+
+        if ((result.redirectCount || 0) > 1) {
+            issues.add('redirect-chain');
+        }
+
+        if (!canonicalKey) {
+            issues.add('missing-canonical');
+        }
+
+        if ((result.canonicalCount || 0) > 1) {
+            issues.add('multiple-canonicals');
+        }
+
+        if (canonicalKey) {
+            if (canonicalKey !== finalKey) {
+                issues.add('canonical-mismatch');
+            }
+
+            if (!sameOrigin(result.canonicalUrl, result.finalUrl || result.url)) {
+                issues.add('cross-domain-canonical');
+            }
+
+            const canonicalTarget = requestedUrlMap.get(canonicalKey);
+            if (canonicalTarget?.redirected) {
+                issues.add('canonical-target-redirects');
+            }
+
+            if (cycleNodes.has(finalKey)) {
+                issues.add('canonical-loop');
+            }
+
+            if (requestedKey && canonicalKey === requestedKey && requestedKey !== finalKey && result.redirected) {
+                issues.add('canonical-target-redirects');
+            }
+        }
+
+        result.canonicalIssues = [...issues];
+    });
+
+    return results;
+}
 
 function getCrawlOptions(options) {
     if (typeof options === 'number') {
@@ -134,6 +323,7 @@ const crawlSite = async (startUrl, options = {}) => {
     const browser = await launchBrowser();
     let processedCount = 0;
     const totalCount = urlsToAudit.length;
+    const siteOrigin = new URL(startUrl).origin;
 
     try {
         const batchSize = 3;
@@ -148,7 +338,18 @@ const crawlSite = async (startUrl, options = {}) => {
                 });
 
                 const crawlPromise = (async () => {
-                    let pageData = { title: '', description: '', h1s: [], wordCount: 0, links: [] };
+                    let pageData = {
+                        title: '',
+                        description: '',
+                        h1s: [],
+                        wordCount: 0,
+                        links: [],
+                        canonicals: [],
+                        structuredData: { jsonLdBlocks: [], microdataTypes: [] },
+                        finalUrl: url,
+                        httpStatus: 0,
+                        redirectCount: 0,
+                    };
                     let page = null;
                     try {
                         page = await browser.newPage();
@@ -158,16 +359,42 @@ const crawlSite = async (startUrl, options = {}) => {
                             else req.continue();
                         });
 
-                        await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
-                        pageData = await page.evaluate(() => {
+                        const response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
+                        const finalUrl = page.url();
+                        const redirectCount = response?.request()?.redirectChain()?.length || 0;
+                        const extracted = await page.evaluate(() => {
                             const title = document.title;
                             const description = document.querySelector('meta[name="description"]')?.content || '';
                             const h1s = Array.from(document.querySelectorAll('h1')).map((el) => el.textContent.trim());
                             const bodyText = document.body.innerText || '';
                             const wordCount = bodyText.split(/\s+/).length;
                             const links = Array.from(document.querySelectorAll('a')).map((anchor) => anchor.href).filter((href) => href.startsWith('http'));
-                            return { title, description, h1s, wordCount, links };
+                            const canonicals = Array.from(document.querySelectorAll('link[rel="canonical"]'))
+                                .map((element) => element.getAttribute('href') || '')
+                                .map((href) => href ? new URL(href, document.baseURI).href : '')
+                                .filter(Boolean);
+                            const jsonLdBlocks = Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
+                                .map((element) => element.textContent || '')
+                                .filter((text) => text.trim().length > 0);
+                            const microdataTypes = Array.from(document.querySelectorAll('[itemscope][itemtype]'))
+                                .map((element) => element.getAttribute('itemtype') || '')
+                                .filter(Boolean);
+                            return {
+                                title,
+                                description,
+                                h1s,
+                                wordCount,
+                                links,
+                                canonicals,
+                                structuredData: { jsonLdBlocks, microdataTypes },
+                            };
                         });
+                        pageData = {
+                            ...extracted,
+                            finalUrl,
+                            httpStatus: response?.status?.() || 0,
+                            redirectCount,
+                        };
                     } catch (err) {
                         console.error(`Crawl failed for ${url}:`, err.message);
                     } finally {
@@ -177,20 +404,38 @@ const crawlSite = async (startUrl, options = {}) => {
                 })();
 
                 const [inspectionData, pageData] = await Promise.all([inspectPromise, crawlPromise]);
+                const internalLinks = uniqueNormalizedLinks(pageData.links, siteOrigin, {
+                    includeInternal: true,
+                    includeExternal: false,
+                });
+                const externalLinks = uniqueNormalizedLinks(pageData.links, siteOrigin, {
+                    includeInternal: false,
+                    includeExternal: true,
+                });
+                const structuredData = summarizeStructuredData(pageData.structuredData);
 
                 if (inspectionData.error) {
                     results.push({
                         url,
+                        finalUrl: pageData.finalUrl || url,
+                        httpStatus: pageData.httpStatus || 0,
+                        redirected: normalizeComparableUrl(pageData.finalUrl || url) !== normalizeComparableUrl(url),
+                        redirectCount: pageData.redirectCount || 0,
                         status: 'FAIL',
                         coverageState: inspectionData.error,
                         indexingState: 'ERROR',
                         lastCrawlTime: '-',
                         title: pageData.title,
                         description: pageData.description,
+                        canonicalUrl: pageData.canonicals?.[0] || '',
+                        canonicalCount: pageData.canonicals?.length || 0,
+                        canonicalIssues: [],
+                        structuredData,
                         h1Count: pageData.h1s?.length || 0,
                         wordCount: pageData.wordCount || 0,
-                        internalLinksOut: 0,
-                        externalLinksOut: 0,
+                        internalLinksOut: internalLinks.length,
+                        externalLinksOut: externalLinks.length,
+                        internalLinks,
                         incomingLinks: 0,
                         brokenLinks: [],
                     });
@@ -235,12 +480,12 @@ const crawlSite = async (startUrl, options = {}) => {
                         psiData = null;
                     }
 
-                    const domain = new URL(startUrl).hostname;
-                    const internalLinks = (pageData.links || []).filter((link) => link.includes(domain));
-                    const externalLinks = (pageData.links || []).filter((link) => !link.includes(domain));
-
                     results.push({
                         url,
+                        finalUrl: pageData.finalUrl || url,
+                        httpStatus: pageData.httpStatus || 0,
+                        redirected: normalizeComparableUrl(pageData.finalUrl || url) !== normalizeComparableUrl(url),
+                        redirectCount: pageData.redirectCount || 0,
                         status: finalStatus,
                         coverageState: finalCoverage,
                         indexingState: indexStatus.indexingState || '-',
@@ -250,11 +495,15 @@ const crawlSite = async (startUrl, options = {}) => {
                         psi_data: psiData,
                         title: pageData.title,
                         description: pageData.description,
+                        canonicalUrl: pageData.canonicals?.[0] || '',
+                        canonicalCount: pageData.canonicals?.length || 0,
+                        canonicalIssues: [],
+                        structuredData,
                         h1Count: pageData.h1s.length,
                         wordCount: pageData.wordCount,
                         internalLinksOut: internalLinks.length,
                         externalLinksOut: externalLinks.length,
-                        rawInternalLinks: internalLinks,
+                        internalLinks,
                         incomingLinks: 0,
                         brokenLinks: [],
                     });
@@ -284,22 +533,22 @@ const crawlSite = async (startUrl, options = {}) => {
         });
 
         const urlInLinks = {};
-        const knownUrls = new Set(results.map((result) => result.url));
+        const knownUrls = new Map(results.map((result) => [normalizeComparableUrl(result.url), result.url]));
 
         results.forEach((page) => {
-            if (page.rawInternalLinks) {
-                page.rawInternalLinks.forEach((link) => {
-                    if (knownUrls.has(link)) {
-                        urlInLinks[link] = (urlInLinks[link] || 0) + 1;
-                    }
-                });
-            }
+            (page.internalLinks || []).forEach((link) => {
+                const matchedUrl = knownUrls.get(normalizeComparableUrl(link));
+                if (matchedUrl) {
+                    urlInLinks[matchedUrl] = (urlInLinks[matchedUrl] || 0) + 1;
+                }
+            });
         });
 
         results.forEach((page) => {
             page.incomingLinks = urlInLinks[page.url] || 0;
-            delete page.rawInternalLinks;
         });
+
+        annotateCanonicalSignals(results);
     } finally {
         await browser.close();
     }
@@ -336,4 +585,14 @@ const formatCoverageState = (state) => {
     return map[state] || state;
 };
 
-module.exports = { crawlSite };
+module.exports = {
+    crawlSite,
+    __internal: {
+        annotateCanonicalSignals,
+        findCycleNodes,
+        normalizeComparableUrl,
+        isInternalUrl,
+        sameOrigin,
+        uniqueNormalizedLinks,
+    },
+};

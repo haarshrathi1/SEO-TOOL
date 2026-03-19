@@ -1,4 +1,7 @@
 import { Pie, PieChart, ResponsiveContainer, Cell } from 'recharts';
+import { hasCriticalCanonicalIssue, hasWarningCanonicalIssue } from '../../canonicalAudit';
+import { hasLinkingGapWarning } from '../../internalLinkRecommendations';
+import { hasStructuredDataError, hasStructuredDataWarning } from '../../structuredDataAudit';
 import type { AuditResult } from '../../types';
 
 interface HealthGaugeProps {
@@ -20,11 +23,21 @@ export default function HealthGauge({ results }: HealthGaugeProps) {
         let score = 100;
         const total = auditResults.length;
 
-        const criticalCount = auditResults.filter((result) => result.status !== 'PASS' || result.h1Count === 0).length;
+        const criticalCount = auditResults.filter((result) =>
+            result.status !== 'PASS'
+            || result.h1Count === 0
+            || hasCriticalCanonicalIssue(result)
+            || hasStructuredDataError(result)
+        ).length;
         score -= (criticalCount / total) * 40;
 
         const warningCount = auditResults.filter((result) =>
-            result.status === 'PARTIAL' || !result.description || (result.wordCount || 0) < 300,
+            result.status === 'PARTIAL'
+            || !result.description
+            || (result.wordCount || 0) < 300
+            || hasWarningCanonicalIssue(result)
+            || hasStructuredDataWarning(result)
+            || hasLinkingGapWarning(result),
         ).length;
         score -= (warningCount / total) * 30;
 
@@ -40,9 +53,24 @@ export default function HealthGauge({ results }: HealthGaugeProps) {
         { name: 'Remaining', value: 100 - healthScore },
     ];
 
-    const criticalErrors = results.filter((result) => result.status !== 'PASS' || result.h1Count === 0).length;
-    const warnings = results.filter((result) => result.status === 'PARTIAL' || !result.description).length;
-    const healthy = results.filter((result) => result.status === 'PASS' && result.description && result.h1Count === 1).length;
+    const criticalErrors = results.filter((result) => result.status !== 'PASS' || result.h1Count === 0 || hasCriticalCanonicalIssue(result) || hasStructuredDataError(result)).length;
+    const warnings = results.filter((result) =>
+        result.status === 'PARTIAL'
+        || !result.description
+        || hasWarningCanonicalIssue(result)
+        || hasStructuredDataWarning(result)
+        || hasLinkingGapWarning(result)
+    ).length;
+    const healthy = results.filter((result) =>
+        result.status === 'PASS'
+        && result.description
+        && result.h1Count === 1
+        && !hasCriticalCanonicalIssue(result)
+        && !hasWarningCanonicalIssue(result)
+        && !hasStructuredDataError(result)
+        && !hasStructuredDataWarning(result)
+        && !hasLinkingGapWarning(result)
+    ).length;
 
     return (
         <div className="bg-white p-6 border-2 border-black shadow-[8px_8px_0px_0px_#000] flex flex-col justify-between relative overflow-hidden group hover:-translate-y-1 transition-transform h-full">

@@ -10,6 +10,7 @@
     KeywordData,
     KeywordDataV2,
     KeywordHistoryItem,
+    KeywordJob,
     KeywordScanResult,
     Project,
     ViewerRecord,
@@ -148,6 +149,17 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ seed }),
     }),
+
+    createKeywordJob: (seed: string, projectId?: string | null) => request<KeywordJob>('/api/keywords/jobs', {
+        method: 'POST',
+        body: JSON.stringify({ seed, projectId: projectId ?? null }),
+    }),
+
+    getKeywordJobs: (projectId?: string | null) => request<KeywordJob[]>(`/api/keywords/jobs${createQuery({ projectId: projectId || undefined })}`),
+
+    getKeywordJob: (jobId: string, projectId?: string | null) => request<KeywordJob>(`/api/keywords/jobs/${encodeURIComponent(jobId)}${createQuery({ projectId: projectId || undefined })}`),
+
+    getKeywordJobResult: (jobId: string, projectId?: string | null) => request<KeywordJob>(`/api/keywords/jobs/${encodeURIComponent(jobId)}/result${createQuery({ projectId: projectId || undefined })}`),
 
     getKeywordHistory: (projectId?: string | null) => request<KeywordHistoryItem[]>(`/api/keywords/history${createQuery({ projectId: projectId || undefined })}`),
 

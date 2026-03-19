@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { api } from './api';
 import { downloadCsv } from './csv';
 import { useToast } from './toast';
-import type { KeywordDataV2, KeywordHistoryItem, KeywordItem, KeywordScanResult, StrategicSynthesis } from './types';
+import type { KeywordDataV2, KeywordHistoryItem, KeywordItem, KeywordJob, KeywordScanResult, StrategicSynthesis } from './types';
 
 const LAYER_STEPS = [
     { id: 1, label: 'Collecting Data', desc: 'Autocomplete, SERP, PAA, related searches...', icon: Search },
@@ -91,6 +91,70 @@ function isKeywordDataV2(item: KeywordHistoryItem): item is KeywordDataV2 & { id
     return 'keywordUniverse' in item && 'strategy' in item && 'metadata' in item;
 }
 
+interface KeywordRuntimeLogEntry {
+    id: string;
+    status: KeywordJob['status'];
+    stage: string;
+    message: string;
+    currentLayer: number;
+    completed: number;
+    total: number;
+    percent: number;
+    provider: string;
+    elapsedMs: number;
+}
+
+const ACTIVE_KEYWORD_STATUSES: KeywordJob['status'][] = ['queued', 'running'];
+const MAX_RUNTIME_LOG_ITEMS = 10;
+
+function isActiveKeywordJob(job: KeywordJob | null | undefined) {
+    return Boolean(job && ACTIVE_KEYWORD_STATUSES.includes(job.status));
+}
+
+function getKeywordAnchorTimestamp(job: KeywordJob) {
+    const source = job.startedAt || job.createdAt;
+    const timestamp = source ? new Date(source).getTime() : Date.now();
+    return Number.isFinite(timestamp) ? timestamp : Date.now();
+}
+
+function getKeywordElapsedMs(job: KeywordJob) {
+    return Math.max(0, Date.now() - getKeywordAnchorTimestamp(job));
+}
+
+function formatElapsedTime(elapsedMs: number) {
+    const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function getKeywordRuntimeSignature(job: KeywordJob) {
+    return [
+        job.status,
+        job.progress.stage,
+        job.progress.label,
+        job.progress.message,
+        job.progress.currentLayer,
+        job.progress.completed,
+        job.progress.percent,
+        job.progress.provider || '',
+    ].join('::');
+}
+
+function getLatestActiveKeywordJob(jobs: KeywordJob[]) {
+    return [...jobs]
+        .filter((job) => isActiveKeywordJob(job))
+        .sort((left, right) => getKeywordAnchorTimestamp(right) - getKeywordAnchorTimestamp(left))[0] || null;
+}
+
+function getJobLayerIndex(job: KeywordJob | null) {
+    if (!job) {
+        return 0;
+    }
+
+    return Math.max(0, Math.min(LAYER_STEPS.length - 1, (job.progress.currentLayer || 1) - 1));
+}
+
 const intentColors: Record<string, string> = {
     informational: 'bg-blue-100 text-blue-700', commercial: 'bg-amber-100 text-amber-700',
     transactional: 'bg-emerald-100 text-emerald-700', navigational: 'bg-violet-100 text-violet-700',
@@ -160,14 +224,19 @@ export default function KeywordResearch() {
     const [saving, setSaving] = useState(false);
     const [showHistory, setShowHistory] = useState(false);
     const [currentLayer, setCurrentLayer] = useState(0);
+    const [activeJob, setActiveJob] = useState<KeywordJob | null>(null);
+    const [runtimeLog, setRuntimeLog] = useState<KeywordRuntimeLogEntry[]>([]);
+    const [elapsedMs, setElapsedMs] = useState(0);
     const [scanResult, setScanResult] = useState<KeywordScanResult | null>(null);
     const [scanningUrl, setScanningUrl] = useState<string | null>(null);
     const [kwFilter, setKwFilter] = useState('all');
     const [kwSort, setKwSort] = useState<'opportunityScore' | 'term'>('opportunityScore');
     const [activeBanter, setActiveBanter] = useState('');
+    const pollRef = useRef<number | null>(null);
     const banterIndexRef = useRef<Record<number, number>>({});
-
-    useEffect(() => { void fetchHistory(); }, []);
+    const runtimeJobIdRef = useRef('');
+    const runtimeSignatureRef = useRef('');
+    const runtimeLogCountRef = useRef(0);
 
     useEffect(() => {
         if (!loading || currentLayer < 0 || currentLayer >= LAYER_STEPS.length) {
@@ -193,6 +262,78 @@ export default function KeywordResearch() {
         return () => window.clearInterval(banterTimer);
     }, [loading, currentLayer]);
 
+    useEffect(() => {
+        if (!activeJob || !isActiveKeywordJob(activeJob)) {
+            return;
+        }
+
+        setElapsedMs(getKeywordElapsedMs(activeJob));
+        const timer = window.setInterval(() => {
+            setElapsedMs(getKeywordElapsedMs(activeJob));
+        }, 1000);
+
+        return () => window.clearInterval(timer);
+    }, [activeJob]);
+
+    const clearPoll = () => {
+        if (pollRef.current) {
+            window.clearInterval(pollRef.current);
+            pollRef.current = null;
+        }
+    };
+
+    const clearRuntimeState = () => {
+        runtimeJobIdRef.current = '';
+        runtimeSignatureRef.current = '';
+        runtimeLogCountRef.current = 0;
+        setActiveJob(null);
+        setRuntimeLog([]);
+        setElapsedMs(0);
+    };
+
+    const trackActiveJob = (job: KeywordJob, options: { resetLog?: boolean } = {}) => {
+        const shouldResetLog = options.resetLog === true || runtimeJobIdRef.current !== job.id;
+
+        if (shouldResetLog) {
+            runtimeJobIdRef.current = job.id;
+            runtimeSignatureRef.current = '';
+            runtimeLogCountRef.current = 0;
+        }
+
+        setActiveJob(job);
+        setCurrentLayer(getJobLayerIndex(job));
+        setElapsedMs(getKeywordElapsedMs(job));
+        setLoading(isActiveKeywordJob(job));
+
+        const nextSignature = getKeywordRuntimeSignature(job);
+        if (runtimeSignatureRef.current === nextSignature) {
+            if (shouldResetLog) {
+                setRuntimeLog([]);
+            }
+            return;
+        }
+
+        runtimeSignatureRef.current = nextSignature;
+        const entry: KeywordRuntimeLogEntry = {
+            id: `${job.id}-${runtimeLogCountRef.current}`,
+            status: job.status,
+            stage: job.progress.label || job.progress.stage,
+            message: job.progress.message,
+            currentLayer: job.progress.currentLayer,
+            completed: job.progress.completed,
+            total: job.progress.total,
+            percent: job.progress.percent,
+            provider: job.progress.provider || '',
+            elapsedMs: getKeywordElapsedMs(job),
+        };
+        runtimeLogCountRef.current += 1;
+
+        setRuntimeLog((current) => {
+            const nextEntries = shouldResetLog ? [] : current;
+            return [...nextEntries, entry].slice(-MAX_RUNTIME_LOG_ITEMS);
+        });
+    };
+
     const fetchHistory = async () => {
         try {
             setHistory(await api.getKeywordHistory());
@@ -200,6 +341,66 @@ export default function KeywordResearch() {
             console.error('Failed to load keyword history:', error);
         }
     };
+
+    const syncKeywordJob = async (jobId: string) => {
+        try {
+            const job = await api.getKeywordJob(jobId);
+            trackActiveJob(job);
+
+            if (job.status === 'completed') {
+                clearPoll();
+                const completedJob = await api.getKeywordJobResult(jobId);
+                trackActiveJob(completedJob);
+                if (completedJob.result) {
+                    setData(completedJob.result);
+                    setSeed(completedJob.result.seed);
+                }
+                setLoading(false);
+                return;
+            }
+
+            if (job.status === 'failed') {
+                clearPoll();
+                setLoading(false);
+                push({ tone: 'error', title: 'Keyword research failed', description: job.error || job.progress.message || 'The background job stopped unexpectedly.' });
+            }
+        } catch (error) {
+            clearPoll();
+            setLoading(false);
+            push({ tone: 'error', title: 'Job sync failed', description: getErrorMessage(error, 'Unable to read keyword job progress.') });
+        }
+    };
+
+    const beginPolling = (jobId: string) => {
+        clearPoll();
+        void syncKeywordJob(jobId);
+        pollRef.current = window.setInterval(() => {
+            void syncKeywordJob(jobId);
+        }, 2500);
+    };
+
+    useEffect(() => {
+        void fetchHistory();
+        void (async () => {
+            try {
+                const jobs = await api.getKeywordJobs();
+                const nextActiveJob = getLatestActiveKeywordJob(jobs);
+                if (!nextActiveJob) {
+                    return;
+                }
+
+                trackActiveJob(nextActiveJob, { resetLog: true });
+                setLoading(true);
+                beginPolling(nextActiveJob.id);
+            } catch (error) {
+                console.error('Failed to resume keyword jobs:', error);
+            }
+        })();
+
+        return () => {
+            clearPoll();
+        };
+    }, []);
 
     const handleSave = async () => {
         if (!data) return;
@@ -222,6 +423,9 @@ export default function KeywordResearch() {
             return;
         }
 
+        clearPoll();
+        clearRuntimeState();
+        setLoading(false);
         setData(item);
         setSeed(item.seed);
         setShowHistory(false);
@@ -240,18 +444,21 @@ export default function KeywordResearch() {
 
     const handleSearch = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!seed.trim()) return;
-        setLoading(true); setData(null); setCurrentLayer(0);
-        const layerTimer = setInterval(() => setCurrentLayer(p => Math.min(p + 1, 4)), 8000);
+        const nextSeed = seed.trim();
+        if (!nextSeed) return;
+
+        clearPoll();
+        clearRuntimeState();
+        setLoading(true);
+        setData(null);
+        setCurrentLayer(0);
         try {
-            const json = await api.researchKeywordsV2(seed);
-            setData(json);
-            setCurrentLayer(5);
+            const job = await api.createKeywordJob(nextSeed);
+            trackActiveJob(job, { resetLog: true });
+            beginPolling(job.id);
         } catch (error) {
-            push({ tone: 'error', title: 'Analysis failed', description: getErrorMessage(error, 'Please try again.') });
-        } finally {
-            clearInterval(layerTimer);
             setLoading(false);
+            push({ tone: 'error', title: 'Analysis failed', description: getErrorMessage(error, 'Please try again.') });
         }
     };
 
@@ -271,6 +478,10 @@ export default function KeywordResearch() {
         return acc;
     }, {});
     const dominantIntent = Object.entries(intentMix).sort(([, a], [, b]) => b - a)[0] || null;
+    const runtimeEntries = [...runtimeLog].reverse();
+    const activeLayerConfig = LAYER_STEPS[currentLayer] || LAYER_STEPS[0];
+    const ActiveLayerIcon = activeLayerConfig?.icon || Layers;
+    const providerLabel = activeJob?.progress.provider || data?.metadata?.provider || 'Vertex AI primary';
 
     const exportKeywordCsv = () => {
         if (!data) return;
@@ -402,7 +613,7 @@ export default function KeywordResearch() {
                                     {data?.intentData?.primaryIntent ? formatLabel(data.intentData.primaryIntent) : 'Map the dominant search intent'}
                                 </p>
                                 <p className="mt-1 text-sm text-slate-500">
-                                    {data?.intentData?.intentInsight || 'Separate what searchers want, what Google rewards, and where your content can win.'}
+                                    <span className="line-clamp-4">{data?.intentData?.intentInsight || 'Separate what searchers want, what Google rewards, and where your content can win.'}</span>
                                 </p>
                             </div>
                             <div className="rounded-2xl border border-white/70 bg-white/80 p-4 shadow-sm backdrop-blur-sm">
@@ -459,41 +670,175 @@ export default function KeywordResearch() {
                 {/* Loading */}
                 <AnimatePresence>
                     {loading && (
-                        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="glass-card p-8 max-w-2xl mx-auto">
-                            <div className="space-y-4">
-                                {LAYER_STEPS.map((step, i) => {
-                                    const Icon = step.icon;
-                                    const active = i === currentLayer;
-                                    const done = i < currentLayer;
-                                    return (
-                                        <div key={step.id} className={`flex items-center gap-4 p-3 rounded-xl transition-all duration-500 ${active ? 'bg-indigo-50 border border-indigo-100' : done ? 'opacity-60' : 'opacity-30'}`}>
-                                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${done ? 'bg-emerald-100' : active ? 'bg-indigo-100 animate-pulse' : 'bg-slate-100'}`}>
-                                                {done ? <Check className="w-5 h-5 text-emerald-600" /> : <Icon className={`w-5 h-5 ${active ? 'text-indigo-600' : 'text-slate-400'}`} />}
+                        <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0 }}
+                            className="premium-card overflow-hidden border border-indigo-100/80 bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.12),_transparent_38%),linear-gradient(135deg,_rgba(255,255,255,0.98),_rgba(238,242,255,0.94))]"
+                        >
+                            <div className="grid gap-6 p-6 md:p-8 lg:grid-cols-[1.1fr_0.9fr]">
+                                <div className="space-y-6">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="premium-badge border border-indigo-100 bg-indigo-50 text-indigo-700">
+                                            Live backend sync
+                                        </span>
+                                        <span className="premium-badge border border-slate-200 bg-white/90 text-slate-600">
+                                            {providerLabel}
+                                        </span>
+                                    </div>
+
+                                    <div className="grid gap-5 xl:grid-cols-[0.78fr_1.22fr] xl:items-center">
+                                        <div className="relative flex min-h-[220px] items-center justify-center overflow-hidden rounded-[2rem] border border-indigo-100 bg-white/75">
+                                            <motion.div
+                                                className="absolute h-40 w-40 rounded-full bg-indigo-200/50 blur-3xl"
+                                                animate={{ scale: [1, 1.14, 1], opacity: [0.45, 0.9, 0.45] }}
+                                                transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
+                                            />
+                                            <motion.div
+                                                className="absolute h-32 w-32 rounded-full border border-indigo-200/70"
+                                                animate={{ rotate: 360 }}
+                                                transition={{ duration: 14, repeat: Infinity, ease: 'linear' }}
+                                            />
+                                            <motion.div
+                                                className="absolute h-20 w-20 rounded-full border border-sky-200/70"
+                                                animate={{ rotate: -360 }}
+                                                transition={{ duration: 10, repeat: Infinity, ease: 'linear' }}
+                                            />
+                                            <div className="relative flex h-20 w-20 items-center justify-center rounded-[1.6rem] bg-slate-900 text-white shadow-2xl shadow-indigo-200/70">
+                                                {activeJob ? <ActiveLayerIcon className="h-8 w-8" /> : <Loader2 className="h-8 w-8 animate-spin" />}
                                             </div>
-                                            <div className="flex-1">
-                                                <p className={`font-semibold text-sm ${active ? 'text-indigo-700' : done ? 'text-emerald-700' : 'text-slate-500'}`}>Layer {step.id}: {step.label}</p>
-                                                <p className="text-xs text-slate-400">{step.desc}</p>
+                                        </div>
+
+                                        <div className="space-y-5">
+                                            <div>
+                                                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-indigo-500">Runtime Console</p>
+                                                <h2 className="mt-2 text-3xl font-extrabold tracking-tight text-slate-900">
+                                                    {activeJob?.progress.label || 'Launching keyword research'}
+                                                </h2>
+                                                <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-600">
+                                                    {activeJob?.progress.message || 'Creating the background job and preparing the first research layer.'}
+                                                </p>
+                                            </div>
+
+                                            <div className="grid gap-3 sm:grid-cols-3">
+                                                <div className="rounded-2xl border border-slate-200 bg-white/90 p-4">
+                                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Elapsed</p>
+                                                    <p className="mt-2 text-2xl font-bold text-slate-900">{formatElapsedTime(elapsedMs)}</p>
+                                                    <p className="mt-1 text-xs text-slate-500">Timer follows the active backend run.</p>
+                                                </div>
+                                                <div className="rounded-2xl border border-slate-200 bg-white/90 p-4">
+                                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Progress</p>
+                                                    <p className="mt-2 text-2xl font-bold text-slate-900">{activeJob?.progress.percent ?? 0}%</p>
+                                                    <p className="mt-1 text-xs text-slate-500">{activeJob?.progress.completed ?? 0}/{activeJob?.progress.total ?? LAYER_STEPS.length} layers recorded</p>
+                                                </div>
+                                                <div className="rounded-2xl border border-slate-200 bg-white/90 p-4">
+                                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Active Engine</p>
+                                                    <p className="mt-2 text-base font-bold text-slate-900">{providerLabel}</p>
+                                                    <p className="mt-1 text-xs text-slate-500">Vertex-first with retry and failover support.</p>
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-3">
+                                                <div className="flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                                    <span>Run progress</span>
+                                                    <span>{activeJob?.progress.percent ?? 0}%</span>
+                                                </div>
+                                                <div className="h-4 rounded-full border border-indigo-100 bg-white/90 p-1">
+                                                    <motion.div
+                                                        className="h-full rounded-full bg-[linear-gradient(90deg,_#4f46e5_0%,_#2563eb_55%,_#22c55e_100%)]"
+                                                        animate={{ width: `${activeJob?.progress.percent ?? 0}%` }}
+                                                        transition={{ duration: 0.45, ease: 'easeOut' }}
+                                                    />
+                                                </div>
+                                                <p className="text-xs text-slate-500">The screen polls the backend every 2.5 seconds and adds a log entry only when the job meaningfully changes state.</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="rounded-[2rem] border border-slate-200 bg-white/92 p-5 shadow-lg shadow-slate-200/40">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <p className="text-sm font-bold uppercase tracking-[0.2em] text-slate-900">Recent Activity</p>
+                                            <p className="mt-1 text-xs text-slate-500">Session log from the live keyword job</p>
+                                        </div>
+                                        <span className="premium-badge border border-slate-200 bg-slate-50 text-slate-500">
+                                            {runtimeEntries.length} events
+                                        </span>
+                                    </div>
+
+                                    <div className="mt-4 space-y-3">
+                                        {runtimeEntries.length > 0 ? runtimeEntries.map((entry) => (
+                                            <div key={entry.id} className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <p className="text-sm font-bold text-slate-900">{entry.stage}</p>
+                                                    <span className="font-mono text-xs font-bold text-slate-500">{formatElapsedTime(entry.elapsedMs)}</span>
+                                                </div>
+                                                <p className="mt-1 text-sm text-slate-600">{entry.message}</p>
+                                                <div className="mt-2 flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                                                    <span>{entry.completed}/{entry.total || '?'}</span>
+                                                    <span>{entry.percent}%</span>
+                                                </div>
+                                                {entry.provider && <p className="mt-2 text-[11px] font-semibold text-indigo-600">{entry.provider}</p>}
+                                            </div>
+                                        )) : (
+                                            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-500">
+                                                Waiting for the first backend milestone...
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="border-t border-indigo-100/80 bg-white/70 p-6">
+                                <div className="grid gap-3 lg:grid-cols-5">
+                                    {LAYER_STEPS.map((step, i) => {
+                                        const Icon = step.icon;
+                                        const active = i === currentLayer;
+                                        const done = Boolean(activeJob && i < currentLayer);
+                                        const pending = !active && !done;
+
+                                                return (
+                                            <div
+                                                key={step.id}
+                                                className={`rounded-2xl border p-4 transition-all duration-500 ${active
+                                                    ? 'border-indigo-200 bg-indigo-50/90 shadow-lg shadow-indigo-100/70'
+                                                    : done
+                                                        ? 'border-emerald-200 bg-emerald-50/80'
+                                                        : 'border-slate-200 bg-white/85'
+                                                    }`}
+                                            >
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${done ? 'bg-emerald-100' : active ? 'bg-indigo-100' : 'bg-slate-100'}`}>
+                                                        {done ? <Check className="h-5 w-5 text-emerald-600" /> : <Icon className={`h-5 w-5 ${active ? 'text-indigo-600' : 'text-slate-400'}`} />}
+                                                    </div>
+                                                    {active && <Loader2 className="h-4 w-4 animate-spin text-indigo-500" />}
+                                                    {pending && <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Queued</span>}
+                                                </div>
+                                                <p className={`mt-4 text-sm font-bold ${active ? 'text-indigo-700' : done ? 'text-emerald-700' : 'text-slate-700'}`}>
+                                                    Layer {step.id}: {step.label}
+                                                </p>
+                                                <p className="mt-1 text-xs leading-relaxed text-slate-500">{step.desc}</p>
                                                 {active && (
                                                     <motion.div
                                                         key={`banter-${step.id}-${activeBanter}`}
                                                         initial={{ opacity: 0, y: 4 }}
                                                         animate={{ opacity: 1, y: 0 }}
                                                         transition={{ duration: 0.2 }}
-                                                        className="min-h-[36px] mt-2"
+                                                        className="mt-3 min-h-[52px]"
                                                     >
                                                         <div
                                                             aria-live="polite"
-                                                            className="inline-flex items-center rounded-lg border border-indigo-200/80 bg-gradient-to-r from-indigo-50 to-sky-50 px-2.5 py-1.5 text-xs italic text-indigo-700 shadow-sm animate-pulse-soft"
+                                                            className="inline-flex items-center rounded-xl border border-indigo-200/90 bg-gradient-to-r from-indigo-50 to-sky-50 px-3 py-2 text-xs italic leading-relaxed text-indigo-700 shadow-sm"
                                                         >
                                                             {activeBanter}
                                                         </div>
                                                     </motion.div>
                                                 )}
                                             </div>
-                                            {active && <Loader2 className="w-4 h-4 text-indigo-500 animate-spin ml-auto" />}
-                                        </div>
-                                    );
-                                })}
+                                        );
+                                    })}
+                                </div>
                             </div>
                         </motion.div>
                     )}
@@ -502,7 +847,6 @@ export default function KeywordResearch() {
                 {/* Results */}
                 {data && (
                     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-
                         {/* Top Metrics */}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                             <div className="premium-card p-5 flex items-center gap-4">
@@ -543,13 +887,13 @@ export default function KeywordResearch() {
                                         </div>
                                         <div className="mt-4">
                                             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-500">Best angle to attack</p>
-                                            <p className="mt-2 text-xl font-bold text-slate-900 leading-tight">{data.strategy?.contentBlueprint?.uniqueAngle}</p>
-                                            <p className="mt-3 text-sm leading-relaxed text-slate-600">{data.intentData?.intentInsight}</p>
+                                            <p className="mt-2 line-clamp-3 text-xl font-bold leading-tight text-slate-900">{data.strategy?.contentBlueprint?.uniqueAngle}</p>
+                                            <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-slate-600">{data.intentData?.intentInsight}</p>
                                         </div>
                                         <div className="mt-5 grid gap-3 sm:grid-cols-3">
                                             <div className="rounded-xl border border-white/80 bg-white/80 p-4">
                                                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Biggest Gap</p>
-                                                <p className="mt-2 text-sm font-semibold leading-relaxed text-slate-800">{data.strategy?.contentGap}</p>
+                                                <p className="mt-2 line-clamp-4 text-sm font-semibold leading-relaxed text-slate-800">{data.strategy?.contentGap}</p>
                                             </div>
                                             <div className="rounded-xl border border-white/80 bg-white/80 p-4">
                                                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Primary Format</p>
@@ -565,12 +909,12 @@ export default function KeywordResearch() {
                                     <div className="space-y-4">
                                         <div className="rounded-2xl border border-rose-100 bg-rose-50/70 p-4">
                                             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-rose-500">Competition Reality</p>
-                                            <p className="mt-2 text-sm font-semibold leading-relaxed text-rose-900">{data.strategy?.difficulty?.reason}</p>
+                                            <p className="mt-2 line-clamp-4 text-sm font-semibold leading-relaxed text-rose-900">{data.strategy?.difficulty?.reason}</p>
                                         </div>
                                         <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-4">
                                             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-500">Alternative Lane</p>
                                             <p className="mt-2 text-sm font-semibold text-slate-900">{data.strategy?.alternativeStrategy?.angle}</p>
-                                            <p className="mt-2 text-sm leading-relaxed text-slate-600">{data.strategy?.alternativeStrategy?.reason}</p>
+                                            <p className="mt-2 line-clamp-4 text-sm leading-relaxed text-slate-600">{data.strategy?.alternativeStrategy?.reason}</p>
                                             {data.strategy?.alternativeStrategy?.keywords?.length > 0 && (
                                                 <div className="mt-3 flex flex-wrap gap-2">
                                                     {data.strategy.alternativeStrategy.keywords.map((keyword, index) => (
@@ -613,7 +957,7 @@ export default function KeywordResearch() {
                                 <div className="space-y-4">
                                     <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-100">
                                         <p className="text-xs font-semibold text-indigo-600 uppercase mb-1">What Google Wants</p>
-                                        <p className="text-slate-700 font-medium leading-relaxed">{data.serpDna.googleWants}</p>
+                                        <p className="line-clamp-4 text-slate-700 font-medium leading-relaxed">{data.serpDna.googleWants}</p>
                                     </div>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div className="space-y-3">
@@ -631,12 +975,12 @@ export default function KeywordResearch() {
                                             <p className="text-xs font-semibold text-slate-500 uppercase">Content Gaps</p>
                                             {(data.serpDna.contentGaps || []).map((gap, i) => (
                                                 <div key={i} className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 border border-amber-100">
-                                                    <Lightbulb className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" /><p className="text-sm text-amber-800">{gap}</p>
+                                                    <Lightbulb className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" /><p className="line-clamp-2 text-sm text-amber-800">{gap}</p>
                                                 </div>
                                             ))}
                                             <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-100">
                                                 <p className="text-xs font-semibold text-emerald-600 mb-0.5">Best Opportunity Angle</p>
-                                                <p className="text-sm text-emerald-700">{data.serpDna.opportunityAngle}</p>
+                                                <p className="line-clamp-3 text-sm text-emerald-700">{data.serpDna.opportunityAngle}</p>
                                             </div>
                                         </div>
                                     </div>
@@ -662,7 +1006,7 @@ export default function KeywordResearch() {
                                             <SpectrumBar data={data.intentData.buyerJourney} colors={['bg-sky-400', 'bg-indigo-400', 'bg-violet-400', 'bg-fuchsia-400']} /></div>
                                     </div>
                                     <div className="p-4 rounded-xl bg-indigo-50/50 border border-indigo-100">
-                                        <p className="text-sm text-indigo-800 font-medium">{data.intentData.intentInsight}</p>
+                                        <p className="line-clamp-4 text-sm font-medium text-indigo-800">{data.intentData.intentInsight}</p>
                                     </div>
                                     {data.intentData.microIntents?.length > 0 && (
                                         <div><p className="text-xs font-semibold text-slate-500 uppercase mb-2">Micro-Intents</p>
@@ -878,7 +1222,7 @@ export default function KeywordResearch() {
                                     </div>
                                     <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-100">
                                         <p className="text-xs font-semibold text-indigo-500 uppercase mb-1">Unique Angle</p>
-                                        <p className="text-slate-700 font-medium">{data.strategy.contentBlueprint.uniqueAngle}</p>
+                                        <p className="line-clamp-3 text-slate-700 font-medium">{data.strategy.contentBlueprint.uniqueAngle}</p>
                                     </div>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div><p className="text-xs font-semibold text-emerald-600 uppercase mb-2">Must Include</p>
@@ -902,7 +1246,7 @@ export default function KeywordResearch() {
                                             <div key={key} className="p-4 rounded-xl border border-slate-200">
                                                 <p className="text-xs font-semibold text-slate-500 uppercase">{label}</p>
                                                 <p className={`text-xl font-bold mt-1 ${v?.verdict === 'High' ? 'text-emerald-600' : v?.verdict === 'Low' ? 'text-rose-500' : 'text-amber-500'}`}>{v?.verdict}</p>
-                                                <p className="text-xs text-slate-500 mt-2">{v?.reason}</p>
+                                                <p className="mt-2 line-clamp-4 text-xs text-slate-500">{v?.reason}</p>
                                             </div>
                                         );
                                     })}
@@ -972,7 +1316,7 @@ export default function KeywordResearch() {
                                                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-600">Knowledge Graph</p>
                                                 <p className="mt-2 text-sm font-semibold text-emerald-900">{data.serpRaw.knowledgeGraph.title}</p>
                                                 <p className="mt-1 text-xs uppercase tracking-[0.14em] text-emerald-500">{data.serpRaw.knowledgeGraph.type}</p>
-                                                <p className="mt-2 text-sm leading-relaxed text-emerald-800">{data.serpRaw.knowledgeGraph.description}</p>
+                                                <p className="mt-2 line-clamp-4 text-sm leading-relaxed text-emerald-800">{data.serpRaw.knowledgeGraph.description}</p>
                                             </div>
                                         )}
                                     </div>
@@ -1010,7 +1354,7 @@ export default function KeywordResearch() {
                 {/* Metadata */}
                 {data?.metadata && (
                     <div className="text-center text-xs text-slate-400 pb-8">
-                        Analyzed with {data.metadata.model} &middot; {data.metadata.layers} reasoning layers &middot; {new Date(data.metadata.timestamp).toLocaleString()}
+                        Analyzed with {data.metadata.provider || 'AI provider'} &middot; {data.metadata.model} &middot; {data.metadata.layers} reasoning layers &middot; {new Date(data.metadata.timestamp).toLocaleString()}
                     </div>
                 )}
             </div>

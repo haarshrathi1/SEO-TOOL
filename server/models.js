@@ -82,6 +82,36 @@ const auditJobSchema = new Schema({
     timestamps: true,
 });
 
+const keywordJobSchema = new Schema({
+    seed: { type: String, required: true, trim: true, index: true },
+    projectId: { type: String, default: null, index: true },
+    ownerEmail: { type: String, required: true, lowercase: true, trim: true, index: true },
+    status: {
+        type: String,
+        enum: ['queued', 'running', 'completed', 'failed'],
+        default: 'queued',
+        index: true,
+    },
+    progress: {
+        stage: { type: String, default: 'Queued' },
+        label: { type: String, default: 'Queued' },
+        currentLayer: { type: Number, default: 0 },
+        totalLayers: { type: Number, default: 5 },
+        completed: { type: Number, default: 0 },
+        total: { type: Number, default: 5 },
+        percent: { type: Number, default: 0 },
+        message: { type: String, default: 'Waiting to start' },
+        provider: { type: String, default: '' },
+    },
+    result: { type: Schema.Types.Mixed, default: null },
+    error: { type: String, default: '' },
+    startedAt: { type: Date, default: null },
+    completedAt: { type: Date, default: null },
+}, {
+    versionKey: false,
+    timestamps: true,
+});
+
 const AnalysisHistory = mongoose.models.AnalysisHistory || mongoose.model('AnalysisHistory', analysisHistorySchema);
 const AuditHistory = mongoose.models.AuditHistory || mongoose.model('AuditHistory', auditHistorySchema);
 const KeywordResearch = mongoose.models.KeywordResearch || mongoose.model('KeywordResearch', keywordResearchSchema);
@@ -90,6 +120,7 @@ const OauthToken = mongoose.models.OauthToken || mongoose.model('OauthToken', oa
 const AdminUser = mongoose.models.AdminUser || mongoose.model('AdminUser', adminUserSchema);
 const Project = mongoose.models.Project || mongoose.model('Project', projectSchema);
 const AuditJob = mongoose.models.AuditJob || mongoose.model('AuditJob', auditJobSchema);
+const KeywordJob = mongoose.models.KeywordJob || mongoose.model('KeywordJob', keywordJobSchema);
 
 module.exports = {
     AnalysisHistory,
@@ -100,4 +131,5 @@ module.exports = {
     AdminUser,
     Project,
     AuditJob,
+    KeywordJob,
 };

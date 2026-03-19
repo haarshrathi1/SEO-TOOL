@@ -1,11 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AlertOctagon, Calendar, Clock3, Download, Filter, History, LayoutDashboard, Loader2, Play, RefreshCw, Search, Sparkles, TableProperties } from 'lucide-react';
+import { Activity, AlertOctagon, Calendar, Clock3, Compass, Download, FileText, Filter, GitBranch, History, LayoutDashboard, Link2, Loader2, Play, RefreshCw, Search, Sparkles, TableProperties } from 'lucide-react';
 import type { AuditJob, AuditResult } from './types';
 import { api, requestIndexing } from './api';
 import AuditAI from './components/audit/AuditAI';
+import AuditCanonicals from './components/audit/AuditCanonicals';
+import AuditChanges from './components/audit/AuditChanges';
+import AuditIndexation from './components/audit/AuditIndexation';
+import AuditInternalLinks from './components/audit/AuditInternalLinks';
 import AuditIssues from './components/audit/AuditIssues';
 import AuditOverview from './components/audit/AuditOverview';
+import AuditStructuredData from './components/audit/AuditStructuredData';
+import AuditTemplates from './components/audit/AuditTemplates';
 import AuditTable from './components/audit/AuditTable';
+import { filterResultsByAuditChange, isAuditChangeFilterId } from './changeDetection';
+import { filterResultsByInternalLinkFilter, getInternalLinkBadges, hasLinkingGapWarning, isInternalLinkFilterId } from './internalLinkRecommendations';
+import { filterResultsByStructuredDataFilter, hasStructuredDataError, hasStructuredDataWarning, isStructuredDataFilterId } from './structuredDataAudit';
+import { buildTemplateClusterLookup, filterResultsByTemplateFilter, getTemplateLookupKey, getTemplatePatternFromFilterId, isTemplateFilterId } from './templateClusters';
 import { downloadCsv } from './csv';
 import { useToast } from './toast';
 import { OperatorPageHero, OperatorStatePanel } from './components/common/OperatorUi';
@@ -36,7 +46,7 @@ interface RuntimeLogEntry {
     elapsedMs: number;
 }
 
-type Tab = 'overview' | 'issues' | 'pages' | 'ai';
+type Tab = 'overview' | 'changes' | 'indexation' | 'links' | 'templates' | 'canonicals' | 'schema' | 'issues' | 'pages' | 'ai';
 
 const ACTIVE_AUDIT_STATUSES: AuditJob['status'][] = ['queued', 'running'];
 const MAX_RUNTIME_LOG_ITEMS = 8;
@@ -46,7 +56,23 @@ function countIndexed(results: AuditResult[]) {
 }
 
 function countIssues(results: AuditResult[]) {
-    return results.filter((result) => result.status !== 'PASS' || result.h1Count === 0 || !result.description).length;
+    return results.filter((result) =>
+        result.status !== 'PASS'
+        || result.h1Count === 0
+        || !result.description
+        || (result.canonicalIssues?.length || 0) > 0
+        || hasStructuredDataError(result)
+        || hasStructuredDataWarning(result)
+        || hasLinkingGapWarning(result)
+    ).length;
+}
+
+function getFilterLabel(filterId: string) {
+    if (isTemplateFilterId(filterId)) {
+        return `Template ${getTemplatePatternFromFilterId(filterId)}`;
+    }
+
+    return filterId.replace(/-/g, ' ');
 }
 
 function avgDesktopPsi(results: AuditResult[]) {
@@ -417,6 +443,8 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
             : null;
     const comparison = displayResults.length > 0 && comparisonBaseline ? compareAuditResults(displayResults, comparisonBaseline.results) : [];
     const formatDate = (iso: string) => new Date(iso).toLocaleString();
+    const currentSnapshotLabel = selectedHistory ? formatDate(selectedHistory.timestamp) : 'Live / latest run';
+    const baselineSnapshotLabel = comparisonBaseline ? formatDate(comparisonBaseline.timestamp) : null;
     const hasActiveJob = isActiveAuditJob(activeJob);
     const runtimeEntries = [...runtimeLog].reverse();
     const showInitialLoadingState = initialLoading && displayResults.length === 0;
@@ -461,6 +489,18 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
 
     const filteredResults = useMemo(() => {
         if (!filterId) return displayResults;
+        if (isAuditChangeFilterId(filterId)) {
+            return filterResultsByAuditChange(displayResults, comparisonBaseline?.results || [], filterId);
+        }
+        if (isStructuredDataFilterId(filterId)) {
+            return filterResultsByStructuredDataFilter(displayResults, filterId);
+        }
+        if (isInternalLinkFilterId(filterId)) {
+            return filterResultsByInternalLinkFilter(displayResults, filterId);
+        }
+        if (isTemplateFilterId(filterId)) {
+            return filterResultsByTemplateFilter(displayResults, filterId);
+        }
         switch (filterId) {
             case 'not-indexed':
                 return displayResults.filter((result) => result.status !== 'PASS');
@@ -473,7 +513,29 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
             case 'low-word-count':
                 return displayResults.filter((result) => (result.wordCount || 0) < 300);
             case 'orphans':
+            case 'sitemap-orphans':
                 return displayResults.filter((result) => (result.incomingLinks || 0) === 0);
+            case 'linked-not-indexed':
+                return displayResults.filter((result) => result.status !== 'PASS' && (result.incomingLinks || 0) > 0);
+            case 'indexed-orphan':
+                return displayResults.filter((result) => result.status === 'PASS' && (result.incomingLinks || 0) === 0);
+            case 'dormant-indexed':
+                return displayResults.filter((result) => result.status === 'PASS' && /dormant/i.test(result.coverageState || ''));
+            case 'blocked-excluded':
+                return displayResults.filter((result) => /blocked|robots|not found|soft 404|server error|redirect|duplicate|not indexed/i.test([
+                    result.coverageState,
+                    result.indexingState,
+                    result.robotStatus,
+                ].join(' ').toLowerCase()));
+            case 'redirected-url':
+            case 'redirect-chain':
+            case 'missing-canonical':
+            case 'multiple-canonicals':
+            case 'canonical-mismatch':
+            case 'cross-domain-canonical':
+            case 'canonical-target-redirects':
+            case 'canonical-loop':
+                return displayResults.filter((result) => result.canonicalIssues?.includes(filterId));
             case 'slow-performance':
                 return displayResults.filter((result) => (result.psi_data?.desktop?.score || 0) < 50);
             default:
@@ -482,13 +544,26 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
     }, [displayResults, filterId]);
 
     const exportResults = () => {
+        const templateLookup = buildTemplateClusterLookup(displayResults);
+
         downloadCsv(
             `audit-${projectId}-${new Date().toISOString().slice(0, 10)}.csv`,
-            ['URL', 'Status', 'Coverage', 'Title', 'Description', 'H1 Count', 'Word Count', 'Desktop PSI', 'Incoming Links'],
+            ['URL', 'Final URL', 'HTTP Status', 'Status', 'Coverage', 'Template Cluster', 'Canonical URL', 'Canonical Issues', 'Schema Types', 'Schema Issues', 'Internal Link Signals', 'Title', 'Description', 'H1 Count', 'Word Count', 'Desktop PSI', 'Incoming Links'],
             displayResults.map((result) => [
                 result.url,
+                result.finalUrl || result.url,
+                result.httpStatus || '',
                 result.status,
                 result.coverageState,
+                templateLookup.get(getTemplateLookupKey(result.url)) || '',
+                result.canonicalUrl || '',
+                (result.canonicalIssues || []).join(', '),
+                (result.structuredData?.itemTypes || []).join(', '),
+                [
+                    ...(result.structuredData?.parseErrors || []),
+                    ...((result.structuredData?.issues || []).map((issue) => issue.message)),
+                ].join(', '),
+                getInternalLinkBadges(result).map((badge) => badge.label).join(', '),
                 result.title || '',
                 result.description || '',
                 result.h1Count || 0,
@@ -722,6 +797,12 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                     <div className="flex flex-wrap items-center gap-4">
                         {[
                             { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+                            { id: 'changes', label: 'Changes', icon: History },
+                            { id: 'indexation', label: 'Indexation', icon: Search },
+                            { id: 'links', label: 'Links', icon: Compass },
+                            { id: 'templates', label: 'Templates', icon: GitBranch },
+                            { id: 'canonicals', label: 'Canonicals', icon: Link2 },
+                            { id: 'schema', label: 'Schema', icon: FileText },
                             { id: 'issues', label: 'Issues', icon: AlertOctagon },
                             { id: 'pages', label: 'All Pages', icon: TableProperties },
                             { id: 'ai', label: 'AI Insight', icon: Sparkles, special: true },
@@ -746,14 +827,30 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
 
                     <div className="min-h-[400px]">
                         {activeTab === 'overview' && <AuditOverview results={displayResults} history={sortedProjectHistory} />}
+                        {activeTab === 'changes' && (
+                            <AuditChanges
+                                results={displayResults}
+                                previousResults={comparisonBaseline?.results || null}
+                                currentLabel={currentSnapshotLabel}
+                                baselineLabel={baselineSnapshotLabel}
+                                onReview={(id) => {
+                                    setFilterId(id);
+                                    setActiveTab('pages');
+                                }}
+                            />
+                        )}
                         {activeTab === 'issues' && <AuditIssues results={displayResults} onReview={(id) => { setFilterId(id); setActiveTab('pages'); }} />}
+                        {activeTab === 'links' && <AuditInternalLinks results={displayResults} onReview={(id) => { setFilterId(id); setActiveTab('pages'); }} />}
+                        {activeTab === 'templates' && <AuditTemplates results={displayResults} onReview={(id) => { setFilterId(id); setActiveTab('pages'); }} />}
+                        {activeTab === 'canonicals' && <AuditCanonicals results={displayResults} onReview={(id) => { setFilterId(id); setActiveTab('pages'); }} />}
+                        {activeTab === 'schema' && <AuditStructuredData results={displayResults} onReview={(id) => { setFilterId(id); setActiveTab('pages'); }} />}
                         {activeTab === 'pages' && (
                             <div className="space-y-4">
                                 {filterId && (
                                     <div className="flex items-center justify-between rounded-xl border border-indigo-100 bg-indigo-50 p-3">
                                         <div className="flex items-center gap-2 text-sm font-bold text-indigo-700">
                                             <Filter className="h-4 w-4" />
-                                            Filtering by: <span className="uppercase">{filterId.replace('-', ' ')}</span>
+                                            Filtering by: <span className={isTemplateFilterId(filterId) ? 'font-mono text-xs text-indigo-800' : 'uppercase'}>{getFilterLabel(filterId)}</span>
                                             <span className="rounded border border-indigo-200 bg-white px-2 py-0.5 text-xs">{filteredResults.length}</span>
                                         </div>
                                         <button onClick={() => setFilterId('')} className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline">
@@ -764,6 +861,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                                 <AuditTable results={filteredResults} onRequestIndexing={canRequestIndexing ? handleRequestIndexing : null} />
                             </div>
                         )}
+                        {activeTab === 'indexation' && <AuditIndexation results={displayResults} onReview={(id) => { setFilterId(id); setActiveTab('pages'); }} />}
                         {activeTab === 'ai' && <AuditAI results={displayResults} />}
                     </div>
                 </div>
