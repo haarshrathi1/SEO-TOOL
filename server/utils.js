@@ -21,7 +21,7 @@ function getWeeklyDateRange() {
     return {
         startDate: ymd(sunday),
         endDate: ymd(saturday),
-        weekLabel: `Week ${ymd(sunday)} → ${ymd(saturday)}`
+        weekLabel: `Week ${ymd(sunday)} -> ${ymd(saturday)}`
     };
 }
 

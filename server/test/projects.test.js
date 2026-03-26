@@ -17,6 +17,34 @@ test('buildProjectPayload normalizes urls, domains, and crawl caps', () => {
     assert.equal(payload.auditMaxPages, 500);
 });
 
+test('buildProjectPayload rejects non-http and private project URLs', () => {
+    assert.throws(
+        () => __internal.buildProjectPayload({
+            name: 'Bad protocol',
+            url: 'ftp://example.com',
+        }),
+        /valid public http\(s\) URL/
+    );
+
+    assert.throws(
+        () => __internal.buildProjectPayload({
+            name: 'Private host',
+            url: 'http://localhost:3000',
+        }),
+        /valid public http\(s\) URL/
+    );
+});
+
+test('buildProjectPayload normalizes domain hostnames from URL-like domain input', () => {
+    const payload = __internal.buildProjectPayload({
+        name: 'Domain project',
+        url: 'example.com',
+        domain: 'HTTPS://BLOG.Example.com/path?q=1',
+    });
+
+    assert.equal(payload.domain, 'blog.example.com');
+});
+
 test('buildListProjectsQuery limits viewers to active assigned projects', () => {
     assert.deepEqual(
         __internal.buildListProjectsQuery(

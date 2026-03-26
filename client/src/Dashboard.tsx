@@ -85,6 +85,14 @@ function sortByTimestampDesc<T extends { timestamp: string }>(items: T[]) {
     return [...items].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 }
 
+function formatSnapshotLabel(timestamp?: string | null) {
+    if (!timestamp) {
+        return 'Snapshot unavailable';
+    }
+
+    return new Date(timestamp).toLocaleString();
+}
+
 interface AuditHistoryItem {
     id: string;
     timestamp: string;
@@ -119,6 +127,7 @@ export default function Dashboard({ user }: DashboardProps) {
     const [activeTab, setActiveTab] = useState<'dashboard' | 'audit'>(canViewDashboard ? 'dashboard' : 'audit');
     const [history, setHistory] = useState<HistoryItem[]>([]);
     const [selectedHistoryId, setSelectedHistoryId] = useState<string>('live');
+    const [liveHistoryId, setLiveHistoryId] = useState<string>('');
     const [auditHistory, setAuditHistory] = useState<AuditHistoryItem[]>([]);
 
     useEffect(() => {
@@ -162,6 +171,7 @@ export default function Dashboard({ user }: DashboardProps) {
                 setAuditHistory([]);
                 setData(null);
                 setSelectedHistoryId('live');
+                setLiveHistoryId('');
                 setProjectsError(formatSurfaceLoadError(e, 'Failed to load projects.'));
             } finally {
                 if (!cancelled) {
@@ -183,6 +193,7 @@ export default function Dashboard({ user }: DashboardProps) {
             setAuditHistory([]);
             setData(null);
             setSelectedHistoryId('live');
+            setLiveHistoryId('');
             setProjectDataError('');
             setProjectDataLoading(false);
             return;
@@ -212,6 +223,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
                 if (canViewDashboard) {
                     const latestHistory = nextHistory[0] || null;
+                    setLiveHistoryId(latestHistory?.id || '');
                     if (latestHistory) {
                         setSelectedHistoryId(latestHistory.id);
                         setData(latestHistory.data);
@@ -233,6 +245,7 @@ export default function Dashboard({ user }: DashboardProps) {
                 setHistory([]);
                 setAuditHistory([]);
                 setSelectedHistoryId('live');
+                setLiveHistoryId('');
                 setProjectDataError(formatSurfaceLoadError(e, 'Failed to load saved project data.'));
                 if (canViewDashboard) {
                     setData(null);
@@ -254,14 +267,17 @@ export default function Dashboard({ user }: DashboardProps) {
     const fetchHistory = async (projectId?: string) => {
         if (!canViewDashboard || !projectId) {
             setHistory([]);
+            setLiveHistoryId('');
             return;
         }
 
         try {
             const nextHistory = sortByTimestampDesc(await api.getHistory(projectId));
             setHistory(nextHistory);
+            return nextHistory;
         } catch (e) {
             console.error('Failed to fetch history', e);
+            return [];
         }
     };
 
@@ -273,7 +289,11 @@ export default function Dashboard({ user }: DashboardProps) {
             const json = await api.analyzeSite(selectedProjectId);
             setData(json);
             setSelectedHistoryId('live');
-            void fetchHistory(selectedProjectId);
+            setLiveHistoryId(json.analysisHistoryId || '');
+            const nextHistory = await fetchHistory(selectedProjectId);
+            if (!json.analysisHistoryId && nextHistory?.length) {
+                setLiveHistoryId(nextHistory[0].id);
+            }
         } catch (e) {
             setError(formatDashboardError(e));
         } finally {
@@ -286,8 +306,10 @@ export default function Dashboard({ user }: DashboardProps) {
         if (id === 'live') {
             setError('');
             if (canRunDashboardActions) {
+                setLiveHistoryId('');
                 setData(null);
             } else {
+                setLiveHistoryId(history[0]?.id || '');
                 setData(history[0]?.data || null);
             }
             return;
@@ -299,11 +321,21 @@ export default function Dashboard({ user }: DashboardProps) {
         }
     };
 
-    const sortedProjectHistory = history;
-    const selectedHistory = sortedProjectHistory.find((item) => item.id === selectedHistoryId) || null;
+    const sortedProjectHistory = sortByTimestampDesc(history);
+    const selectedHistoryIndex = selectedHistoryId === 'live'
+        ? -1
+        : sortedProjectHistory.findIndex((item) => item.id === selectedHistoryId);
+    const selectedHistory = selectedHistoryIndex >= 0 ? sortedProjectHistory[selectedHistoryIndex] : null;
+    const liveHistoryIndex = liveHistoryId
+        ? sortedProjectHistory.findIndex((item) => item.id === liveHistoryId)
+        : -1;
     const previousSnapshot = selectedHistoryId === 'live'
-        ? sortedProjectHistory[0] || null
-        : sortedProjectHistory.find((item) => item.id !== selectedHistoryId) || null;
+        ? liveHistoryIndex >= 0
+            ? sortedProjectHistory[liveHistoryIndex + 1] || null
+            : null
+        : selectedHistoryIndex >= 0
+            ? sortedProjectHistory[selectedHistoryIndex + 1] || null
+            : null;
 
     const projectAuditHistory = auditHistory;
     const latestAudit = projectAuditHistory[0] || null;
@@ -321,6 +353,26 @@ export default function Dashboard({ user }: DashboardProps) {
     );
 
     const formatDate = (iso: string) => new Date(iso).toLocaleString();
+    const liveOptionLabel = canRunDashboardActions
+        ? (data ? 'Live Analysis' : 'New Analysis')
+        : 'Latest Snapshot';
+    const currentSnapshotLabel = selectedHistoryId === 'live'
+        ? (data ? 'Live analysis loaded' : 'Awaiting live analysis')
+        : selectedHistory
+            ? `Snapshot from ${formatSnapshotLabel(selectedHistory.timestamp)}`
+            : 'Saved snapshot';
+    const comparisonSnapshotLabel = previousSnapshot
+        ? formatSnapshotLabel(previousSnapshot.timestamp)
+        : 'No previous snapshot available';
+    const inspectedUrls = data?.issues.inspectedUrls;
+    const totalSitemapUrls = data?.issues.totalSitemapUrls;
+    const hasCoverageData = typeof inspectedUrls === 'number' && typeof totalSitemapUrls === 'number';
+    const isFullCoverage = hasCoverageData && inspectedUrls === totalSitemapUrls;
+    const coverageLabel = hasCoverageData
+        ? isFullCoverage
+            ? `Full sitemap coverage (${inspectedUrls}/${totalSitemapUrls})`
+            : `Sampled sitemap coverage (${inspectedUrls}/${totalSitemapUrls})`
+        : 'Coverage unavailable';
     const dashboardEmptyTitle = canRunDashboardActions ? 'Run a fresh analysis' : 'No saved snapshot yet';
     const dashboardEmptyDescription = canRunDashboardActions
         ? sortedProjectHistory.length > 0
@@ -429,6 +481,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                         setSelectedProjectId(nextProjectId);
                                         setError('');
                                         setSelectedHistoryId('live');
+                                        setLiveHistoryId('');
                                         setHistory([]);
                                         setAuditHistory([]);
                                         setData(null);
@@ -556,7 +609,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                             disabled={projectDataLoading || !selectedProjectId}
                                             className="absolute inset-0 z-20 h-full w-full cursor-pointer opacity-0 disabled:cursor-wait"
                                         >
-                                            <option value="live">{canRunDashboardActions ? 'New Analysis' : 'Latest Snapshot'}</option>
+                                            <option value="live">{liveOptionLabel}</option>
                                             <optgroup label="Previous Reports">
                                                 {sortedProjectHistory.map((h) => (
                                                     <option key={h.id} value={h.id}>
@@ -567,7 +620,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                         </select>
                                         <span className="pointer-events-none z-10 select-none truncate pr-6 text-sm font-bold uppercase">
                                             {selectedHistoryId === 'live'
-                                                ? (canRunDashboardActions ? 'New Analysis' : 'Latest Snapshot')
+                                                ? liveOptionLabel
                                                 : selectedHistory
                                                     ? formatDate(selectedHistory.timestamp)
                                                     : 'Select Report'
@@ -625,6 +678,47 @@ export default function Dashboard({ user }: DashboardProps) {
 
             {activeTab === 'dashboard' && data && (
                 <main className="max-w-7xl mx-auto p-6 space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-700">
+                    <div className="grid gap-4 lg:grid-cols-3">
+                        <div className="operator-panel p-5">
+                            <div className="mb-3 flex items-center gap-2">
+                                <div className="border-2 border-black bg-emerald-200 p-2">
+                                    <Activity className="h-4 w-4 text-black" />
+                                </div>
+                                <div>
+                                    <p className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-500">Viewing</p>
+                                    <p className="text-base font-black uppercase text-black">{selectedHistoryId === 'live' ? 'Current dataset' : 'Historical dataset'}</p>
+                                </div>
+                            </div>
+                            <p className="text-sm font-bold text-slate-700">{currentSnapshotLabel}</p>
+                        </div>
+                        <div className="operator-panel p-5">
+                            <div className="mb-3 flex items-center gap-2">
+                                <div className="border-2 border-black bg-amber-200 p-2">
+                                    <History className="h-4 w-4 text-black" />
+                                </div>
+                                <div>
+                                    <p className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-500">Comparing Against</p>
+                                    <p className="text-base font-black uppercase text-black">{previousSnapshot ? 'Previous snapshot' : 'Baseline missing'}</p>
+                                </div>
+                            </div>
+                            <p className="text-sm font-bold text-slate-700">{comparisonSnapshotLabel}</p>
+                        </div>
+                        <div className="operator-panel p-5">
+                            <div className="mb-3 flex items-center gap-2">
+                                <div className={cn(
+                                    'border-2 border-black p-2',
+                                    isFullCoverage ? 'bg-sky-200' : 'bg-orange-200',
+                                )}>
+                                    <Globe className="h-4 w-4 text-black" />
+                                </div>
+                                <div>
+                                    <p className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-500">Sitemap Coverage</p>
+                                    <p className="text-base font-black uppercase text-black">{isFullCoverage ? 'Full scan context' : 'Sampling context'}</p>
+                                </div>
+                            </div>
+                            <p className="text-sm font-bold text-slate-700">{coverageLabel}</p>
+                        </div>
+                    </div>
 
                     {/* Alerts User Banner */}
                     {data.health.alerts && data.health.alerts.length > 0 && (
@@ -740,12 +834,11 @@ export default function Dashboard({ user }: DashboardProps) {
 
                                 {/* Indexing Errors */}
                                 <div className="space-y-4">
-                                    {/* Indexing Errors */}
-                                    <div className="space-y-4">
+                                    <div className="grid gap-3 sm:grid-cols-2">
                                         <div
                                             className={cn(
-                                                "group flex items-center justify-between p-3 bg-red-50 border-2 border-black shadow-[4px_4px_0px_0px_#000] transition-transform",
-                                                data.issues.failedUrls?.length ? "hover:translate-x-1 hover:bg-red-100" : ""
+                                                'group flex items-center justify-between border-2 border-black bg-red-50 p-3 shadow-[4px_4px_0px_0px_#000] transition-transform',
+                                                data.issues.failedUrls?.length ? 'hover:translate-x-1 hover:bg-red-100' : '',
                                             )}
                                         >
                                             <div className="flex flex-col">
@@ -754,14 +847,13 @@ export default function Dashboard({ user }: DashboardProps) {
                                             </div>
                                             <div className="flex items-center gap-2">
                                                 {data.issues.failedUrls && data.issues.failedUrls.length > 0 && (
-                                                    <span className="text-[10px] font-bold bg-white px-1 border border-black hidden group-hover:block">VIEW</span>
+                                                    <span className="hidden border border-black bg-white px-1 text-[10px] font-bold group-hover:block">VIEW</span>
                                                 )}
                                                 <span className="text-2xl font-black text-black">{data.issues.errors}</span>
                                             </div>
                                         </div>
 
-                                        {/* Warnings */}
-                                        <div className="flex items-center justify-between p-3 bg-orange-50 border-2 border-black shadow-[4px_4px_0px_0px_#000] hover:translate-x-1 transition-transform">
+                                        <div className="flex items-center justify-between border-2 border-black bg-orange-50 p-3 shadow-[4px_4px_0px_0px_#000] transition-transform hover:translate-x-1">
                                             <div className="flex flex-col">
                                                 <span className="text-sm font-bold text-black uppercase">Warnings</span>
                                                 <span className="text-xs text-slate-600">Partial</span>
@@ -769,20 +861,33 @@ export default function Dashboard({ user }: DashboardProps) {
                                             <span className="text-2xl font-black text-black">{data.issues.indexingWarnings}</span>
                                         </div>
 
-                                        {/* Detailed List (Collapsible / If Few) */}
-                                        {data.issues.failedUrls && data.issues.failedUrls.length > 0 && (
-                                            <div className="mt-2 text-[10px] font-mono bg-black text-red-400 p-2 border-2 border-black overflow-x-auto">
-                                                {data.issues.failedUrls.map((err, idx) => (
-                                                    <div key={idx} className="mb-1 last:mb-0">
-                                                        <span className="text-white font-bold">[{err.reason}]</span> {getUrlPathLabel(err.url)}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
                                     </div>
+                                    {hasCoverageData && (
+                                        <div
+                                            className={cn(
+                                                'border-2 border-black p-3 text-sm font-bold shadow-[4px_4px_0px_0px_#000]',
+                                                isFullCoverage ? 'bg-sky-50 text-slate-800' : 'bg-orange-50 text-slate-800',
+                                            )}
+                                        >
+                                            {isFullCoverage
+                                                ? `Issue totals reflect all ${totalSitemapUrls} sitemap URLs discovered for this project.`
+                                                : `Issue totals are based on ${inspectedUrls} of ${totalSitemapUrls} sitemap URLs, using the current crawl cap.`}
+                                        </div>
+                                    )}
+                                    {data.issues.failedUrls && data.issues.failedUrls.length > 0 && (
+                                        <div className="mt-2 overflow-x-auto border-2 border-black bg-black p-2 text-[10px] font-mono text-red-400">
+                                            {data.issues.failedUrls.map((err, idx) => (
+                                                <div key={idx} className="mb-1 last:mb-0">
+                                                    <span className="font-bold text-white">[{err.reason}]</span> {getUrlPathLabel(err.url)}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
-                                <div className="mt-4 pt-4 border-t-2 border-black text-center text-xs font-bold uppercase text-slate-500">
-                                    Google Search Console Data
+                                <div className="mt-4 border-t-2 border-black pt-4 text-center text-xs font-bold uppercase text-slate-500">
+                                    {typeof data.issues.inspectedUrls === 'number' && typeof data.issues.totalSitemapUrls === 'number'
+                                        ? `Google Search Console Data - Inspected ${data.issues.inspectedUrls}/${data.issues.totalSitemapUrls} Sitemap URLs`
+                                        : 'Google Search Console Data'}
                                 </div>
                             </div>
                         </div>

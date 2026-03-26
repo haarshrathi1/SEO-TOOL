@@ -1,10 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Loader2, Target, BarChart3, Layers, Sparkles, ExternalLink, Zap, Save, History, ChevronRight, TrendingUp, Brain, Lightbulb, Crosshair, Rocket, ArrowRight, ChevronDown, ChevronUp, HelpCircle, Star, Shield, Eye, BookOpen, Filter, Download, Check, type LucideIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from './api';
 import { downloadCsv } from './csv';
 import { useToast } from './toast';
 import type { KeywordDataV2, KeywordHistoryItem, KeywordItem, KeywordJob, KeywordScanResult, StrategicSynthesis } from './types';
+
+interface QuestionKeywordItem {
+    question: string;
+    intent: string;
+    volume: 'High' | 'Medium' | 'Low';
+}
 
 const LAYER_STEPS = [
     { id: 1, label: 'Collecting Data', desc: 'Autocomplete, SERP, PAA, related searches...', icon: Search },
@@ -164,6 +170,73 @@ const volColors: Record<string, string> = { High: 'text-emerald-600', Medium: 't
 const diffColors: Record<string, string> = { Easy: 'bg-emerald-100 text-emerald-700', Medium: 'bg-amber-100 text-amber-700', Hard: 'bg-rose-100 text-rose-700' };
 const prioColors: Record<string, string> = { P0: 'bg-rose-500 text-white', P1: 'bg-amber-500 text-white', P2: 'bg-blue-500 text-white', P3: 'bg-slate-400 text-white' };
 
+function normalizeUiChoice(value: unknown, choices: readonly string[], fallback: string) {
+    if (typeof value !== 'string') {
+        return fallback;
+    }
+
+    const normalized = value.trim();
+    if (!normalized) {
+        return fallback;
+    }
+
+    const match = choices.find((choice) => choice.toLowerCase() === normalized.toLowerCase());
+    return match || fallback;
+}
+
+function normalizeUiKeyword(value: unknown): KeywordItem | null {
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+
+    const candidate = value as Partial<KeywordItem>;
+    const term = typeof candidate.term === 'string' ? candidate.term.trim() : '';
+    if (!term) {
+        return null;
+    }
+
+    const score = Number(candidate.opportunityScore);
+    return {
+        term,
+        intent: normalizeUiChoice(candidate.intent, ['Informational', 'Commercial', 'Transactional', 'Navigational', 'Comparison'], 'Informational'),
+        volume: normalizeUiChoice(candidate.volume, ['High', 'Medium', 'Low'], 'Low') as KeywordItem['volume'],
+        difficulty: normalizeUiChoice(candidate.difficulty, ['Easy', 'Medium', 'Hard'], 'Medium') as KeywordItem['difficulty'],
+        opportunityScore: Number.isFinite(score) ? Math.max(0, Math.min(100, Math.round(score))) : 0,
+        source: typeof candidate.source === 'string' && candidate.source.trim() ? candidate.source.trim() : 'serp_implied',
+        buyerStage: normalizeUiChoice(candidate.buyerStage, ['Awareness', 'Consideration', 'Decision', 'Retention'], 'Awareness'),
+    };
+}
+
+function normalizeUiQuestionKeyword(value: unknown): QuestionKeywordItem | null {
+    if (!value) {
+        return null;
+    }
+
+    if (typeof value === 'string') {
+        const question = value.trim();
+        if (!question) {
+            return null;
+        }
+        return { question, intent: 'Informational', volume: 'Low' };
+    }
+
+    if (typeof value !== 'object') {
+        return null;
+    }
+
+    const candidate = value as Partial<QuestionKeywordItem>;
+    const question = typeof candidate.question === 'string' ? candidate.question.trim() : '';
+    if (!question) {
+        return null;
+    }
+
+    return {
+        question,
+        intent: normalizeUiChoice(candidate.intent, ['Informational', 'Commercial', 'Transactional', 'Navigational', 'Comparison'], 'Informational'),
+        volume: normalizeUiChoice(candidate.volume, ['High', 'Medium', 'Low'], 'Low') as QuestionKeywordItem['volume'],
+    };
+}
+
 function ScoreRing({ score, size = 80, color = '#4F46E5' }: { score: number; size?: number; color?: string }) {
     const r = (size - 8) / 2, c = 2 * Math.PI * r, offset = c - (score / 100) * c;
     return (
@@ -275,23 +348,23 @@ export default function KeywordResearch() {
         return () => window.clearInterval(timer);
     }, [activeJob]);
 
-    const clearPoll = () => {
+    const clearPoll = useCallback(() => {
         if (pollRef.current) {
             window.clearInterval(pollRef.current);
             pollRef.current = null;
         }
-    };
+    }, []);
 
-    const clearRuntimeState = () => {
+    const clearRuntimeState = useCallback(() => {
         runtimeJobIdRef.current = '';
         runtimeSignatureRef.current = '';
         runtimeLogCountRef.current = 0;
         setActiveJob(null);
         setRuntimeLog([]);
         setElapsedMs(0);
-    };
+    }, []);
 
-    const trackActiveJob = (job: KeywordJob, options: { resetLog?: boolean } = {}) => {
+    const trackActiveJob = useCallback((job: KeywordJob, options: { resetLog?: boolean } = {}) => {
         const shouldResetLog = options.resetLog === true || runtimeJobIdRef.current !== job.id;
 
         if (shouldResetLog) {
@@ -332,17 +405,17 @@ export default function KeywordResearch() {
             const nextEntries = shouldResetLog ? [] : current;
             return [...nextEntries, entry].slice(-MAX_RUNTIME_LOG_ITEMS);
         });
-    };
+    }, []);
 
-    const fetchHistory = async () => {
+    const fetchHistory = useCallback(async () => {
         try {
             setHistory(await api.getKeywordHistory());
         } catch (error) {
             console.error('Failed to load keyword history:', error);
         }
-    };
+    }, []);
 
-    const syncKeywordJob = async (jobId: string) => {
+    const syncKeywordJob = useCallback(async (jobId: string) => {
         try {
             const job = await api.getKeywordJob(jobId);
             trackActiveJob(job);
@@ -369,15 +442,15 @@ export default function KeywordResearch() {
             setLoading(false);
             push({ tone: 'error', title: 'Job sync failed', description: getErrorMessage(error, 'Unable to read keyword job progress.') });
         }
-    };
+    }, [clearPoll, push, trackActiveJob]);
 
-    const beginPolling = (jobId: string) => {
+    const beginPolling = useCallback((jobId: string) => {
         clearPoll();
         void syncKeywordJob(jobId);
         pollRef.current = window.setInterval(() => {
             void syncKeywordJob(jobId);
         }, 2500);
-    };
+    }, [clearPoll, syncKeywordJob]);
 
     useEffect(() => {
         void fetchHistory();
@@ -400,7 +473,7 @@ export default function KeywordResearch() {
         return () => {
             clearPoll();
         };
-    }, []);
+    }, [beginPolling, clearPoll, fetchHistory, trackActiveJob]);
 
     const handleSave = async () => {
         if (!data) return;
@@ -462,10 +535,40 @@ export default function KeywordResearch() {
         }
     };
 
-    const filteredKeywords = data?.keywordUniverse?.keywords?.filter((k: KeywordItem) => kwFilter === 'all' || k.intent?.toLowerCase() === kwFilter) || [];
+    const keywordUniverseItems = useMemo(
+        () => (Array.isArray(data?.keywordUniverse?.keywords)
+            ? data.keywordUniverse.keywords
+                .map((entry) => normalizeUiKeyword(entry))
+                .filter((entry): entry is KeywordItem => Boolean(entry))
+            : []),
+        [data?.keywordUniverse?.keywords],
+    );
+
+    const intentFilters = useMemo(() => {
+        const intents = new Set<string>(['all']);
+        keywordUniverseItems.forEach((keyword) => {
+            const normalized = keyword.intent.toLowerCase();
+            if (normalized) {
+                intents.add(normalized);
+            }
+        });
+        return Array.from(intents);
+    }, [keywordUniverseItems]);
+
+    useEffect(() => {
+        if (kwFilter !== 'all' && !intentFilters.includes(kwFilter)) {
+            setKwFilter('all');
+        }
+    }, [intentFilters, kwFilter]);
+
+    const filteredKeywords = keywordUniverseItems.filter((k) => kwFilter === 'all' || k.intent.toLowerCase() === kwFilter);
     const sortedKeywords = [...filteredKeywords].sort((a, b) => kwSort === 'opportunityScore' ? (b.opportunityScore - a.opportunityScore) : a.term.localeCompare(b.term));
     const topOpportunityKeywords = sortedKeywords.slice(0, 3);
-    const questionKeywords = data?.keywordUniverse?.questionKeywords || [];
+    const questionKeywords: QuestionKeywordItem[] = Array.isArray(data?.keywordUniverse?.questionKeywords)
+        ? data.keywordUniverse.questionKeywords
+            .map((entry) => normalizeUiQuestionKeyword(entry))
+            .filter((entry): entry is QuestionKeywordItem => Boolean(entry))
+        : [];
     const relatedSearches = data?.serpRaw?.relatedSearches || [];
     const serpFeatures = data?.serpRaw?.serpFeatures || [];
     const easyKeywordCount = filteredKeywords.filter((keyword) => keyword.difficulty === 'Easy').length;
@@ -756,7 +859,7 @@ export default function KeywordResearch() {
                                     </div>
                                 </div>
 
-                                <div className="rounded-[2rem] border border-slate-200 bg-white/92 p-5 shadow-lg shadow-slate-200/40">
+                                <div className="rounded-[2rem] border border-slate-200 bg-white/92 p-5 shadow-lg shadow-slate-200/40 max-h-[560px] min-h-[320px] flex flex-col">
                                     <div className="flex items-center justify-between gap-3">
                                         <div>
                                             <p className="text-sm font-bold uppercase tracking-[0.2em] text-slate-900">Recent Activity</p>
@@ -767,25 +870,27 @@ export default function KeywordResearch() {
                                         </span>
                                     </div>
 
-                                    <div className="mt-4 space-y-3">
-                                        {runtimeEntries.length > 0 ? runtimeEntries.map((entry) => (
-                                            <div key={entry.id} className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3">
-                                                <div className="flex items-center justify-between gap-3">
-                                                    <p className="text-sm font-bold text-slate-900">{entry.stage}</p>
-                                                    <span className="font-mono text-xs font-bold text-slate-500">{formatElapsedTime(entry.elapsedMs)}</span>
+                                    <div className="mt-4 flex-1 min-h-0 overflow-y-auto pr-1">
+                                        <div className="space-y-3">
+                                            {runtimeEntries.length > 0 ? runtimeEntries.map((entry) => (
+                                                <div key={entry.id} className="rounded-2xl border border-slate-200 bg-slate-50/85 p-3">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <p className="text-sm font-bold text-slate-900">{entry.stage}</p>
+                                                        <span className="font-mono text-xs font-bold text-slate-500">{formatElapsedTime(entry.elapsedMs)}</span>
+                                                    </div>
+                                                    <p className="mt-1 text-sm text-slate-600">{entry.message}</p>
+                                                    <div className="mt-2 flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                                                        <span>{entry.completed}/{entry.total || '?'}</span>
+                                                        <span>{entry.percent}%</span>
+                                                    </div>
+                                                    {entry.provider && <p className="mt-2 text-[11px] font-semibold text-indigo-600">{entry.provider}</p>}
                                                 </div>
-                                                <p className="mt-1 text-sm text-slate-600">{entry.message}</p>
-                                                <div className="mt-2 flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                                                    <span>{entry.completed}/{entry.total || '?'}</span>
-                                                    <span>{entry.percent}%</span>
+                                            )) : (
+                                                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-500">
+                                                    Waiting for the first backend milestone...
                                                 </div>
-                                                {entry.provider && <p className="mt-2 text-[11px] font-semibold text-indigo-600">{entry.provider}</p>}
-                                            </div>
-                                        )) : (
-                                            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-500">
-                                                Waiting for the first backend milestone...
-                                            </div>
-                                        )}
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -1056,9 +1161,9 @@ export default function KeywordResearch() {
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2">
                                         <Filter className="w-4 h-4 text-slate-400" />
-                                        {['all', 'informational', 'commercial', 'transactional', 'comparison'].map(f => (
-                                            <button key={f} onClick={() => setKwFilter(f)} className={`premium-badge cursor-pointer transition-colors ${kwFilter === f ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-                                                {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
+                                        {intentFilters.map((filterValue) => (
+                                            <button key={filterValue} onClick={() => setKwFilter(filterValue)} className={`premium-badge cursor-pointer transition-colors ${kwFilter === filterValue ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                                                {filterValue === 'all' ? 'All' : formatLabel(filterValue)}
                                             </button>
                                         ))}
                                         <div className="ml-auto flex gap-2">

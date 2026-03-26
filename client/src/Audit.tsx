@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AlertOctagon, Calendar, Clock3, Compass, Download, FileText, Filter, GitBranch, History, LayoutDashboard, Link2, Loader2, Play, RefreshCw, Search, Sparkles, TableProperties } from 'lucide-react';
 import type { AuditJob, AuditResult } from './types';
 import { api, requestIndexing } from './api';
@@ -179,21 +179,21 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
     const runtimeSignatureRef = useRef('');
     const runtimeLogCountRef = useRef(0);
 
-    const clearPoll = () => {
+    const clearPoll = useCallback(() => {
         if (pollRef.current) {
             window.clearInterval(pollRef.current);
             pollRef.current = null;
         }
-    };
+    }, []);
 
-    const clearTimer = () => {
+    const clearTimer = useCallback(() => {
         if (timerRef.current) {
             window.clearInterval(timerRef.current);
             timerRef.current = null;
         }
-    };
+    }, []);
 
-    const clearRuntimeState = () => {
+    const clearRuntimeState = useCallback(() => {
         clearTimer();
         runtimeJobIdRef.current = '';
         runtimeSignatureRef.current = '';
@@ -201,8 +201,8 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
         setActiveJob(null);
         setRuntimeLog([]);
         setElapsedMs(0);
-    };
-    const trackActiveJob = (job: AuditJob, options: { resetLog?: boolean } = {}) => {
+    }, [clearTimer]);
+    const trackActiveJob = useCallback((job: AuditJob, options: { resetLog?: boolean } = {}) => {
         const shouldResetLog = options.resetLog === true || runtimeJobIdRef.current !== job.id;
 
         if (shouldResetLog) {
@@ -241,14 +241,14 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
             const nextEntries = shouldResetLog ? [] : current;
             return [...nextEntries, entry].slice(-MAX_RUNTIME_LOG_ITEMS);
         });
-    };
+    }, []);
 
-    const stopTrackingActiveJob = () => {
+    const stopTrackingActiveJob = useCallback(() => {
         clearPoll();
         clearRuntimeState();
-    };
+    }, [clearPoll, clearRuntimeState]);
 
-    const fetchHistory = async () => {
+    const fetchHistory = useCallback(async () => {
         try {
             const historyData = await api.getAuditHistory(projectId);
             setHistory(historyData);
@@ -257,9 +257,9 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
             console.error('Failed to fetch audit history', issue);
             return null;
         }
-    };
+    }, [projectId]);
 
-    const fetchJobs = async () => {
+    const fetchJobs = useCallback(async () => {
         try {
             const jobData = await api.getAuditJobs(projectId);
             setJobs(jobData);
@@ -268,9 +268,9 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
             console.error('Failed to fetch audit jobs', issue);
             return null;
         }
-    };
+    }, [projectId]);
 
-    const pollJob = (jobId: string) => {
+    const pollJob = useCallback((jobId: string) => {
         clearPoll();
 
         const syncJob = async () => {
@@ -317,7 +317,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
         pollRef.current = window.setInterval(() => {
             void syncJob();
         }, 2500);
-    };
+    }, [clearPoll, fetchHistory, fetchJobs, push, stopTrackingActiveJob, trackActiveJob]);
 
     useEffect(() => {
         clearTimer();
@@ -337,7 +337,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
         return () => {
             clearTimer();
         };
-    }, [activeJob?.id, activeJob?.createdAt, activeJob?.startedAt, activeJob?.status]);
+    }, [activeJob, clearTimer]);
 
     useEffect(() => {
         let cancelled = false;
@@ -406,7 +406,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
             clearPoll();
             clearTimer();
         };
-    }, [projectId, loadRetryKey]);
+    }, [clearPoll, clearRuntimeState, clearTimer, loadRetryKey, pollJob, projectId, trackActiveJob]);
     const runAudit = async () => {
         if (!projectId || !canRunAudit) return;
 
@@ -541,7 +541,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
             default:
                 return displayResults;
         }
-    }, [displayResults, filterId]);
+    }, [comparisonBaseline?.results, displayResults, filterId]);
 
     const exportResults = () => {
         const templateLookup = buildTemplateClusterLookup(displayResults);
@@ -691,7 +691,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                             <p className="text-xs font-semibold text-slate-500">The audit polls every 2.5 seconds and adds a new event only when the crawler meaningfully changes state.</p>
                         </div>
 
-                        <div className="rounded-3xl border-2 border-black bg-white p-5">
+                        <div className="rounded-3xl border-2 border-black bg-white p-5 max-h-[560px] min-h-[320px] flex flex-col">
                             <div className="flex items-center justify-between gap-3">
                                 <div>
                                     <p className="text-sm font-black uppercase tracking-[0.2em] text-slate-900">Recent activity</p>
@@ -702,21 +702,23 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                                 </span>
                             </div>
 
-                            <div className="mt-4 space-y-3">
-                                {runtimeEntries.map((entry) => (
-                                    <div key={entry.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                                        <div className="flex items-center justify-between gap-3">
-                                            <p className="text-sm font-bold text-slate-900">{entry.stage}</p>
-                                            <span className="font-mono text-xs font-bold text-slate-500">{formatElapsedTime(entry.elapsedMs)}</span>
+                            <div className="mt-4 flex-1 min-h-0 overflow-y-auto pr-1">
+                                <div className="space-y-3">
+                                    {runtimeEntries.map((entry) => (
+                                        <div key={entry.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <p className="text-sm font-bold text-slate-900">{entry.stage}</p>
+                                                <span className="font-mono text-xs font-bold text-slate-500">{formatElapsedTime(entry.elapsedMs)}</span>
+                                            </div>
+                                            <p className="mt-1 text-sm text-slate-600">{entry.message}</p>
+                                            <div className="mt-2 flex items-center justify-between gap-3 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                                                <span>{entry.completed}/{entry.total || '?'}</span>
+                                                <span>{entry.percent}%</span>
+                                            </div>
+                                            {entry.currentUrl && <p className="mt-2 break-all font-mono text-[11px] text-slate-500">{entry.currentUrl}</p>}
                                         </div>
-                                        <p className="mt-1 text-sm text-slate-600">{entry.message}</p>
-                                        <div className="mt-2 flex items-center justify-between gap-3 text-[11px] font-bold uppercase tracking-wide text-slate-400">
-                                            <span>{entry.completed}/{entry.total || '?'}</span>
-                                            <span>{entry.percent}%</span>
-                                        </div>
-                                        {entry.currentUrl && <p className="mt-2 break-all font-mono text-[11px] text-slate-500">{entry.currentUrl}</p>}
-                                    </div>
-                                ))}
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     </div>

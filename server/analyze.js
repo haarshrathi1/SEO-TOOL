@@ -5,6 +5,7 @@ const psi = require('./psi');
 const utils = require('./utils');
 const history = require('./history');
 const sheets = require('./sheets');
+const { fetchSitemapUrls } = require('./sitemaps');
 
 const { getProject } = require('./projects');
 
@@ -87,26 +88,42 @@ const analyzeSite = async (req, res) => {
         const failedUrls = [];
         let errors = 0;
         const exactErrorsMap = {};
+        let inspectedUrls = 0;
+        let totalSitemapUrls = 0;
 
         try {
-            const sitemaps = await gsc.getSitemaps(siteUrl);
-            let allUrls = [];
-            for (const s of sitemaps) {
-                const urls = await gsc.parseSitemap(s.path);
-                allUrls = [...allUrls, ...urls];
-            }
+            const allUrls = await fetchSitemapUrls(siteUrl, { logger: console });
+            const uniqueUrls = [...new Set(allUrls)];
+            totalSitemapUrls = uniqueUrls.length;
 
-            const urlsToInspect = allUrls.slice(0, 5);
+            const urlsToInspect = uniqueUrls.slice(0, Math.min(uniqueUrls.length, project.auditMaxPages || 200));
+            inspectedUrls = urlsToInspect.length;
             console.log(`Inspecting ${urlsToInspect.length} URLs...`);
 
-            for (const url of urlsToInspect) {
-                const result = await gsc.inspectUrl(siteUrl, url);
-                const idxResult = result?.inspectionResult?.indexStatusResult;
-                if (idxResult?.verdict !== 'PASS' || idxResult?.robotsTxtState === 'BLOCKED' || idxResult?.indexingState === 'BLOCKED') {
-                    errors++;
-                    const reason = idxResult?.coverageState || 'Unknown';
-                    exactErrorsMap[reason] = (exactErrorsMap[reason] || 0) + 1;
-                    failedUrls.push({ url, reason });
+            const batchSize = 5;
+            for (let index = 0; index < urlsToInspect.length; index += batchSize) {
+                const batch = urlsToInspect.slice(index, index + batchSize);
+                const batchIssues = await Promise.all(batch.map(async (url) => {
+                    const result = await gsc.inspectUrl(siteUrl, url);
+                    const idxResult = result?.inspectionResult?.indexStatusResult;
+                    const hasIssue = idxResult?.verdict !== 'PASS'
+                        || idxResult?.robotsTxtState === 'BLOCKED'
+                        || idxResult?.indexingState === 'BLOCKED';
+
+                    if (!hasIssue) {
+                        return null;
+                    }
+
+                    return {
+                        url,
+                        reason: idxResult?.coverageState || 'Unknown',
+                    };
+                }));
+
+                for (const issue of batchIssues.filter(Boolean)) {
+                    errors += 1;
+                    exactErrorsMap[issue.reason] = (exactErrorsMap[issue.reason] || 0) + 1;
+                    failedUrls.push(issue);
                 }
             }
         } catch (e) {
@@ -185,7 +202,7 @@ const analyzeSite = async (req, res) => {
         let status = 'Green';
         // 6. Top Pages (Structured)
         const structuredTopPagesArr = Object.entries(pages)
-            .sort((a, b) => b[1].clk - a[1].clk)
+            .sort((a, b) => b[1].imp - a[1].imp)
             .slice(0, 5);
 
         const structuredTopPages = structuredTopPagesArr.map(([url, metrics]) => ({
@@ -232,7 +249,10 @@ const analyzeSite = async (req, res) => {
                 psiWarnings,
                 psiNotices,
                 exactErrors,
-                failedUrls // Detailed list
+                failedUrls, // Detailed list
+                inspectedUrls,
+                totalSitemapUrls,
+                isSampled: totalSitemapUrls > inspectedUrls,
             },
             keywords: {
                 count: Object.keys(keywordStats).length,
@@ -267,6 +287,8 @@ const analyzeSite = async (req, res) => {
                 INP_Mobile: INP_Mobile,
                 Errors: errors,
                 Exact_Errors: exactErrors,
+                Inspected_Sitemap_URLs: inspectedUrls,
+                Total_Sitemap_URLs: totalSitemapUrls,
                 PSI_Warnings: psiWarnings,
                 PSI_Notices: psiNotices,
                 KeywordCount: Object.keys(keywordStats).length,
@@ -278,7 +300,7 @@ const analyzeSite = async (req, res) => {
         };
 
         // Save to History
-        await history.addToHistory(finalResponse, project.id);
+        const historyRecord = await history.addToHistory(finalResponse, project.id);
 
         // Export to Sheets
         let sheetStatus = false;
@@ -289,7 +311,12 @@ const analyzeSite = async (req, res) => {
             spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${project.spreadsheetId}/edit#gid=${project.sheetGid}`;
         }
 
-        res.json({ ...finalResponse, sheetStatus, spreadsheetUrl });
+        res.json({
+            ...finalResponse,
+            analysisHistoryId: historyRecord?.id || null,
+            sheetStatus,
+            spreadsheetUrl,
+        });
 
     } catch (e) {
         console.error('Analysis failed', e);

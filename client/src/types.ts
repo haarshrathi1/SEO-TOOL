@@ -31,6 +31,9 @@
         psiWarnings: number;
         psiNotices: number;
         exactErrors: string;
+        inspectedUrls?: number;
+        totalSitemapUrls?: number;
+        isSampled?: boolean;
         failedUrls?: { url: string; reason: string }[];
     };
     keywords: {
@@ -49,6 +52,7 @@
     status: 'Red' | 'Orange' | 'Green';
     alerts?: string[];
     report?: Record<string, unknown>;
+    analysisHistoryId?: string | null;
     sheetStatus?: boolean;
     spreadsheetUrl?: string;
 }

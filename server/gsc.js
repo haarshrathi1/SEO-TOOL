@@ -16,6 +16,32 @@ const parseSitemap = async (url) => {
     }
 };
 
+function computeSiteTotals(rows = []) {
+    let clicks = 0;
+    let impressions = 0;
+    let weightedPositionSum = 0;
+
+    rows.forEach((row) => {
+        const rowClicks = Number(row?.clicks || 0);
+        const rowImpressions = Number(row?.impressions || 0);
+        const rowPosition = Number(row?.position || 0);
+
+        clicks += rowClicks;
+        impressions += rowImpressions;
+
+        if (rowImpressions > 0 && Number.isFinite(rowPosition)) {
+            weightedPositionSum += rowPosition * rowImpressions;
+        }
+    });
+
+    return {
+        clicks,
+        impressions,
+        ctr: impressions ? ((clicks / impressions) * 100).toFixed(2) : '0.00',
+        avgPosition: impressions ? (weightedPositionSum / impressions).toFixed(2) : '0.00',
+    };
+}
+
 const getPerformance = async (siteUrl, options = {}) => {
     const auth = getAuthClient();
     if (!auth) throw new Error('Not authenticated');
@@ -70,27 +96,7 @@ const getSiteTotals = async (siteUrl) => {
         }
     });
 
-    const rows = res.data.rows || [];
-    let clicks = 0;
-    let impressions = 0;
-    let positionSum = 0;
-    let positionCount = 0;
-
-    rows.forEach(r => {
-        clicks += r.clicks || 0;
-        impressions += r.impressions || 0;
-        if (r.position) {
-            positionSum += r.position;
-            positionCount++;
-        }
-    });
-
-    return {
-        clicks,
-        impressions,
-        ctr: impressions ? ((clicks / impressions) * 100).toFixed(2) : '0.00',
-        avgPosition: positionCount ? (positionSum / positionCount).toFixed(2) : '0.00'
-    };
+    return computeSiteTotals(res.data.rows || []);
 };
 
 const inspectUrl = async (siteUrl, inspectionUrl) => {
@@ -126,5 +132,8 @@ module.exports = {
     getSiteTotals,
     getSitemaps,
     inspectUrl,
-    parseSitemap
+    parseSitemap,
+    __internal: {
+        computeSiteTotals,
+    },
 };

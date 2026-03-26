@@ -1,36 +1,13 @@
 ﻿const { google } = require('googleapis');
 const { getAuthClient } = require('./auth');
-const axios = require('axios');
-const cheerio = require('cheerio');
 const { URL } = require('url');
 const gsc = require('./gsc');
+const ga4 = require('./ga4');
 const psi = require('./psi');
 const { summarizeStructuredData } = require('./structuredData');
+const { fetchSitemapUrls } = require('./sitemaps');
 
 const MAX_INTERNAL_LINK_TARGETS = 100;
-
-const fetchSitemapUrls = async (siteUrl) => {
-    try {
-        const sitemapUrl = new URL('/sitemap.xml', siteUrl).href;
-        console.log(`Fetching sitemap: ${sitemapUrl}`);
-
-        const response = await axios.get(sitemapUrl, { timeout: 10000 });
-        const $ = cheerio.load(response.data, { xmlMode: true });
-        const urls = [];
-
-        $('loc').each((i, el) => {
-            const url = $(el).text().trim();
-            if (url) urls.push(url);
-        });
-
-        const pageUrls = urls.filter((url) => !url.endsWith('.xml'));
-        console.log(`Found ${pageUrls.length} URLs in sitemap.`);
-        return pageUrls;
-    } catch (e) {
-        console.error('Failed to fetch sitemap:', e.message);
-        return [siteUrl];
-    }
-};
 
 function normalizeComparableUrl(value) {
     if (typeof value !== 'string' || !value.trim()) {
@@ -94,6 +71,20 @@ function sameOrigin(left, right) {
         return new URL(left).origin.toLowerCase() === new URL(right).origin.toLowerCase();
     } catch {
         return false;
+    }
+}
+
+function normalizeTrafficPathKey(value) {
+    if (typeof value !== 'string' || !value.trim()) {
+        return '';
+    }
+
+    try {
+        const parsed = new URL(value);
+        const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+        return `${pathname}${parsed.search}`;
+    } catch {
+        return value.trim().replace(/\/+$/, '') || value.trim();
     }
 }
 
@@ -220,12 +211,13 @@ function annotateCanonicalSignals(results) {
 
 function getCrawlOptions(options) {
     if (typeof options === 'number') {
-        return { maxPages: options, onProgress: null };
+        return { maxPages: options, onProgress: null, ga4PropertyId: '' };
     }
 
     return {
         maxPages: Number(options?.maxPages || 200),
         onProgress: typeof options?.onProgress === 'function' ? options.onProgress : null,
+        ga4PropertyId: typeof options?.ga4PropertyId === 'string' ? options.ga4PropertyId.trim() : '',
     };
 }
 
@@ -245,7 +237,7 @@ async function reportProgress(onProgress, payload) {
 }
 
 const crawlSite = async (startUrl, options = {}) => {
-    const { maxPages, onProgress } = getCrawlOptions(options);
+    const { maxPages, onProgress, ga4PropertyId } = getCrawlOptions(options);
     console.log('Starting GSC Index Audit + Live Crawl...');
     const auth = getAuthClient();
     if (!auth) {
@@ -260,7 +252,7 @@ const crawlSite = async (startUrl, options = {}) => {
         message: 'Loading sitemap URLs',
     });
 
-    let urlsToAudit = await fetchSitemapUrls(startUrl);
+    let urlsToAudit = await fetchSitemapUrls(startUrl, { logger: console });
     if (urlsToAudit.length > maxPages) {
         urlsToAudit = urlsToAudit.slice(0, maxPages);
     }
@@ -293,13 +285,13 @@ const crawlSite = async (startUrl, options = {}) => {
         console.error('Failed to list sites:', e.message);
     }
 
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - 90);
+    const ymd = (date) => date.toISOString().split('T')[0];
+
     const pageImpressions = {};
     try {
-        const end = new Date();
-        const start = new Date();
-        start.setDate(end.getDate() - 90);
-        const ymd = (date) => date.toISOString().split('T')[0];
-
         const perfData = await gsc.getPerformance(gscSiteUrl, {
             startDate: ymd(start),
             endDate: ymd(end),
@@ -309,12 +301,24 @@ const crawlSite = async (startUrl, options = {}) => {
         (perfData.rows || []).forEach((row) => {
             const page = row.keys[0];
             if (page) {
-                const normalizedPage = page.replace(/\/$/, '');
+                const normalizedPage = normalizeComparableUrl(page);
                 pageImpressions[normalizedPage] = (pageImpressions[normalizedPage] || 0) + (row.impressions || 0);
             }
         });
     } catch (e) {
         console.warn('Could not fetch performance data:', e.message);
+    }
+
+    let pageViewsByPath = {};
+    if (ga4PropertyId) {
+        try {
+            pageViewsByPath = await ga4.getPageViewMap(ga4PropertyId, {
+                startDate: ymd(start),
+                endDate: ymd(end),
+            });
+        } catch (e) {
+            console.warn('Could not fetch page-level GA4 data:', e.message);
+        }
     }
 
     const results = [];
@@ -413,18 +417,24 @@ const crawlSite = async (startUrl, options = {}) => {
                     includeExternal: true,
                 });
                 const structuredData = summarizeStructuredData(pageData.structuredData);
+                const normalizedRequestedUrl = normalizeComparableUrl(url);
+                const normalizedFinalUrl = normalizeComparableUrl(pageData.finalUrl || url);
+                const trafficPathKey = normalizeTrafficPathKey(pageData.finalUrl || url) || normalizeTrafficPathKey(url);
+                const impressions = pageImpressions[normalizedFinalUrl] || pageImpressions[normalizedRequestedUrl] || 0;
+                const ga4Views = pageViewsByPath[trafficPathKey] || 0;
 
                 if (inspectionData.error) {
                     results.push({
                         url,
                         finalUrl: pageData.finalUrl || url,
                         httpStatus: pageData.httpStatus || 0,
-                        redirected: normalizeComparableUrl(pageData.finalUrl || url) !== normalizeComparableUrl(url),
+                        redirected: normalizedFinalUrl !== normalizedRequestedUrl,
                         redirectCount: pageData.redirectCount || 0,
                         status: 'FAIL',
                         coverageState: inspectionData.error,
                         indexingState: 'ERROR',
                         lastCrawlTime: '-',
+                        ga4_views: ga4Views,
                         title: pageData.title,
                         description: pageData.description,
                         canonicalUrl: pageData.canonicals?.[0] || '',
@@ -444,8 +454,6 @@ const crawlSite = async (startUrl, options = {}) => {
                     let robotStatus = indexStatus.robotsTxtState || '-';
                     if (robotStatus === 'ROBOTS_TXT_STATE_UNSPECIFIED') robotStatus = 'Not Checked (Queued)';
 
-                    const normalizedUrl = url.replace(/\/$/, '');
-                    const impressions = pageImpressions[normalizedUrl] || 0;
                     let finalStatus = indexStatus.verdict || 'UNKNOWN';
                     let finalCoverage = formatCoverageState(indexStatus.coverageState);
 
@@ -484,13 +492,14 @@ const crawlSite = async (startUrl, options = {}) => {
                         url,
                         finalUrl: pageData.finalUrl || url,
                         httpStatus: pageData.httpStatus || 0,
-                        redirected: normalizeComparableUrl(pageData.finalUrl || url) !== normalizeComparableUrl(url),
+                        redirected: normalizedFinalUrl !== normalizedRequestedUrl,
                         redirectCount: pageData.redirectCount || 0,
                         status: finalStatus,
                         coverageState: finalCoverage,
                         indexingState: indexStatus.indexingState || '-',
                         lastCrawlTime: indexStatus.lastCrawlTime ? new Date(indexStatus.lastCrawlTime).toLocaleString() : 'Never',
                         robotStatus,
+                        ga4_views: ga4Views,
                         psi_score: psiData?.mobile?.score || 0,
                         psi_data: psiData,
                         title: pageData.title,
@@ -591,6 +600,7 @@ module.exports = {
         annotateCanonicalSignals,
         findCycleNodes,
         normalizeComparableUrl,
+        normalizeTrafficPathKey,
         isInternalUrl,
         sameOrigin,
         uniqueNormalizedLinks,

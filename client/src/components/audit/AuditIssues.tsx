@@ -8,16 +8,19 @@ interface IssuesProps {
 }
 
 export default function AuditIssues({ results, onReview }: IssuesProps) {
+    const indexedCount = results.filter((result) => result.status === 'PASS').length;
+    const reviewCount = results.filter((result) => result.status !== 'PASS').length;
     const orphanCount = results.filter((result) => isIndexedOrphan(result)).length;
     const highValueUnderlinkedCount = results.filter((result) => isHighValueUnderlinked(result)).length;
+    const linkOpportunityCount = orphanCount + highValueUnderlinkedCount;
 
     const errors = [
         {
             id: 'not-indexed',
             title: 'Pages not indexed by Google',
-            count: results.filter((result) => result.status === 'FAIL').length,
+            count: results.filter((result) => result.status !== 'PASS').length,
             severity: 'critical',
-            desc: 'These pages are completely invisible to search engines.',
+            desc: 'These pages are currently excluded, failing, or not serving in Google.',
         },
         {
             id: 'no-h1',
@@ -61,6 +64,29 @@ export default function AuditIssues({ results, onReview }: IssuesProps) {
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="grid gap-3 md:grid-cols-4">
+                <div className="border-2 border-black bg-green-100 p-4 shadow-[4px_4px_0px_0px_#000]">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Indexed</div>
+                    <div className="mt-2 text-3xl font-black text-black">{indexedCount}</div>
+                    <div className="mt-1 text-xs font-bold text-slate-600">Pages currently passing index checks.</div>
+                </div>
+                <div className="border-2 border-black bg-red-100 p-4 shadow-[4px_4px_0px_0px_#000]">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Needs Review</div>
+                    <div className="mt-2 text-3xl font-black text-black">{reviewCount}</div>
+                    <div className="mt-1 text-xs font-bold text-slate-600">Pages excluded, failing, or partially healthy.</div>
+                </div>
+                <div className="border-2 border-black bg-yellow-100 p-4 shadow-[4px_4px_0px_0px_#000]">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Critical Items</div>
+                    <div className="mt-2 text-3xl font-black text-black">{errors.reduce((sum, issue) => sum + issue.count, 0)}</div>
+                    <div className="mt-1 text-xs font-bold text-slate-600">High-priority fixes surfaced below.</div>
+                </div>
+                <div className="border-2 border-black bg-blue-100 p-4 shadow-[4px_4px_0px_0px_#000]">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Link Opportunities</div>
+                    <div className="mt-2 text-3xl font-black text-black">{linkOpportunityCount}</div>
+                    <div className="mt-1 text-xs font-bold text-slate-600">Pages that need stronger internal support.</div>
+                </div>
+            </div>
+
             <div>
                 <h3 className="mb-4 flex w-fit items-center gap-2 border-2 border-black bg-red-100 px-2 text-sm font-black uppercase tracking-wider text-black">
                     <XCircle className="h-4 w-4 text-red-600" />

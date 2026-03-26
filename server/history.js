@@ -40,13 +40,21 @@ function buildHistoryQuery(user, options = {}) {
 
 const addToHistory = async (analysisData, projectId) => {
     try {
-        await AnalysisHistory.create({
+        const doc = await AnalysisHistory.create({
             projectId,
             data: analysisData,
             timestamp: new Date(),
         });
+
+        return {
+            id: doc._id.toString(),
+            timestamp: doc.timestamp,
+            projectId: doc.projectId,
+            data: doc.data,
+        };
     } catch (error) {
         console.error('Failed to save analysis history:', error);
+        return null;
     }
 };
 

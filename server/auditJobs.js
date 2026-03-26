@@ -132,6 +132,7 @@ async function runAuditJob(jobId) {
     try {
         const results = await crawler.crawlSite(project.url, {
             maxPages: project.auditMaxPages || 200,
+            ga4PropertyId: project.ga4PropertyId || '',
             onProgress: async (progress) => {
                 await AuditJob.findByIdAndUpdate(jobId, {
                     status: 'running',

@@ -11,6 +11,11 @@ interface TableProps {
 }
 
 export default function AuditTable({ results, onRequestIndexing = null }: TableProps) {
+    const indexedCount = results.filter((result) => result.status === 'PASS').length;
+    const reviewCount = results.filter((result) => result.status !== 'PASS').length;
+    const viewsTrackedCount = results.filter((result) => typeof result.ga4_views === 'number').length;
+    const totalTrackedViews = results.reduce((sum, result) => sum + (typeof result.ga4_views === 'number' ? result.ga4_views : 0), 0);
+
     const getStatusBadge = (status: string, coverage: string) => {
         const normalizedStatus = status?.toUpperCase() || 'UNKNOWN';
         if (normalizedStatus === 'PASS') {
@@ -41,11 +46,36 @@ export default function AuditTable({ results, onRequestIndexing = null }: TableP
         return 'bg-green-300 text-black';
     };
 
+    const getViewsBadgeClassName = (views: number) => {
+        if (views >= 1000) return 'bg-sky-200 text-black';
+        if (views > 0) return 'bg-amber-100 text-black';
+        return 'bg-slate-100 text-slate-700';
+    };
+
     return (
         <div className="overflow-hidden border-2 border-black bg-white shadow-[8px_8px_0px_0px_#000]">
+            <div className="grid gap-2 border-b-2 border-black bg-slate-100 p-3 md:grid-cols-4">
+                <div className="border border-black bg-white px-3 py-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.1)]">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Pages Loaded</div>
+                    <div className="mt-1 text-2xl font-black text-black">{results.length}</div>
+                </div>
+                <div className="border border-black bg-green-50 px-3 py-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.1)]">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Indexed Pages</div>
+                    <div className="mt-1 text-2xl font-black text-black">{indexedCount}</div>
+                </div>
+                <div className="border border-black bg-red-50 px-3 py-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.1)]">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Review Queue</div>
+                    <div className="mt-1 text-2xl font-black text-black">{reviewCount}</div>
+                </div>
+                <div className="border border-black bg-sky-50 px-3 py-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.1)]">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Tracked Views</div>
+                    <div className="mt-1 text-2xl font-black text-black">{totalTrackedViews.toLocaleString()}</div>
+                    <div className="text-[10px] font-bold uppercase text-slate-500">{viewsTrackedCount}/{results.length} pages with GA4 data</div>
+                </div>
+            </div>
             <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
-                    <thead className="border-b-2 border-black bg-slate-100 text-[11px] font-black uppercase tracking-wider text-black">
+                    <thead className="sticky top-0 z-10 border-b-2 border-black bg-slate-100 text-[11px] font-black uppercase tracking-wider text-black">
                         <tr>
                             <th className="w-[35%] border-r-2 border-black px-6 py-4">Page Detail</th>
                             <th className="w-[20%] border-r-2 border-black px-6 py-4">Indexing Status</th>
@@ -202,8 +232,8 @@ export default function AuditTable({ results, onRequestIndexing = null }: TableP
                                 </td>
 
                                 <td className="px-6 py-4 text-right">
-                                    {result.ga4_views ? (
-                                        <span className="border border-black bg-slate-100 px-2 py-1 text-xs font-black text-black shadow-[2px_2px_0px_0px_rgba(0,0,0,0.1)]">
+                                    {result.ga4_views !== undefined && result.ga4_views !== null ? (
+                                        <span className={`border border-black px-2 py-1 text-xs font-black shadow-[2px_2px_0px_0px_rgba(0,0,0,0.1)] ${getViewsBadgeClassName(result.ga4_views)}`}>
                                             {result.ga4_views.toLocaleString()}
                                         </span>
                                     ) : (

@@ -2,6 +2,21 @@ const { google } = require('googleapis');
 const { getAuthClient } = require('./auth');
 const { getWeeklyDateRange } = require('./utils');
 
+function normalizePagePathKey(value) {
+    if (typeof value !== 'string' || !value.trim()) {
+        return '';
+    }
+
+    const raw = value.trim();
+    try {
+        const parsed = new URL(raw, 'https://placeholder.local');
+        const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+        return `${pathname}${parsed.search}`;
+    } catch {
+        return raw.replace(/\/+$/, '') || raw;
+    }
+}
+
 const getGA4Data = async (propertyId) => {
     const auth = getAuthClient();
     if (!auth) throw new Error('Not authenticated');
@@ -33,4 +48,56 @@ const getGA4Data = async (propertyId) => {
     }
 };
 
-module.exports = { getGA4Data };
+const getPageViewMap = async (propertyId, options = {}) => {
+    if (!propertyId) {
+        return {};
+    }
+
+    const auth = getAuthClient();
+    if (!auth) throw new Error('Not authenticated');
+
+    const analyticsData = google.analyticsdata({ version: 'v1beta', auth });
+    const { startDate, endDate } = options.startDate && options.endDate
+        ? { startDate: options.startDate, endDate: options.endDate }
+        : getWeeklyDateRange();
+
+    const metricCandidates = ['screenPageViews', 'views'];
+    for (const metricName of metricCandidates) {
+        try {
+            const response = await analyticsData.properties.runReport({
+                property: `properties/${propertyId}`,
+                requestBody: {
+                    dateRanges: [{ startDate, endDate }],
+                    dimensions: [{ name: 'pagePathPlusQueryString' }],
+                    metrics: [{ name: metricName }],
+                    limit: 100000,
+                },
+            });
+
+            const pageViewMap = {};
+            (response.data.rows || []).forEach((row) => {
+                const pagePath = normalizePagePathKey(row.dimensionValues?.[0]?.value || '');
+                const views = Number(row.metricValues?.[0]?.value || 0);
+                if (pagePath) {
+                    pageViewMap[pagePath] = (pageViewMap[pagePath] || 0) + views;
+                }
+            });
+
+            return pageViewMap;
+        } catch (e) {
+            if (metricName === metricCandidates[metricCandidates.length - 1]) {
+                console.error('Error fetching page-level GA4 data', e.message);
+            }
+        }
+    }
+
+    return {};
+};
+
+module.exports = {
+    getGA4Data,
+    getPageViewMap,
+    __internal: {
+        normalizePagePathKey,
+    },
+};

@@ -108,7 +108,394 @@ function buildMetadata(meta) {
     };
 }
 
+const SERP_PERSONALITIES = ['Knowledge Hub', 'Commercial Battlefield', 'Tutorial Playground', 'News Feed', 'Community Forum', 'Mixed Bazaar'];
+const DIFFICULTY_VERDICTS = ['Easy Pickings', 'Moderate Fight', 'Tough Battle', 'Near Impossible'];
+const KEYWORD_INTENTS = ['Informational', 'Commercial', 'Transactional', 'Navigational', 'Comparison'];
+const KEYWORD_VOLUMES = ['High', 'Medium', 'Low'];
+const KEYWORD_DIFFICULTIES = ['Easy', 'Medium', 'Hard'];
+const BUYER_STAGES = ['Awareness', 'Consideration', 'Decision', 'Retention'];
+const STRATEGY_DIFFICULTY_LABELS = ['Easy', 'Moderate', 'Hard', 'Very Hard', 'Near Impossible'];
+const VIABILITY_VERDICTS = ['High', 'Medium', 'Low'];
+const STRATEGY_PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
+const KEYWORD_SOURCES = ['autocomplete', 'paa', 'related', 'serp_implied', 'long_tail'];
+const CONFIDENCE_LABELS = ['High', 'Medium', 'Low'];
+
+function asString(value, fallback = '') {
+    if (typeof value !== 'string') {
+        return fallback;
+    }
+    const trimmed = value.trim();
+    return trimmed || fallback;
+}
+
+function asNumber(value, fallback = 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clampNumber(value, min, max, fallback) {
+    return Math.max(min, Math.min(max, asNumber(value, fallback)));
+}
+
+function normalizeChoice(value, choices, fallback) {
+    const normalized = asString(value);
+    if (!normalized) {
+        return fallback;
+    }
+
+    const matched = choices.find((choice) => choice.toLowerCase() === normalized.toLowerCase());
+    return matched || fallback;
+}
+
+function normalizeUniqueStrings(values, limit = 20) {
+    if (!Array.isArray(values)) {
+        return [];
+    }
+
+    const seen = new Set();
+    const normalized = [];
+    for (const entry of values) {
+        const value = asString(entry);
+        if (!value) {
+            continue;
+        }
+        const key = value.toLowerCase();
+        if (seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        normalized.push(value);
+        if (normalized.length >= limit) {
+            break;
+        }
+    }
+    return normalized;
+}
+
+function fallbackBuyerStage(intent) {
+    switch (intent) {
+    case 'Transactional':
+        return 'Decision';
+    case 'Commercial':
+    case 'Comparison':
+        return 'Consideration';
+    case 'Navigational':
+        return 'Decision';
+    default:
+        return 'Awareness';
+    }
+}
+
+function normalizeKeywordItem(rawItem) {
+    if (!rawItem || typeof rawItem !== 'object') {
+        return null;
+    }
+
+    const term = asString(rawItem.term || rawItem.keyword || rawItem.query);
+    if (!term) {
+        return null;
+    }
+
+    const intent = normalizeChoice(rawItem.intent, KEYWORD_INTENTS, 'Informational');
+    const volume = normalizeChoice(rawItem.volume, KEYWORD_VOLUMES, 'Low');
+    const difficulty = normalizeChoice(rawItem.difficulty, KEYWORD_DIFFICULTIES, 'Medium');
+    const source = normalizeChoice(rawItem.source, KEYWORD_SOURCES, 'serp_implied');
+    const buyerStage = normalizeChoice(rawItem.buyerStage, BUYER_STAGES, fallbackBuyerStage(intent));
+    const opportunityScore = Math.round(clampNumber(rawItem.opportunityScore, 0, 100, 0));
+
+    return {
+        term,
+        intent,
+        volume,
+        difficulty,
+        opportunityScore,
+        source,
+        buyerStage,
+    };
+}
+
+function normalizeQuestionKeyword(rawItem) {
+    const raw = typeof rawItem === 'string'
+        ? { question: rawItem }
+        : (rawItem && typeof rawItem === 'object' ? rawItem : null);
+
+    if (!raw) {
+        return null;
+    }
+
+    const question = asString(raw.question || raw.term || raw.keyword || raw.query);
+    if (!question) {
+        return null;
+    }
+
+    return {
+        question,
+        intent: normalizeChoice(raw.intent, KEYWORD_INTENTS, 'Informational'),
+        volume: normalizeChoice(raw.volume, KEYWORD_VOLUMES, 'Low'),
+    };
+}
+
+function normalizeLongTailGem(rawItem) {
+    if (!rawItem || typeof rawItem !== 'object') {
+        return null;
+    }
+
+    const term = asString(rawItem.term || rawItem.keyword || rawItem.query);
+    if (!term) {
+        return null;
+    }
+
+    return {
+        term,
+        reason: asString(rawItem.reason, 'Opportunity identified from SERP language patterns.'),
+        opportunityScore: Math.round(clampNumber(rawItem.opportunityScore, 0, 100, 0)),
+    };
+}
+
+function normalizeSerpDna(raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    return {
+        serpPersonality: normalizeChoice(source.serpPersonality, SERP_PERSONALITIES, 'Mixed Bazaar'),
+        googleWants: asString(source.googleWants, 'Google favors pages that match dominant intent and satisfy core query expectations.'),
+        contentFormatDominance: normalizeUniqueStrings(source.contentFormatDominance, 4),
+        eatSignals: {
+            experience: asString(source.eatSignals?.experience, 'Practical examples and implementation detail.'),
+            expertise: asString(source.eatSignals?.expertise, 'Demonstrated topical depth.'),
+            authority: asString(source.eatSignals?.authority, 'Trusted domain or author signals.'),
+            trust: asString(source.eatSignals?.trust, 'Transparent claims and credible sourcing.'),
+        },
+        topicalAuthority: asString(source.topicalAuthority, 'Topical authority appears mixed across the current page-one set.'),
+        contentGaps: normalizeUniqueStrings(source.contentGaps, 4),
+        rankerProfile: asString(source.rankerProfile, 'Mixed'),
+        difficultyVerdict: normalizeChoice(source.difficultyVerdict, DIFFICULTY_VERDICTS, 'Moderate Fight'),
+        opportunityAngle: asString(source.opportunityAngle, 'Publish a focused page matching the strongest intent with clearer differentiation.'),
+    };
+}
+
+function normalizeDistribution(raw, keys) {
+    const input = raw && typeof raw === 'object' ? raw : {};
+    return keys.reduce((acc, key) => {
+        acc[key] = Math.round(clampNumber(input[key], 0, 100, 0));
+        return acc;
+    }, {});
+}
+
+function normalizeIntentDecomposition(raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const microIntents = Array.isArray(source.microIntents)
+        ? source.microIntents
+            .map((entry) => {
+                if (!entry || typeof entry !== 'object') {
+                    return null;
+                }
+                const intent = asString(entry.intent);
+                if (!intent) {
+                    return null;
+                }
+
+                return {
+                    intent,
+                    strength: normalizeChoice(entry.strength, ['High', 'Medium', 'Low'], 'Medium'),
+                    example_query: asString(entry.example_query, ''),
+                };
+            })
+            .filter(Boolean)
+            .slice(0, 4)
+        : [];
+
+    return {
+        primaryIntent: asString(source.primaryIntent, 'Informational'),
+        intentSpectrum: normalizeDistribution(source.intentSpectrum, ['know', 'do', 'go', 'buy', 'compare', 'learn']),
+        buyerJourney: normalizeDistribution(source.buyerJourney, ['awareness', 'consideration', 'decision', 'retention']),
+        microIntents,
+        intentInsight: asString(source.intentInsight, 'Intent distribution is mixed; prioritize pages that answer the dominant query mode first.'),
+        contentAngle: asString(source.contentAngle, 'Answer intent fast with practical proof.'),
+    };
+}
+
+function normalizeKeywordUniverse(raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const uniqueTerms = new Set();
+    const keywords = [];
+
+    if (Array.isArray(source.keywords)) {
+        for (const entry of source.keywords) {
+            const keyword = normalizeKeywordItem(entry);
+            if (!keyword) {
+                continue;
+            }
+            const key = keyword.term.toLowerCase();
+            if (uniqueTerms.has(key)) {
+                continue;
+            }
+            uniqueTerms.add(key);
+            keywords.push(keyword);
+            if (keywords.length >= 60) {
+                break;
+            }
+        }
+    }
+
+    const questionKeywords = Array.isArray(source.questionKeywords)
+        ? source.questionKeywords
+            .map((entry) => normalizeQuestionKeyword(entry))
+            .filter(Boolean)
+            .slice(0, 12)
+        : [];
+
+    const longTailGems = Array.isArray(source.longTailGems)
+        ? source.longTailGems
+            .map((entry) => normalizeLongTailGem(entry))
+            .filter(Boolean)
+            .slice(0, 12)
+        : [];
+
+    return {
+        totalKeywords: keywords.length,
+        keywords,
+        questionKeywords,
+        lsiTerms: normalizeUniqueStrings(source.lsiTerms, 24),
+        longTailGems,
+    };
+}
+
+function normalizeCluster(rawCluster) {
+    if (!rawCluster || typeof rawCluster !== 'object') {
+        return null;
+    }
+
+    const name = asString(rawCluster.name);
+    if (!name) {
+        return null;
+    }
+
+    const keywords = Array.isArray(rawCluster.keywords)
+        ? rawCluster.keywords
+            .map((entry) => {
+                const normalized = normalizeKeywordItem(entry);
+                if (!normalized) {
+                    return null;
+                }
+
+                return {
+                    term: normalized.term,
+                    intent: normalized.intent,
+                    volume: normalized.volume,
+                    opportunityScore: normalized.opportunityScore,
+                };
+            })
+            .filter(Boolean)
+            .slice(0, 5)
+        : [];
+
+    return {
+        name,
+        priority: normalizeChoice(rawCluster.priority, STRATEGY_PRIORITIES, 'P2'),
+        intent: asString(rawCluster.intent, 'Informational'),
+        keywords,
+        contentFormat: asString(rawCluster.contentFormat, 'Guide'),
+        estimatedTraffic: normalizeChoice(rawCluster.estimatedTraffic, KEYWORD_VOLUMES, 'Medium'),
+    };
+}
+
+function normalizeQuickWin(rawItem) {
+    if (!rawItem || typeof rawItem !== 'object') {
+        return null;
+    }
+
+    const keyword = asString(rawItem.keyword || rawItem.term);
+    if (!keyword) {
+        return null;
+    }
+
+    return {
+        keyword,
+        reason: asString(rawItem.reason, 'Search demand and SERP gaps indicate a short-term opportunity.'),
+        action: asString(rawItem.action, 'Publish and optimize a focused page.'),
+        timeToRank: asString(rawItem.timeToRank, '8-12 weeks'),
+    };
+}
+
+function normalizeStrategicSynthesis(raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const viability = source.viability && typeof source.viability === 'object' ? source.viability : {};
+
+    const clusters = Array.isArray(source.clusters)
+        ? source.clusters
+            .map((cluster) => normalizeCluster(cluster))
+            .filter(Boolean)
+            .slice(0, 4)
+        : [];
+
+    const quickWins = Array.isArray(source.quickWins)
+        ? source.quickWins
+            .map((entry) => normalizeQuickWin(entry))
+            .filter(Boolean)
+            .slice(0, 4)
+        : [];
+
+    const contentBlueprint = source.contentBlueprint && typeof source.contentBlueprint === 'object'
+        ? source.contentBlueprint
+        : {};
+    const alternativeStrategy = source.alternativeStrategy && typeof source.alternativeStrategy === 'object'
+        ? source.alternativeStrategy
+        : {};
+
+    return {
+        difficulty: {
+            score: Math.round(clampNumber(source.difficulty?.score, 0, 100, 0)),
+            label: normalizeChoice(source.difficulty?.label, STRATEGY_DIFFICULTY_LABELS, 'Moderate'),
+            reason: asString(source.difficulty?.reason, 'Competition and intent overlap suggest a moderate effort level.'),
+        },
+        viability: {
+            soloCreator: {
+                verdict: normalizeChoice(viability.soloCreator?.verdict, VIABILITY_VERDICTS, 'Medium'),
+                reason: asString(viability.soloCreator?.reason, 'Focused execution can compete in selected subtopics.'),
+            },
+            smallBusiness: {
+                verdict: normalizeChoice(viability.smallBusiness?.verdict, VIABILITY_VERDICTS, 'Medium'),
+                reason: asString(viability.smallBusiness?.reason, 'Resource constraints require tighter prioritization.'),
+            },
+            brand: {
+                verdict: normalizeChoice(viability.brand?.verdict, VIABILITY_VERDICTS, 'Medium'),
+                reason: asString(viability.brand?.reason, 'Brands can scale faster with stronger authority and distribution.'),
+            },
+        },
+        clusters,
+        quickWins,
+        contentBlueprint: {
+            primaryFormat: asString(contentBlueprint.primaryFormat, 'Guide'),
+            wordCountTarget: asString(contentBlueprint.wordCountTarget, '1200-1800 words'),
+            uniqueAngle: asString(contentBlueprint.uniqueAngle, 'Lead with the clearest intent match and practical examples.'),
+            mustInclude: normalizeUniqueStrings(contentBlueprint.mustInclude, 5),
+            avoid: normalizeUniqueStrings(contentBlueprint.avoid, 5),
+            timeToImpact: asString(contentBlueprint.timeToImpact, '8-12 weeks'),
+            confidence: normalizeChoice(contentBlueprint.confidence, CONFIDENCE_LABELS, 'Medium'),
+        },
+        alternativeStrategy: {
+            angle: asString(alternativeStrategy.angle, 'Niche down by user intent segment.'),
+            reason: asString(alternativeStrategy.reason, 'A narrower entry point can reduce competition and improve conversion fit.'),
+            keywords: normalizeUniqueStrings(alternativeStrategy.keywords, 4),
+        },
+        contentGap: asString(source.contentGap, 'Current results under-serve nuanced user scenarios and practical implementation detail.'),
+        executionPriority: normalizeUniqueStrings(source.executionPriority, 5),
+    };
+}
+
 function buildAnalysisMapping(strategy) {
+    const clusters = Array.isArray(strategy.clusters)
+        ? strategy.clusters.map((cluster) => ({
+            name: cluster.name,
+            keywords: Array.isArray(cluster.keywords)
+                ? cluster.keywords.map((keyword) => ({
+                    term: keyword.term,
+                    intent: keyword.intent,
+                    vol: keyword.volume || 'Low',
+                }))
+                : [],
+        }))
+        : [];
+
     return {
         difficulty: strategy.difficulty,
         viability: {
@@ -124,7 +511,7 @@ function buildAnalysisMapping(strategy) {
             confidence: strategy.contentBlueprint.confidence,
         },
         alternativeStrategy: strategy.alternativeStrategy,
-        clusters: strategy.clusters,
+        clusters,
         contentGap: strategy.contentGap,
     };
 }
@@ -939,7 +1326,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         phase: 'start',
     }));
     const serpDnaResponse = await layer2SerpDna(seed, serpData, serpSummary, suggestions, groundedSearch, options);
-    const serpDna = serpDnaResponse.data;
+    const serpDna = normalizeSerpDna(serpDnaResponse.data);
     lastAiMeta = serpDnaResponse.meta || lastAiMeta;
     await pushProgress(options.onProgress, buildProgressUpdate(2, `Layer 2 complete. SERP personality: ${serpDna.serpPersonality}.`, {
         phase: 'complete',
@@ -951,7 +1338,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         provider: serpDnaResponse.meta?.provider || getRuntimeProviderLabel(),
     }));
     const intentResponse = await layer3IntentDecomposition(seed, serpData, serpDna, suggestions, groundedSearch, options);
-    const intentData = intentResponse.data;
+    const intentData = normalizeIntentDecomposition(intentResponse.data);
     lastAiMeta = intentResponse.meta || lastAiMeta;
     await pushProgress(options.onProgress, buildProgressUpdate(3, `Layer 3 complete. Primary intent: ${intentData.primaryIntent}.`, {
         phase: 'complete',
@@ -963,7 +1350,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         provider: intentResponse.meta?.provider || getRuntimeProviderLabel(),
     }));
     const keywordUniverseResponse = await layer4KeywordUniverse(seed, serpData, serpDna, intentData, suggestions, groundedSearch, options);
-    const keywordUniverse = keywordUniverseResponse.data;
+    const keywordUniverse = normalizeKeywordUniverse(keywordUniverseResponse.data);
     lastAiMeta = keywordUniverseResponse.meta || lastAiMeta;
     await pushProgress(options.onProgress, buildProgressUpdate(4, `Layer 4 complete. ${keywordUniverse.totalKeywords} keywords surfaced for prioritization.`, {
         phase: 'complete',
@@ -975,7 +1362,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         provider: keywordUniverseResponse.meta?.provider || getRuntimeProviderLabel(),
     }));
     const strategyResponse = await layer5StrategicSynthesis(seed, serpDna, intentData, keywordUniverse, serpSummary, groundedSearch, options);
-    const strategy = strategyResponse.data;
+    const strategy = normalizeStrategicSynthesis(strategyResponse.data);
     lastAiMeta = strategyResponse.meta || lastAiMeta;
     await pushProgress(options.onProgress, buildProgressUpdate(5, `Layer 5 complete. Difficulty scored at ${strategy.difficulty.score}/100.`, {
         phase: 'complete',
@@ -1043,4 +1430,11 @@ module.exports = {
     getRuntimeProviderLabel,
     runKeywordResearchV2,
     runLegacyKeywordResearch,
+    __internal: {
+        normalizeSerpDna,
+        normalizeIntentDecomposition,
+        normalizeKeywordUniverse,
+        normalizeStrategicSynthesis,
+        buildAnalysisMapping,
+    },
 };
