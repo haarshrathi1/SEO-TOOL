@@ -1,3 +1,5 @@
+const fs = require('node:fs/promises');
+const path = require('node:path');
 const axios = require('axios');
 
 const {
@@ -15,6 +17,22 @@ const LAYER_LABELS = {
     4: 'Keyword expansion',
     5: 'Strategic synthesis',
 };
+const DEFAULT_GROUNDED_SEARCH_DAILY_LIMIT = 500;
+const GROUNDED_SEARCH_USAGE_FILE = process.env.GROUNDED_SEARCH_USAGE_FILE || path.join(__dirname, 'data', 'grounding_usage.json');
+let groundingUsageWriteQueue = Promise.resolve();
+
+function parseGroundedSearchDailyLimit(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+        return DEFAULT_GROUNDED_SEARCH_DAILY_LIMIT;
+    }
+    return Math.floor(parsed);
+}
+
+const GROUNDED_SEARCH_DAILY_LIMIT = parseGroundedSearchDailyLimit(
+    process.env.GROUNDED_SEARCH_DAILY_LIMIT
+    || process.env.GOOGLE_SEARCH_GROUNDING_DAILY_LIMIT
+);
 
 function getRuntimeProviderLabel() {
     const runtime = getProviderRuntime();
@@ -544,6 +562,117 @@ function hasUsableKeywordSourceData(suggestions, serpData, groundedSearch) {
         + (groundedSearch?.questions?.length || 0);
 
     return organicCount > 0 || groundedSignals > 0;
+}
+
+function getGroundingDateKey(date = new Date()) {
+    return date.toISOString().slice(0, 10);
+}
+
+function applyGroundedSearchUsageLimit(state, options = {}) {
+    const dateKey = typeof options.dateKey === 'string' && options.dateKey
+        ? options.dateKey
+        : getGroundingDateKey();
+    const limit = parseGroundedSearchDailyLimit(
+        options.limit === undefined ? GROUNDED_SEARCH_DAILY_LIMIT : options.limit
+    );
+
+    const savedDate = typeof state?.date === 'string' ? state.date : '';
+    const savedCount = Number.isFinite(Number(state?.count))
+        ? Math.max(0, Math.floor(Number(state.count)))
+        : 0;
+    const usedSoFar = savedDate === dateKey ? savedCount : 0;
+    const baseResult = {
+        date: dateKey,
+        limit,
+    };
+
+    if (limit <= 0) {
+        return {
+            ...baseResult,
+            allowed: false,
+            reason: 'limit_disabled',
+            used: usedSoFar,
+            remaining: 0,
+            nextState: { date: dateKey, count: usedSoFar },
+        };
+    }
+
+    if (usedSoFar >= limit) {
+        return {
+            ...baseResult,
+            allowed: false,
+            reason: 'daily_limit_reached',
+            used: usedSoFar,
+            remaining: 0,
+            nextState: { date: dateKey, count: usedSoFar },
+        };
+    }
+
+    const nextCount = usedSoFar + 1;
+    return {
+        ...baseResult,
+        allowed: true,
+        reason: 'ok',
+        used: nextCount,
+        remaining: Math.max(0, limit - nextCount),
+        nextState: { date: dateKey, count: nextCount },
+    };
+}
+
+async function readGroundedSearchUsage(filePath = GROUNDED_SEARCH_USAGE_FILE) {
+    try {
+        const raw = await fs.readFile(filePath, 'utf8');
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (error) {
+        if (error?.code === 'ENOENT') {
+            return {};
+        }
+        throw error;
+    }
+}
+
+async function writeGroundedSearchUsage(state, filePath = GROUNDED_SEARCH_USAGE_FILE) {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify(state, null, 2), 'utf8');
+}
+
+function withGroundedSearchUsageLock(task) {
+    const run = groundingUsageWriteQueue.then(task, task);
+    groundingUsageWriteQueue = run.catch(() => {});
+    return run;
+}
+
+async function reserveGroundedSearchUsage(options = {}) {
+    return withGroundedSearchUsageLock(async () => {
+        const filePath = options.filePath || GROUNDED_SEARCH_USAGE_FILE;
+        const dateKey = typeof options.dateKey === 'string' && options.dateKey
+            ? options.dateKey
+            : getGroundingDateKey();
+        const limit = options.limit === undefined
+            ? GROUNDED_SEARCH_DAILY_LIMIT
+            : options.limit;
+
+        try {
+            const current = await readGroundedSearchUsage(filePath);
+            const decision = applyGroundedSearchUsageLimit(current, { dateKey, limit });
+            if (decision.allowed) {
+                await writeGroundedSearchUsage(decision.nextState, filePath);
+            }
+            return decision;
+        } catch (error) {
+            return {
+                date: dateKey,
+                limit: parseGroundedSearchDailyLimit(limit),
+                allowed: false,
+                reason: 'tracking_unavailable',
+                used: null,
+                remaining: null,
+                nextState: null,
+                error: error.message || 'Unable to track grounded search quota',
+            };
+        }
+    });
 }
 
 async function fetchGroundedSearchSnapshot(seed, options = {}) {
@@ -1267,6 +1396,8 @@ async function runKeywordResearchV2(seedInput, options = {}) {
     }
 
     let lastAiMeta = null;
+    let groundedSearchSkippedReason = null;
+    let groundedSearchQuota = null;
 
     await pushProgress(options.onProgress, {
         stage: 'Queued',
@@ -1292,6 +1423,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         fetchAutocomplete(seed),
         fetchSERP(seed),
     ]);
+    const groundedSearchRequested = shouldUseGroundedSearchFallback(suggestions, serpData);
 
     let groundedSearch = null;
 
@@ -1299,16 +1431,35 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         phase: 'mid',
     }));
 
-    if (shouldUseGroundedSearchFallback(suggestions, serpData)) {
+    if (groundedSearchRequested) {
         await pushProgress(options.onProgress, buildProgressUpdate(1, 'Live keyword signals are thin. Verifying the query with Google Search grounding...', {
             phase: 'mid',
         }));
-        try {
-            const groundedSearchResponse = await fetchGroundedSearchSnapshot(seed, options);
-            groundedSearch = groundedSearchResponse.data;
-            lastAiMeta = groundedSearchResponse.meta || lastAiMeta;
-        } catch (error) {
-            console.error('[Grounded Search] Error:', error.message);
+
+        groundedSearchQuota = await reserveGroundedSearchUsage({
+            limit: options.groundedSearchDailyLimit,
+        });
+
+        if (!groundedSearchQuota.allowed) {
+            groundedSearchSkippedReason = groundedSearchQuota.reason;
+            if (groundedSearchQuota.reason === 'daily_limit_reached') {
+                await pushProgress(options.onProgress, buildProgressUpdate(1, `Google Search grounding skipped: daily limit reached (${groundedSearchQuota.limit}/day).`, {
+                    phase: 'mid',
+                }));
+            } else {
+                await pushProgress(options.onProgress, buildProgressUpdate(1, 'Google Search grounding skipped because quota tracking is unavailable.', {
+                    phase: 'mid',
+                }));
+            }
+        } else {
+            try {
+                const groundedSearchResponse = await fetchGroundedSearchSnapshot(seed, options);
+                groundedSearch = groundedSearchResponse.data;
+                lastAiMeta = groundedSearchResponse.meta || lastAiMeta;
+            } catch (error) {
+                groundedSearchSkippedReason = 'request_failed';
+                console.error('[Grounded Search] Error:', error.message);
+            }
         }
     }
 
@@ -1394,7 +1545,17 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         analysis: buildAnalysisMapping(strategy),
         metadata: {
             ...buildMetadata(lastAiMeta),
+            groundedSearchRequested,
             groundedSearchUsed: Boolean(groundedSearch),
+            groundedSearchSkippedReason,
+            groundedSearchQuota: groundedSearchQuota
+                ? {
+                    date: groundedSearchQuota.date,
+                    limit: groundedSearchQuota.limit,
+                    used: groundedSearchQuota.used,
+                    remaining: groundedSearchQuota.remaining,
+                }
+                : null,
         },
     };
 }
@@ -1431,6 +1592,8 @@ module.exports = {
     runKeywordResearchV2,
     runLegacyKeywordResearch,
     __internal: {
+        applyGroundedSearchUsageLimit,
+        getGroundingDateKey,
         normalizeSerpDna,
         normalizeIntentDecomposition,
         normalizeKeywordUniverse,

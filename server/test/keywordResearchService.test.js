@@ -111,3 +111,40 @@ test('normalizeStrategicSynthesis and buildAnalysisMapping return stable shapes'
     assert.equal(analysis.viability.soloCreator, 'High');
     assert.equal(analysis.recommendedStrategy.confidence, 'Low');
 });
+
+test('applyGroundedSearchUsageLimit increments usage within the same day', () => {
+    const decision = __internal.applyGroundedSearchUsageLimit(
+        { date: '2026-03-25', count: 2 },
+        { dateKey: '2026-03-25', limit: 5 }
+    );
+
+    assert.equal(decision.allowed, true);
+    assert.equal(decision.reason, 'ok');
+    assert.equal(decision.used, 3);
+    assert.equal(decision.remaining, 2);
+    assert.deepEqual(decision.nextState, { date: '2026-03-25', count: 3 });
+});
+
+test('applyGroundedSearchUsageLimit blocks once the daily cap is reached', () => {
+    const decision = __internal.applyGroundedSearchUsageLimit(
+        { date: '2026-03-25', count: 5 },
+        { dateKey: '2026-03-25', limit: 5 }
+    );
+
+    assert.equal(decision.allowed, false);
+    assert.equal(decision.reason, 'daily_limit_reached');
+    assert.equal(decision.used, 5);
+    assert.equal(decision.remaining, 0);
+});
+
+test('applyGroundedSearchUsageLimit resets usage across date boundaries', () => {
+    const decision = __internal.applyGroundedSearchUsageLimit(
+        { date: '2026-03-24', count: 500 },
+        { dateKey: '2026-03-25', limit: 500 }
+    );
+
+    assert.equal(decision.allowed, true);
+    assert.equal(decision.used, 1);
+    assert.equal(decision.remaining, 499);
+    assert.deepEqual(decision.nextState, { date: '2026-03-25', count: 1 });
+});
