@@ -77,12 +77,14 @@ export interface AuthUser {
     name?: string;
     picture?: string;
     access?: string[];
+    features?: string[];
     projectIds?: string[];
 }
 
 export interface ViewerRecord {
     email: string;
     access: string[];
+    features: string[];
     projectIds: string[];
     createdAt: string;
 }
@@ -220,6 +222,9 @@ export interface KeywordJob {
     id: string;
     seed: string;
     projectId?: string | null;
+    options?: {
+        useAdsData?: boolean;
+    };
     ownerEmail: string;
     status: 'queued' | 'running' | 'completed' | 'failed';
     progress: KeywordJobProgress;
@@ -236,6 +241,7 @@ export interface SerpSummary {
     secondaryPageType?: string;
     typeConfidence?: string;
     brandPressureIndex?: number;
+    domains?: string[];
     brandVsIndieRatio: string;
     avgContentLengthBucket: string;
     avgContentLength?: string;
@@ -331,6 +337,19 @@ export interface KeywordItem {
     opportunityScore: number;
     source: string;
     buyerStage: string;
+    adsMetrics?: {
+        searchVolume: number | null;
+        competition: string | null;
+        competitionIndex: number | null;
+        cpc: number | null;
+        lowTopOfPageBid: number | null;
+        highTopOfPageBid: number | null;
+        monthlySearches: {
+            year: number;
+            month: number;
+            searchVolume: number | null;
+        }[];
+    } | null;
 }
 
 export interface KeywordUniverse {
@@ -437,6 +456,26 @@ export interface KeywordDataV2 {
         timestamp: string;
         provider?: string;
         backend?: string;
+        keywordAds?: {
+            requested: boolean;
+            configured: boolean;
+            featureEnabled: boolean;
+            allowed: boolean;
+            unlimited: boolean;
+            cacheHit: boolean;
+            enriched: boolean;
+            usageApplied: boolean;
+            skippedReason: string | null;
+            weeklyLimit: number | null;
+            usedThisWeek: number;
+            remainingThisWeek: number | null;
+            locationCode: number;
+            languageCode: string;
+            searchPartners: boolean;
+            taskCost: number;
+            taskKeywords: string[];
+            enrichedKeywordCount: number;
+        };
     };
 }
 
@@ -456,6 +495,19 @@ export interface KeywordScanResult {
         count: number;
         density: string;
     }[];
+}
+
+export interface KeywordAdsStatus {
+    configured: boolean;
+    featureEnabled: boolean;
+    isAdmin: boolean;
+    allowed: boolean;
+    unlimited: boolean;
+    weeklyLimit: number | null;
+    usedThisWeek: number;
+    remainingThisWeek: number | null;
+    weekKey: string;
+    reason: string;
 }
 
 export interface MetricDelta {

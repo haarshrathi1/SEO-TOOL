@@ -1,4 +1,4 @@
-const { KeywordJob } = require('./models');
+const { AdminUser, KeywordJob, Viewer } = require('./models');
 const { runKeywordResearchV2, TOTAL_LAYERS, getRuntimeProviderLabel } = require('./keywordResearchService');
 
 function normalizeProjectId(projectId) {
@@ -22,12 +22,50 @@ function canAccessKeywordJob(job, user) {
     return Boolean(job && user?.email && job.ownerEmail === user.email);
 }
 
+async function loadJobUser(job) {
+    const email = String(job?.ownerEmail || '').toLowerCase().trim();
+    if (!email) {
+        return null;
+    }
+
+    const admin = await AdminUser.findOne({ email }).lean();
+    if (admin) {
+        return {
+            email,
+            role: 'admin',
+            access: ['keywords', 'dashboard', 'audit'],
+            features: ['keyword_ads'],
+            projectIds: [],
+        };
+    }
+
+    const viewer = await Viewer.findOne({ email }).lean();
+    if (viewer) {
+        return {
+            email,
+            role: 'viewer',
+            access: Array.isArray(viewer.access) ? viewer.access : ['keywords'],
+            features: Array.isArray(viewer.features) ? viewer.features : [],
+            projectIds: Array.isArray(viewer.projectIds) ? viewer.projectIds : [],
+        };
+    }
+
+    return {
+        email,
+        role: 'viewer',
+        access: ['keywords'],
+        features: [],
+        projectIds: [],
+    };
+}
+
 function serializeJob(record, options = {}) {
     const job = typeof record.toObject === 'function' ? record.toObject() : record;
     return {
         id: job._id?.toString?.() || job.id,
         seed: job.seed,
         projectId: job.projectId || null,
+        options: job.options || { useAdsData: false },
         ownerEmail: job.ownerEmail,
         status: job.status,
         progress: job.progress,
@@ -64,9 +102,11 @@ async function createKeywordJob(seedInput, user, options = {}) {
     }
 
     const projectId = normalizeProjectId(options.projectId);
+    const useAdsData = options.useAdsData === true;
     const doc = await KeywordJob.create({
         seed,
         projectId,
+        options: { useAdsData },
         ownerEmail: user.email,
         status: 'queued',
         progress: {
@@ -92,6 +132,8 @@ async function runKeywordJob(jobId) {
         return;
     }
 
+    const user = await loadJobUser(job);
+
     job.status = 'running';
     job.startedAt = new Date();
     job.progress = {
@@ -106,6 +148,8 @@ async function runKeywordJob(jobId) {
     try {
         const result = await runKeywordResearchV2(job.seed, {
             projectId: job.projectId || null,
+            user,
+            useAdsData: job.options?.useAdsData === true,
             onProgress: async (progress) => {
                 latestProgress = {
                     stage: progress.stage,
@@ -191,5 +235,6 @@ module.exports = {
         normalizeSeed,
         buildKeywordJobQuery,
         canAccessKeywordJob,
+        loadJobUser,
     },
 };

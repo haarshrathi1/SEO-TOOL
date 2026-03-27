@@ -25,6 +25,7 @@ const keywordResearchSchema = new Schema({
 const viewerSchema = new Schema({
     email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
     access: { type: [String], default: ['keywords'] },
+    features: { type: [String], default: [] },
     projectIds: { type: [String], default: [] },
     createdAt: { type: Date, default: Date.now },
 }, { versionKey: false });
@@ -86,6 +87,9 @@ const keywordJobSchema = new Schema({
     seed: { type: String, required: true, trim: true, index: true },
     projectId: { type: String, default: null, index: true },
     ownerEmail: { type: String, required: true, lowercase: true, trim: true, index: true },
+    options: {
+        useAdsData: { type: Boolean, default: false },
+    },
     status: {
         type: String,
         enum: ['queued', 'running', 'completed', 'failed'],
@@ -112,6 +116,31 @@ const keywordJobSchema = new Schema({
     timestamps: true,
 });
 
+const keywordFeatureUsageSchema = new Schema({
+    ownerEmail: { type: String, required: true, lowercase: true, trim: true, index: true },
+    feature: { type: String, required: true, trim: true, index: true },
+    weekKey: { type: String, required: true, trim: true, index: true },
+    count: { type: Number, default: 0 },
+}, {
+    versionKey: false,
+    timestamps: true,
+});
+
+keywordFeatureUsageSchema.index({ ownerEmail: 1, feature: 1, weekKey: 1 }, { unique: true });
+
+const keywordAdsCacheSchema = new Schema({
+    cacheKey: { type: String, required: true, unique: true, index: true },
+    seed: { type: String, required: true, trim: true, index: true },
+    locationCode: { type: Number, default: null },
+    languageCode: { type: String, default: null },
+    searchPartners: { type: Boolean, default: false },
+    payload: { type: Schema.Types.Mixed, required: true },
+    expiresAt: { type: Date, required: true, index: { expires: 0 } },
+}, {
+    versionKey: false,
+    timestamps: true,
+});
+
 const AnalysisHistory = mongoose.models.AnalysisHistory || mongoose.model('AnalysisHistory', analysisHistorySchema);
 const AuditHistory = mongoose.models.AuditHistory || mongoose.model('AuditHistory', auditHistorySchema);
 const KeywordResearch = mongoose.models.KeywordResearch || mongoose.model('KeywordResearch', keywordResearchSchema);
@@ -121,6 +150,8 @@ const AdminUser = mongoose.models.AdminUser || mongoose.model('AdminUser', admin
 const Project = mongoose.models.Project || mongoose.model('Project', projectSchema);
 const AuditJob = mongoose.models.AuditJob || mongoose.model('AuditJob', auditJobSchema);
 const KeywordJob = mongoose.models.KeywordJob || mongoose.model('KeywordJob', keywordJobSchema);
+const KeywordFeatureUsage = mongoose.models.KeywordFeatureUsage || mongoose.model('KeywordFeatureUsage', keywordFeatureUsageSchema);
+const KeywordAdsCache = mongoose.models.KeywordAdsCache || mongoose.model('KeywordAdsCache', keywordAdsCacheSchema);
 
 module.exports = {
     AnalysisHistory,
@@ -132,4 +163,6 @@ module.exports = {
     Project,
     AuditJob,
     KeywordJob,
+    KeywordFeatureUsage,
+    KeywordAdsCache,
 };

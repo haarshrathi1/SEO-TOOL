@@ -82,7 +82,7 @@ export default function App() {
         <div>
             <UserBar user={user} path={route} navItems={navItems} onNavigate={navigate} onLogout={() => void handleLogout()} />
             <Suspense fallback={<FullScreenLoader />}>
-                {route === '/keywords' && <KeywordResearch />}
+                {route === '/keywords' && <KeywordResearch user={user} />}
                 {route === '/dashboard' && canAccessDashboardSurface(user) && <Dashboard user={user} />}
                 {route === '/projects' && user.role === 'admin' && <ProjectsPage />}
             </Suspense>

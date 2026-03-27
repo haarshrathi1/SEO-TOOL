@@ -8,6 +8,19 @@ const {
     generateJson,
     getProviderRuntime,
 } = require('./genaiProvider');
+const {
+    fetchKeywordAdsSnapshot,
+    getCachedKeywordAdsSnapshot,
+    getLanguageCode: getKeywordAdsLanguageCode,
+    getLocationCode: getKeywordAdsLocationCode,
+    getSearchPartners: getKeywordAdsSearchPartners,
+    saveKeywordAdsSnapshot,
+} = require('./dataforseoAds');
+const {
+    getKeywordAdsUsageStatus,
+    releaseKeywordAdsUsage,
+    reserveKeywordAdsUsage,
+} = require('./keywordAdsAccess');
 
 const TOTAL_LAYERS = 5;
 const LAYER_LABELS = {
@@ -135,7 +148,7 @@ const BUYER_STAGES = ['Awareness', 'Consideration', 'Decision', 'Retention'];
 const STRATEGY_DIFFICULTY_LABELS = ['Easy', 'Moderate', 'Hard', 'Very Hard', 'Near Impossible'];
 const VIABILITY_VERDICTS = ['High', 'Medium', 'Low'];
 const STRATEGY_PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
-const KEYWORD_SOURCES = ['autocomplete', 'paa', 'related', 'serp_implied', 'long_tail'];
+const KEYWORD_SOURCES = ['autocomplete', 'paa', 'related', 'serp_implied', 'long_tail', 'ads'];
 const CONFIDENCE_LABELS = ['High', 'Medium', 'Low'];
 
 function asString(value, fallback = '') {
@@ -190,6 +203,325 @@ function normalizeUniqueStrings(values, limit = 20) {
     return normalized;
 }
 
+function normalizeKeywordKey(value) {
+    return asString(value).toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function phraseMatchesKeyword(termKey, candidate) {
+    const candidateKey = normalizeKeywordKey(candidate);
+    if (!termKey || !candidateKey) {
+        return false;
+    }
+
+    return candidateKey === termKey
+        || candidateKey.includes(termKey)
+        || (termKey.split(' ').length >= 2 && termKey.includes(candidateKey));
+}
+
+function volumeLabelFromSearchVolume(searchVolume, fallback = 'Low') {
+    if (!Number.isFinite(searchVolume)) {
+        return fallback;
+    }
+    if (searchVolume >= 1000) {
+        return 'High';
+    }
+    if (searchVolume >= 100) {
+        return 'Medium';
+    }
+    return 'Low';
+}
+
+function difficultyLabelFromScore(score) {
+    if (score >= 24) {
+        return 'Hard';
+    }
+    if (score >= 12) {
+        return 'Medium';
+    }
+    return 'Easy';
+}
+
+function normalizeAdsMetrics(rawMetrics) {
+    if (!rawMetrics || typeof rawMetrics !== 'object') {
+        return null;
+    }
+
+    const searchVolume = asNumber(rawMetrics.searchVolume, NaN);
+    const competitionIndex = asNumber(rawMetrics.competitionIndex, NaN);
+    const cpc = asNumber(rawMetrics.cpc, NaN);
+    const lowTopOfPageBid = asNumber(rawMetrics.lowTopOfPageBid, NaN);
+    const highTopOfPageBid = asNumber(rawMetrics.highTopOfPageBid, NaN);
+
+    return {
+        searchVolume: Number.isFinite(searchVolume) ? Math.round(searchVolume) : null,
+        competition: asString(rawMetrics.competition, '').toUpperCase() || null,
+        competitionIndex: Number.isFinite(competitionIndex) ? Math.round(competitionIndex) : null,
+        cpc: Number.isFinite(cpc) ? Number(cpc.toFixed(2)) : null,
+        lowTopOfPageBid: Number.isFinite(lowTopOfPageBid) ? Number(lowTopOfPageBid.toFixed(2)) : null,
+        highTopOfPageBid: Number.isFinite(highTopOfPageBid) ? Number(highTopOfPageBid.toFixed(2)) : null,
+        monthlySearches: Array.isArray(rawMetrics.monthlySearches)
+            ? rawMetrics.monthlySearches
+                .map((month) => ({
+                    year: asNumber(month?.year, NaN),
+                    month: asNumber(month?.month, NaN),
+                    searchVolume: asNumber(month?.searchVolume, NaN),
+                }))
+                .filter((month) => Number.isFinite(month.year) && Number.isFinite(month.month))
+                .slice(0, 12)
+            : [],
+    };
+}
+
+function buildAdsMetricsMap(adsSnapshot) {
+    const entries = Array.isArray(adsSnapshot?.results) ? adsSnapshot.results : [];
+    const map = new Map();
+    for (const entry of entries) {
+        const keyword = normalizeKeywordKey(entry?.keyword);
+        const metrics = normalizeAdsMetrics(entry);
+        if (!keyword || !metrics) {
+            continue;
+        }
+        map.set(keyword, metrics);
+    }
+    return map;
+}
+
+function countEvidenceMatches(termKey, values) {
+    if (!termKey || !Array.isArray(values) || values.length === 0) {
+        return 0;
+    }
+
+    return values.reduce((count, value) => (phraseMatchesKeyword(termKey, value) ? count + 1 : count), 0);
+}
+
+function computeBusinessValueScore(termKey) {
+    let score = 6;
+
+    if (/\b(software|platform|tool|tools|comparison|compare|vs|pricing|cost|roi|demo)\b/.test(termKey)) {
+        score += 10;
+    }
+
+    if (/\b(template|checklist|pdf|excel|form|calculator)\b/.test(termKey)) {
+        score += 8;
+    }
+
+    if (/\b(best|guide|how to|tutorial|program|plan)\b/.test(termKey)) {
+        score += 4;
+    }
+
+    return Math.min(20, score);
+}
+
+function computeGapScore(termKey, serpDna) {
+    const contentGaps = Array.isArray(serpDna?.contentGaps) ? serpDna.contentGaps.map((gap) => normalizeKeywordKey(gap)) : [];
+    let score = 0;
+
+    if (/\b(template|checklist|pdf|excel|form)\b/.test(termKey) && contentGaps.some((gap) => /\b(template|checklist|pdf|download|resource)\b/.test(gap))) {
+        score += 10;
+    }
+
+    if (/\b(video|tutorial)\b/.test(termKey) && contentGaps.some((gap) => /\b(video|tutorial)\b/.test(gap))) {
+        score += 8;
+    }
+
+    if (/\b(cost|roi)\b/.test(termKey) && contentGaps.some((gap) => /\b(cost|roi)\b/.test(gap))) {
+        score += 8;
+    }
+
+    return Math.min(15, score);
+}
+
+function computeIntentAlignmentScore(keyword, intentData) {
+    const primaryIntent = normalizeKeywordKey(intentData?.primaryIntent);
+    const intent = asString(keyword.intent, 'Informational');
+
+    let score = 8;
+    if (intent === 'Transactional') {
+        score += 7;
+    } else if (intent === 'Commercial' || intent === 'Comparison') {
+        score += 6;
+    } else if (intent === 'Informational') {
+        score += 4;
+    }
+
+    if (primaryIntent.includes(intent.toLowerCase())) {
+        score += 5;
+    }
+
+    const buyerStage = asString(keyword.buyerStage, fallbackBuyerStage(intent));
+    if (buyerStage === 'Decision') {
+        score += 3;
+    } else if (buyerStage === 'Consideration') {
+        score += 2;
+    }
+
+    return Math.min(18, score);
+}
+
+function inferIntentFromTerm(term) {
+    const termKey = normalizeKeywordKey(term);
+    if (/\b(vs|versus|compare|comparison)\b/.test(termKey)) {
+        return 'Comparison';
+    }
+    if (/\b(price|pricing|buy|cost|quote|software|tool|tools|template|checklist|pdf|excel|form|roi)\b/.test(termKey)) {
+        return 'Commercial';
+    }
+    return 'Informational';
+}
+
+function computeDemandScore(keyword, context) {
+    const termKey = normalizeKeywordKey(keyword.term);
+    const adsMetrics = normalizeAdsMetrics(keyword.adsMetrics);
+
+    if (Number.isFinite(adsMetrics?.searchVolume)) {
+        const searchVolume = adsMetrics.searchVolume;
+        if (searchVolume >= 10000) return 35;
+        if (searchVolume >= 1000) return 30;
+        if (searchVolume >= 100) return 24;
+        if (searchVolume >= 10) return 16;
+        return 8;
+    }
+
+    const evidenceValues = [
+        ...((context.suggestions || []).slice(0, 20)),
+        ...((context.serpData?.relatedSearches || []).slice(0, 12)),
+        ...((context.serpData?.paaQuestions || []).slice(0, 12).map((question) => question.question)),
+        ...((context.serpData?.organic || []).slice(0, 10).flatMap((result) => [result.title, result.snippet])),
+        ...((context.groundedSearch?.relatedQueries || []).slice(0, 12)),
+        ...((context.groundedSearch?.questions || []).slice(0, 12)),
+    ];
+
+    const exactEvidenceMatches = countEvidenceMatches(termKey, evidenceValues);
+    const sourceBonus = keyword.source === 'autocomplete'
+        ? 4
+        : keyword.source === 'related'
+            ? 3
+            : keyword.source === 'long_tail'
+                ? 2
+                : 1;
+    const specificityBonus = Math.min(6, Math.max(0, termKey.split(' ').length - 1) * 2);
+
+    return Math.min(28, 6 + (exactEvidenceMatches * 4) + sourceBonus + specificityBonus);
+}
+
+function computeDifficultyScore(keyword, context) {
+    const termKey = normalizeKeywordKey(keyword.term);
+    const adsMetrics = normalizeAdsMetrics(keyword.adsMetrics);
+    const brandPressure = clampNumber(context.serpSummary?.brandPressureIndex, 0, 100, 40);
+    let score = Math.round((brandPressure / 100) * 18);
+
+    if (context.serpDna?.difficultyVerdict === 'Tough Battle') {
+        score += 6;
+    } else if (context.serpDna?.difficultyVerdict === 'Near Impossible') {
+        score += 10;
+    } else if (context.serpDna?.difficultyVerdict === 'Moderate Fight') {
+        score += 3;
+    }
+
+    if (/\b(software|comparison|compare|vs|cost|roi)\b/.test(termKey)) {
+        score += 6;
+    }
+
+    if (/\b(template|checklist|pdf|excel|form|video|tutorial)\b/.test(termKey)) {
+        score -= 3;
+    }
+
+    if (Number.isFinite(adsMetrics?.competitionIndex)) {
+        score += Math.round((adsMetrics.competitionIndex / 100) * 10);
+    }
+
+    return Math.max(4, Math.min(35, score));
+}
+
+function scoreKeyword(keyword, context) {
+    const termKey = normalizeKeywordKey(keyword.term);
+    const adsMetrics = normalizeAdsMetrics(keyword.adsMetrics);
+    const demandScore = computeDemandScore(keyword, context);
+    const intentScore = computeIntentAlignmentScore(keyword, context.intentData);
+    const businessValueScore = computeBusinessValueScore(termKey);
+    const gapScore = computeGapScore(termKey, context.serpDna);
+    const difficultyScore = computeDifficultyScore(keyword, context);
+    const stageBonus = keyword.buyerStage === 'Decision' ? 4 : keyword.buyerStage === 'Consideration' ? 2 : 0;
+    const opportunityScore = clampNumber(demandScore + intentScore + businessValueScore + gapScore + stageBonus - difficultyScore, 0, 100, 0);
+
+    return {
+        ...keyword,
+        adsMetrics,
+        volume: volumeLabelFromSearchVolume(
+            Number.isFinite(adsMetrics?.searchVolume) ? adsMetrics.searchVolume : NaN,
+            demandScore >= 20 ? 'Medium' : 'Low'
+        ),
+        difficulty: difficultyLabelFromScore(difficultyScore),
+        opportunityScore: Math.round(opportunityScore),
+    };
+}
+
+function rescoreKeywordUniverse(keywordUniverse, context) {
+    const source = keywordUniverse && typeof keywordUniverse === 'object' ? keywordUniverse : {};
+    const keywords = Array.isArray(source.keywords)
+        ? source.keywords
+            .map((keyword) => normalizeKeywordItem(keyword))
+            .filter(Boolean)
+            .map((keyword) => scoreKeyword(keyword, context))
+            .sort((left, right) => right.opportunityScore - left.opportunityScore || left.term.localeCompare(right.term))
+            .slice(0, 60)
+        : [];
+
+    return {
+        ...source,
+        totalKeywords: keywords.length,
+        keywords,
+    };
+}
+
+function mergeKeywordAdsData(keywordUniverse, adsSnapshot, context) {
+    const adsMetricsMap = buildAdsMetricsMap(adsSnapshot);
+    const mergedKeywords = Array.isArray(keywordUniverse?.keywords)
+        ? keywordUniverse.keywords.map((keyword) => {
+            const normalized = normalizeKeywordItem(keyword);
+            if (!normalized) {
+                return null;
+            }
+
+            return {
+                ...normalized,
+                adsMetrics: adsMetricsMap.get(normalizeKeywordKey(normalized.term)) || normalized.adsMetrics || null,
+            };
+        }).filter(Boolean)
+        : [];
+
+    const seenKeywords = new Set(mergedKeywords.map((keyword) => normalizeKeywordKey(keyword.term)));
+    const adsAdditions = Array.isArray(adsSnapshot?.results)
+        ? adsSnapshot.results
+            .map((entry) => {
+                const term = normalizeKeywordKey(entry?.keyword);
+                if (!term || seenKeywords.has(term)) {
+                    return null;
+                }
+                seenKeywords.add(term);
+
+                const intent = inferIntentFromTerm(term);
+                return {
+                    term,
+                    intent,
+                    volume: volumeLabelFromSearchVolume(asNumber(entry?.searchVolume, NaN), 'Low'),
+                    difficulty: 'Medium',
+                    opportunityScore: 0,
+                    source: 'ads',
+                    buyerStage: fallbackBuyerStage(intent),
+                    adsMetrics: normalizeAdsMetrics(entry),
+                };
+            })
+            .filter(Boolean)
+            .slice(0, 12)
+        : [];
+
+    return rescoreKeywordUniverse({
+        ...keywordUniverse,
+        keywords: [...mergedKeywords, ...adsAdditions],
+    }, context);
+}
+
 function fallbackBuyerStage(intent) {
     switch (intent) {
     case 'Transactional':
@@ -229,6 +561,7 @@ function normalizeKeywordItem(rawItem) {
         opportunityScore,
         source,
         buyerStage,
+        adsMetrics: normalizeAdsMetrics(rawItem.adsMetrics),
     };
 }
 
@@ -1398,6 +1731,27 @@ async function runKeywordResearchV2(seedInput, options = {}) {
     let lastAiMeta = null;
     let groundedSearchSkippedReason = null;
     let groundedSearchQuota = null;
+    const keywordAdsRequested = options.useAdsData === true;
+    let keywordAdsMeta = {
+        requested: keywordAdsRequested,
+        configured: false,
+        featureEnabled: false,
+        allowed: false,
+        unlimited: false,
+        cacheHit: false,
+        enriched: false,
+        usageApplied: false,
+        skippedReason: keywordAdsRequested ? 'not_requested' : null,
+        weeklyLimit: null,
+        usedThisWeek: 0,
+        remainingThisWeek: null,
+        locationCode: getKeywordAdsLocationCode(),
+        languageCode: getKeywordAdsLanguageCode(),
+        searchPartners: getKeywordAdsSearchPartners(),
+        taskCost: 0,
+        taskKeywords: [],
+        enrichedKeywordCount: 0,
+    };
 
     await pushProgress(options.onProgress, {
         stage: 'Queued',
@@ -1501,8 +1855,122 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         provider: intentResponse.meta?.provider || getRuntimeProviderLabel(),
     }));
     const keywordUniverseResponse = await layer4KeywordUniverse(seed, serpData, serpDna, intentData, suggestions, groundedSearch, options);
-    const keywordUniverse = normalizeKeywordUniverse(keywordUniverseResponse.data);
+    const keywordContext = {
+        suggestions,
+        serpData,
+        groundedSearch,
+        serpSummary,
+        serpDna,
+        intentData,
+    };
+    let keywordUniverse = rescoreKeywordUniverse(normalizeKeywordUniverse(keywordUniverseResponse.data), keywordContext);
     lastAiMeta = keywordUniverseResponse.meta || lastAiMeta;
+
+    if (keywordAdsRequested) {
+        const adsStatus = await getKeywordAdsUsageStatus(options.user || null);
+        keywordAdsMeta = {
+            ...keywordAdsMeta,
+            configured: adsStatus.configured,
+            featureEnabled: adsStatus.featureEnabled,
+            allowed: adsStatus.allowed,
+            unlimited: adsStatus.unlimited,
+            skippedReason: adsStatus.reason,
+            weeklyLimit: adsStatus.weeklyLimit,
+            usedThisWeek: adsStatus.usedThisWeek,
+            remainingThisWeek: adsStatus.remainingThisWeek,
+        };
+
+        if (adsStatus.configured && adsStatus.featureEnabled) {
+            await pushProgress(options.onProgress, buildProgressUpdate(4, 'Checking cached Google Ads enrichment for this keyword set...', {
+                phase: 'mid',
+                provider: 'DataForSEO Google Ads',
+            }));
+
+            const cachedAds = await getCachedKeywordAdsSnapshot(seed, {
+                locationCode: keywordAdsMeta.locationCode,
+                languageCode: keywordAdsMeta.languageCode,
+                searchPartners: keywordAdsMeta.searchPartners,
+            });
+
+            if (cachedAds?.payload) {
+                keywordUniverse = mergeKeywordAdsData(keywordUniverse, cachedAds.payload, keywordContext);
+                keywordAdsMeta = {
+                    ...keywordAdsMeta,
+                    cacheHit: true,
+                    enriched: true,
+                    skippedReason: 'cache_hit',
+                    taskCost: Number(cachedAds.payload.cost || 0),
+                    taskKeywords: Array.isArray(cachedAds.payload.taskKeywords) ? cachedAds.payload.taskKeywords : [],
+                    enrichedKeywordCount: keywordUniverse.keywords.filter((keyword) => keyword.adsMetrics).length,
+                };
+            } else if (adsStatus.allowed || adsStatus.unlimited) {
+                const reservedUsage = await reserveKeywordAdsUsage(options.user || null);
+                keywordAdsMeta = {
+                    ...keywordAdsMeta,
+                    allowed: reservedUsage.allowed,
+                    unlimited: reservedUsage.unlimited,
+                    usageApplied: reservedUsage.usageApplied,
+                    skippedReason: reservedUsage.reason,
+                    usedThisWeek: reservedUsage.usedThisWeek,
+                    remainingThisWeek: reservedUsage.remainingThisWeek,
+                };
+
+                if (reservedUsage.allowed) {
+                    await pushProgress(options.onProgress, buildProgressUpdate(4, 'Pulling Google Ads keyword data from DataForSEO in one live request...', {
+                        phase: 'mid',
+                        provider: 'DataForSEO Google Ads',
+                    }));
+
+                    try {
+                        const adsSnapshot = await fetchKeywordAdsSnapshot(seed, {
+                            suggestions,
+                            serpData,
+                            keywordUniverse,
+                        }, {
+                            locationCode: keywordAdsMeta.locationCode,
+                            languageCode: keywordAdsMeta.languageCode,
+                            searchPartners: keywordAdsMeta.searchPartners,
+                            tag: `keyword-research:${seed}`,
+                        });
+
+                        await saveKeywordAdsSnapshot(seed, adsSnapshot, {
+                            locationCode: keywordAdsMeta.locationCode,
+                            languageCode: keywordAdsMeta.languageCode,
+                            searchPartners: keywordAdsMeta.searchPartners,
+                        });
+
+                        keywordUniverse = mergeKeywordAdsData(keywordUniverse, adsSnapshot, keywordContext);
+                        keywordAdsMeta = {
+                            ...keywordAdsMeta,
+                            enriched: true,
+                            skippedReason: null,
+                            taskCost: Number(adsSnapshot.cost || 0),
+                            taskKeywords: adsSnapshot.taskKeywords || [],
+                            enrichedKeywordCount: keywordUniverse.keywords.filter((keyword) => keyword.adsMetrics).length,
+                        };
+                    } catch (error) {
+                        let releasedUsage = null;
+                        if (reservedUsage.usageApplied) {
+                            releasedUsage = await releaseKeywordAdsUsage(options.user || null, {
+                                weekKey: reservedUsage.weekKey,
+                            });
+                        }
+
+                        keywordAdsMeta = {
+                            ...keywordAdsMeta,
+                            allowed: releasedUsage?.allowed ?? keywordAdsMeta.allowed,
+                            usageApplied: releasedUsage?.usageReleased ? false : keywordAdsMeta.usageApplied,
+                            usedThisWeek: releasedUsage?.usedThisWeek ?? keywordAdsMeta.usedThisWeek,
+                            remainingThisWeek: releasedUsage?.remainingThisWeek ?? keywordAdsMeta.remainingThisWeek,
+                            skippedReason: 'request_failed',
+                        };
+                        console.error('[Keyword Ads] Error:', error.message);
+                    }
+                }
+            }
+        }
+    }
+
     await pushProgress(options.onProgress, buildProgressUpdate(4, `Layer 4 complete. ${keywordUniverse.totalKeywords} keywords surfaced for prioritization.`, {
         phase: 'complete',
         provider: keywordUniverseResponse.meta?.provider || getRuntimeProviderLabel(),
@@ -1548,6 +2016,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
             groundedSearchRequested,
             groundedSearchUsed: Boolean(groundedSearch),
             groundedSearchSkippedReason,
+            keywordAds: keywordAdsMeta,
             groundedSearchQuota: groundedSearchQuota
                 ? {
                     date: groundedSearchQuota.date,

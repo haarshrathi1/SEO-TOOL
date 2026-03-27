@@ -11,6 +11,7 @@ const { connectMongo } = require('./db');
 const keywords = require('./keywords');
 const keywordHistory = require('./keywordHistory');
 const keywordJobs = require('./keywordJobs');
+const keywordAdsAccess = require('./keywordAdsAccess');
 const analyze = require('./analyze');
 const history = require('./history');
 const projects = require('./projects');
@@ -116,6 +117,13 @@ app.get('/health', (req, res) => {
 app.post('/api/keywords/research', userAuth.requireAuth, userAuth.requireAccess('keywords'), keywords.researchKeyword);
 app.post('/api/keywords/research-v2', userAuth.requireAuth, userAuth.requireAccess('keywords'), keywords.researchKeywordV2);
 app.post('/api/keywords/analyze-content', userAuth.requireAuth, userAuth.requireAccess('keywords'), keywords.analyzePageContent);
+app.get('/api/keywords/ads-access', userAuth.requireAuth, userAuth.requireAccess('keywords'), async (req, res) => {
+    try {
+        res.json(await keywordAdsAccess.getKeywordAdsUsageStatus(req.user));
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 app.get('/api/keywords/jobs', userAuth.requireAuth, userAuth.requireAccess('keywords'), async (req, res) => {
     try {
@@ -132,7 +140,10 @@ app.post('/api/keywords/jobs', userAuth.requireAuth, userAuth.requireAccess('key
             return res.status(400).json({ error: 'Seed keyword required' });
         }
 
-        const job = await keywordJobs.createKeywordJob(seed, req.user, { projectId: req.body?.projectId });
+        const job = await keywordJobs.createKeywordJob(seed, req.user, {
+            projectId: req.body?.projectId,
+            useAdsData: req.body?.useAdsData === true,
+        });
         return res.status(202).json(job);
     } catch (e) {
         return res.status(400).json({ error: e.message });

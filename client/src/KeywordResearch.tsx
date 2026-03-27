@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { api } from './api';
 import { downloadCsv } from './csv';
 import { useToast } from './toast';
-import type { KeywordDataV2, KeywordHistoryItem, KeywordItem, KeywordJob, KeywordScanResult, StrategicSynthesis } from './types';
+import type { AuthUser, KeywordAdsStatus, KeywordDataV2, KeywordHistoryItem, KeywordItem, KeywordJob, KeywordScanResult, StrategicSynthesis } from './types';
 
 interface QuestionKeywordItem {
     question: string;
@@ -91,6 +91,147 @@ function getOpportunityTier(score: number) {
     if (score >= 65) return 'Strong';
     if (score >= 45) return 'Workable';
     return 'Defensive';
+}
+
+function clampMetricScore(score: number) {
+    if (!Number.isFinite(score)) {
+        return 0;
+    }
+    return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function getDifficultyWeight(label: string | undefined) {
+    switch (label) {
+    case 'Hard':
+        return 80;
+    case 'Medium':
+        return 55;
+    case 'Easy':
+        return 25;
+    default:
+        return 50;
+    }
+}
+
+function getSerpVerdictWeight(verdict: string | undefined) {
+    switch (verdict) {
+    case 'Near Impossible':
+        return 92;
+    case 'Tough Battle':
+        return 72;
+    case 'Moderate Fight':
+        return 46;
+    case 'Easy Pickings':
+        return 18;
+    default:
+        return null;
+    }
+}
+
+function getDominantPageTypeWeight(pageType: string | undefined) {
+    switch (pageType) {
+    case 'navigational':
+        return 70;
+    case 'transactional':
+        return 66;
+    case 'listicle':
+        return 62;
+    case 'informational':
+        return 40;
+    default:
+        return 50;
+    }
+}
+
+function getHeadlineDifficultyLabel(score: number) {
+    if (score >= 85) return 'Near Impossible';
+    if (score >= 65) return 'Very Hard';
+    if (score >= 45) return 'Hard';
+    if (score >= 25) return 'Moderate';
+    return 'Easy';
+}
+
+function getSearchSignalLabel(score: number) {
+    if (score >= 70) return 'High';
+    if (score >= 45) return 'Medium';
+    return 'Low';
+}
+
+function deriveHeadlineDifficulty(data: KeywordDataV2 | null) {
+    if (!data) {
+        return { score: 0, label: 'N/A' };
+    }
+
+    const topKeywords = Array.isArray(data.keywordUniverse?.keywords)
+        ? data.keywordUniverse.keywords.slice(0, 12)
+        : [];
+    const keywordDifficultyValues = topKeywords.map((keyword) => getDifficultyWeight(keyword.difficulty));
+    const keywordDifficultyAverage = keywordDifficultyValues.length > 0
+        ? keywordDifficultyValues.reduce((sum, value) => sum + value, 0) / keywordDifficultyValues.length
+        : null;
+    const brandPressure = typeof data.serpSummary?.brandPressureIndex === 'number'
+        ? clampMetricScore(data.serpSummary.brandPressureIndex)
+        : null;
+    const serpVerdict = getSerpVerdictWeight(data.serpDna?.difficultyVerdict);
+    const dominantPageTypeWeight = getDominantPageTypeWeight(data.serpSummary?.dominantPageType);
+    const fallbackScore = typeof data.strategy?.difficulty?.score === 'number'
+        ? clampMetricScore(data.strategy.difficulty.score)
+        : 0;
+
+    const weightedInputs = [
+        { value: keywordDifficultyAverage, weight: 0.45 },
+        { value: brandPressure, weight: 0.25 },
+        { value: serpVerdict, weight: 0.2 },
+        { value: dominantPageTypeWeight, weight: 0.1 },
+    ].filter((entry) => typeof entry.value === 'number');
+
+    const score = weightedInputs.length > 0
+        ? clampMetricScore(
+            weightedInputs.reduce((sum, entry) => sum + (Number(entry.value) * entry.weight), 0)
+            / weightedInputs.reduce((sum, entry) => sum + entry.weight, 0)
+        )
+        : fallbackScore;
+
+    return {
+        score,
+        label: getHeadlineDifficultyLabel(score),
+    };
+}
+
+function deriveHeadlineSerpPersonality(data: KeywordDataV2 | null) {
+    if (!data) {
+        return 'N/A';
+    }
+
+    const seed = data.seed.toLowerCase();
+    const dominantPageType = data.serpSummary?.dominantPageType || '';
+    const primaryIntent = data.intentData?.primaryIntent?.toLowerCase() || '';
+    const serpFeatures = (data.serpRaw?.serpFeatures || []).join(' ').toLowerCase();
+    const domains = Array.isArray(data.serpSummary?.domains) ? data.serpSummary.domains : [];
+    const hasCommunityDomains = domains.some((domain: string) => /(reddit|quora|forum|community|stackexchange|medium)/i.test(domain));
+    const isFreshSerp = data.serpSummary?.freshness === 'Required' || /\b(news|top stories)\b/.test(serpFeatures);
+    const isCommercialSeed = /\b(best|top|tool|tools|software|platform|compare|comparison|vs)\b/.test(seed)
+        || primaryIntent.includes('commercial')
+        || primaryIntent.includes('comparison');
+    const isTutorialSeed = /\b(how to|guide|tutorial|checklist|template)\b/.test(seed);
+
+    if (isFreshSerp) {
+        return 'News Feed';
+    }
+    if (hasCommunityDomains) {
+        return 'Community Forum';
+    }
+    if (isCommercialSeed || dominantPageType === 'transactional' || dominantPageType === 'listicle') {
+        return 'Commercial Battlefield';
+    }
+    if (isTutorialSeed) {
+        return 'Tutorial Playground';
+    }
+    if (dominantPageType === 'informational') {
+        return 'Knowledge Hub';
+    }
+
+    return data.serpDna?.serpPersonality || 'Mixed Bazaar';
 }
 
 function isKeywordDataV2(item: KeywordHistoryItem): item is KeywordDataV2 & { id: string; timestamp: string } {
@@ -204,6 +345,7 @@ function normalizeUiKeyword(value: unknown): KeywordItem | null {
         opportunityScore: Number.isFinite(score) ? Math.max(0, Math.min(100, Math.round(score))) : 0,
         source: typeof candidate.source === 'string' && candidate.source.trim() ? candidate.source.trim() : 'serp_implied',
         buyerStage: normalizeUiChoice(candidate.buyerStage, ['Awareness', 'Consideration', 'Decision', 'Retention'], 'Awareness'),
+        adsMetrics: candidate.adsMetrics ?? null,
     };
 }
 
@@ -288,7 +430,7 @@ function Section({ icon: Icon, title, badge, children, defaultOpen = true }: { i
     );
 }
 
-export default function KeywordResearch() {
+export default function KeywordResearch({ user }: { user: AuthUser }) {
     const { push } = useToast();
     const [seed, setSeed] = useState('');
     const [data, setData] = useState<KeywordDataV2 | null>(null);
@@ -305,6 +447,8 @@ export default function KeywordResearch() {
     const [kwFilter, setKwFilter] = useState('all');
     const [kwSort, setKwSort] = useState<'opportunityScore' | 'term'>('opportunityScore');
     const [activeBanter, setActiveBanter] = useState('');
+    const [useAdsData, setUseAdsData] = useState(false);
+    const [adsStatus, setAdsStatus] = useState<KeywordAdsStatus | null>(null);
     const pollRef = useRef<number | null>(null);
     const banterIndexRef = useRef<Record<number, number>>({});
     const runtimeJobIdRef = useRef('');
@@ -415,6 +559,15 @@ export default function KeywordResearch() {
         }
     }, []);
 
+    const loadAdsStatus = useCallback(async () => {
+        try {
+            setAdsStatus(await api.getKeywordAdsStatus());
+        } catch (error) {
+            console.error('Failed to load keyword ads status:', error);
+            setAdsStatus(null);
+        }
+    }, []);
+
     const syncKeywordJob = useCallback(async (jobId: string) => {
         try {
             const job = await api.getKeywordJob(jobId);
@@ -429,6 +582,7 @@ export default function KeywordResearch() {
                     setSeed(completedJob.result.seed);
                 }
                 setLoading(false);
+                void loadAdsStatus();
                 return;
             }
 
@@ -442,7 +596,7 @@ export default function KeywordResearch() {
             setLoading(false);
             push({ tone: 'error', title: 'Job sync failed', description: getErrorMessage(error, 'Unable to read keyword job progress.') });
         }
-    }, [clearPoll, push, trackActiveJob]);
+    }, [clearPoll, loadAdsStatus, push, trackActiveJob]);
 
     const beginPolling = useCallback((jobId: string) => {
         clearPoll();
@@ -454,6 +608,7 @@ export default function KeywordResearch() {
 
     useEffect(() => {
         void fetchHistory();
+        void loadAdsStatus();
         void (async () => {
             try {
                 const jobs = await api.getKeywordJobs();
@@ -473,7 +628,7 @@ export default function KeywordResearch() {
         return () => {
             clearPoll();
         };
-    }, [beginPolling, clearPoll, fetchHistory, trackActiveJob]);
+    }, [beginPolling, clearPoll, fetchHistory, loadAdsStatus, trackActiveJob]);
 
     const handleSave = async () => {
         if (!data) return;
@@ -526,7 +681,7 @@ export default function KeywordResearch() {
         setData(null);
         setCurrentLayer(0);
         try {
-            const job = await api.createKeywordJob(nextSeed);
+            const job = await api.createKeywordJob(nextSeed, null, { useAdsData });
             trackActiveJob(job, { resetLog: true });
             beginPolling(job.id);
         } catch (error) {
@@ -585,13 +740,43 @@ export default function KeywordResearch() {
     const activeLayerConfig = LAYER_STEPS[currentLayer] || LAYER_STEPS[0];
     const ActiveLayerIcon = activeLayerConfig?.icon || Layers;
     const providerLabel = activeJob?.progress.provider || data?.metadata?.provider || 'Vertex AI primary';
+    const keywordAdsMeta = data?.metadata?.keywordAds || null;
+    const headlineDifficulty = useMemo(() => deriveHeadlineDifficulty(data), [data]);
+    const headlineSerpPersonality = useMemo(() => deriveHeadlineSerpPersonality(data), [data]);
+    const searchSignalScore = clampMetricScore(data?.serpSummary?.volumeScore ?? 0);
+    const searchSignalLabel = getSearchSignalLabel(searchSignalScore);
+    const canSeeAdsToggle = user.role === 'admin' || Boolean(user.features?.includes('keyword_ads')) || Boolean(adsStatus?.featureEnabled);
+    const adsToggleDisabled = !adsStatus?.configured || !adsStatus?.featureEnabled;
+    const adsToggleNote = !adsStatus
+        ? 'Checking Google Ads enrichment access...'
+        : !adsStatus.configured
+            ? 'Server credentials are not configured for DataForSEO yet.'
+            : adsStatus.unlimited
+                ? 'Admin mode: unlimited Google Ads-enriched researches.'
+                : adsStatus.allowed
+                    ? `${adsStatus.remainingThisWeek ?? 0} fresh Google Ads lookups left this week.`
+                    : 'Fresh Google Ads lookups are exhausted this week. Cached seeds can still enrich results.';
 
     const exportKeywordCsv = () => {
         if (!data) return;
         downloadCsv(
             `keywords-${seed.trim().replace(/\s+/g, '-').toLowerCase() || 'research'}-${new Date().toISOString().slice(0, 10)}.csv`,
-            ['Keyword', 'Intent', 'Volume', 'Difficulty', 'Opportunity Score', 'Buyer Stage'],
-            sortedKeywords.map((keyword) => [keyword.term, keyword.intent, keyword.volume, keyword.difficulty, keyword.opportunityScore, keyword.buyerStage]),
+            ['Keyword', 'Intent', 'Volume', 'Difficulty', 'Opportunity Score', 'Buyer Stage', 'Source', 'Ads Search Volume', 'Ads Competition', 'Ads Competition Index', 'Ads CPC', 'Ads Low Bid', 'Ads High Bid'],
+            sortedKeywords.map((keyword) => [
+                keyword.term,
+                keyword.intent,
+                keyword.volume,
+                keyword.difficulty,
+                keyword.opportunityScore,
+                keyword.buyerStage,
+                keyword.source,
+                keyword.adsMetrics?.searchVolume ?? '',
+                keyword.adsMetrics?.competition ?? '',
+                keyword.adsMetrics?.competitionIndex ?? '',
+                keyword.adsMetrics?.cpc ?? '',
+                keyword.adsMetrics?.lowTopOfPageBid ?? '',
+                keyword.adsMetrics?.highTopOfPageBid ?? '',
+            ]),
         );
         push({ tone: 'success', title: 'Keyword export ready', description: 'CSV download started.' });
     };
@@ -687,6 +872,33 @@ export default function KeywordResearch() {
                                     )}
                                 </div>
                             </form>
+                            {canSeeAdsToggle && (
+                                <div className="rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3">
+                                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                        <div>
+                                            <p className="text-sm font-semibold text-amber-900">Google Ads enrichment</p>
+                                            <p className="mt-1 text-xs leading-relaxed text-amber-800">{adsToggleNote}</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                if (!adsToggleDisabled) {
+                                                    setUseAdsData((current) => !current);
+                                                }
+                                            }}
+                                            disabled={adsToggleDisabled}
+                                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold transition ${
+                                                useAdsData
+                                                    ? 'border-amber-500 bg-amber-500 text-white'
+                                                    : 'border-amber-300 bg-white text-amber-900'
+                                            } ${adsToggleDisabled ? 'cursor-not-allowed opacity-60' : ''}`}
+                                        >
+                                            <span className={`h-2.5 w-2.5 rounded-full ${useAdsData ? 'bg-white' : 'bg-amber-500'}`} />
+                                            {useAdsData ? 'Enabled for this run' : 'Use Google Ads data'}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                             <div className="space-y-3">
                                 <div className="flex flex-wrap gap-2">
                                     {SAMPLE_SEEDS.map((sample) => (
@@ -955,16 +1167,23 @@ export default function KeywordResearch() {
                         {/* Top Metrics */}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                             <div className="premium-card p-5 flex items-center gap-4">
-                                <ScoreRing score={data.strategy?.difficulty?.score || 0} color={data.strategy?.difficulty?.score > 70 ? '#E11D48' : data.strategy?.difficulty?.score > 40 ? '#D97706' : '#059669'} />
-                                <div><p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Difficulty</p><p className="font-bold text-slate-900">{data.strategy?.difficulty?.label || 'N/A'}</p></div>
+                                <ScoreRing score={headlineDifficulty.score} color={headlineDifficulty.score > 65 ? '#E11D48' : headlineDifficulty.score > 35 ? '#D97706' : '#059669'} />
+                                <div>
+                                    <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Ranking Difficulty</p>
+                                    <p className="font-bold text-slate-900">{headlineDifficulty.label}</p>
+                                </div>
                             </div>
                             <div className="premium-card p-5 flex items-center gap-4">
-                                <ScoreRing score={data.serpSummary?.volumeScore || 0} color="#4F46E5" />
-                                <div><p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Volume Score</p><p className="font-bold text-slate-900">{data.serpSummary?.volumeScore || 0}/100</p></div>
+                                <ScoreRing score={searchSignalScore} color="#4F46E5" />
+                                <div>
+                                    <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Search Signal</p>
+                                    <p className="font-bold text-slate-900">{searchSignalScore}/100</p>
+                                    <p className="text-xs text-slate-400">{searchSignalLabel} proxy demand</p>
+                                </div>
                             </div>
                             <div className="premium-card p-5">
                                 <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">SERP Personality</p>
-                                <p className="font-bold text-indigo-600 text-lg">{data.serpDna?.serpPersonality || 'N/A'}</p>
+                                <p className="font-bold text-indigo-600 text-lg">{headlineSerpPersonality}</p>
                             </div>
                             <div className="premium-card p-5">
                                 <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Keywords Found</p>
@@ -972,6 +1191,27 @@ export default function KeywordResearch() {
                                 <p className="text-xs text-slate-400 mt-1">{data.strategy?.quickWins?.length || 0} quick wins identified</p>
                             </div>
                         </div>
+
+                        {keywordAdsMeta?.requested && (
+                            <div className={`rounded-2xl border p-4 ${keywordAdsMeta.enriched ? 'border-emerald-200 bg-emerald-50/80' : 'border-amber-200 bg-amber-50/80'}`}>
+                                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                    <div>
+                                        <p className={`text-sm font-semibold ${keywordAdsMeta.enriched ? 'text-emerald-800' : 'text-amber-900'}`}>Google Ads enrichment</p>
+                                        <p className={`mt-1 text-xs leading-relaxed ${keywordAdsMeta.enriched ? 'text-emerald-700' : 'text-amber-800'}`}>
+                                            {keywordAdsMeta.enriched
+                                                ? `Applied using ${keywordAdsMeta.cacheHit ? 'cached' : 'live'} DataForSEO data. ${keywordAdsMeta.enrichedKeywordCount} keywords carry Ads metrics.`
+                                                : `Not applied for this run (${keywordAdsMeta.skippedReason || 'unknown reason'}).`}
+                                        </p>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2 text-xs">
+                                        <span className="premium-badge bg-white text-slate-700 border border-slate-200">Location {keywordAdsMeta.locationCode}</span>
+                                        <span className="premium-badge bg-white text-slate-700 border border-slate-200">Language {keywordAdsMeta.languageCode}</span>
+                                        <span className="premium-badge bg-white text-slate-700 border border-slate-200">{keywordAdsMeta.cacheHit ? 'Cache hit' : 'Single live call'}</span>
+                                        {keywordAdsMeta.taskCost > 0 && <span className="premium-badge bg-white text-slate-700 border border-slate-200">${keywordAdsMeta.taskCost.toFixed(3)}</span>}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         <Section icon={Target} title="Strategic Snapshot" badge={highestScoringKeyword ? getOpportunityTier(highestScoringKeyword.opportunityScore) : 'Overview'}>
                             <div className="space-y-4">
@@ -1182,6 +1422,11 @@ export default function KeywordResearch() {
                                                         <div className="col-span-4">
                                                             <p className="font-medium text-slate-800 font-mono text-xs">{k.term}</p>
                                                             <p className="mt-1 text-[11px] text-slate-400">{formatLabel(k.source || 'Unknown source')}</p>
+                                                            {k.adsMetrics && (
+                                                                <p className="mt-1 text-[11px] text-emerald-600">
+                                                                    Vol {k.adsMetrics.searchVolume ?? 'n/a'} · CPC {k.adsMetrics.cpc ?? 'n/a'}
+                                                                </p>
+                                                            )}
                                                         </div>
                                                         <div className="col-span-2"><span className={`premium-badge text-[10px] ${intentColors[k.intent?.toLowerCase()] || 'bg-slate-100 text-slate-600'}`}>{k.intent}</span></div>
                                                         <div className={`col-span-1 font-semibold text-xs ${volColors[k.volume] || ''}`}>{k.volume}</div>
@@ -1203,6 +1448,11 @@ export default function KeywordResearch() {
                                                         <div>
                                                             <p className="font-mono text-xs font-semibold text-slate-800">{keyword.term}</p>
                                                             <p className="mt-1 text-[11px] text-slate-400">{formatLabel(keyword.source || 'Unknown source')}</p>
+                                                            {keyword.adsMetrics && (
+                                                                <p className="mt-1 text-[11px] text-emerald-600">
+                                                                    Vol {keyword.adsMetrics.searchVolume ?? 'n/a'} · CPC {keyword.adsMetrics.cpc ?? 'n/a'}
+                                                                </p>
+                                                            )}
                                                         </div>
                                                         <span className="premium-badge bg-indigo-100 text-indigo-700">{keyword.opportunityScore}</span>
                                                     </div>

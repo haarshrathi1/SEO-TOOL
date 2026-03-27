@@ -9,6 +9,7 @@
     HistoryItem,
     KeywordData,
     KeywordDataV2,
+    KeywordAdsStatus,
     KeywordHistoryItem,
     KeywordJob,
     KeywordScanResult,
@@ -80,14 +81,14 @@ export const api = {
 
     logout: () => request<{ message: string }>('/api/auth/logout', { method: 'POST' }),
 
-    addViewer: (email: string, access: string[] = ['keywords'], projectIds: string[] = []) => request<{ message: string; viewer: ViewerRecord }>('/api/auth/viewers', {
+    addViewer: (email: string, access: string[] = ['keywords'], projectIds: string[] = [], features: string[] = []) => request<{ message: string; viewer: ViewerRecord }>('/api/auth/viewers', {
         method: 'POST',
-        body: JSON.stringify({ email, access, projectIds }),
+        body: JSON.stringify({ email, access, projectIds, features }),
     }),
 
-    updateViewer: (email: string, access: string[], projectIds: string[]) => request<{ message: string; viewer: ViewerRecord }>(`/api/auth/viewers/${encodeURIComponent(email)}`, {
+    updateViewer: (email: string, access: string[], projectIds: string[], features: string[] = []) => request<{ message: string; viewer: ViewerRecord }>(`/api/auth/viewers/${encodeURIComponent(email)}`, {
         method: 'PUT',
-        body: JSON.stringify({ access, projectIds }),
+        body: JSON.stringify({ access, projectIds, features }),
     }),
 
     getViewers: () => request<ViewerRecord[]>('/api/auth/viewers'),
@@ -150,9 +151,11 @@ export const api = {
         body: JSON.stringify({ seed }),
     }),
 
-    createKeywordJob: (seed: string, projectId?: string | null) => request<KeywordJob>('/api/keywords/jobs', {
+    getKeywordAdsStatus: () => request<KeywordAdsStatus>('/api/keywords/ads-access'),
+
+    createKeywordJob: (seed: string, projectId?: string | null, options: { useAdsData?: boolean } = {}) => request<KeywordJob>('/api/keywords/jobs', {
         method: 'POST',
-        body: JSON.stringify({ seed, projectId: projectId ?? null }),
+        body: JSON.stringify({ seed, projectId: projectId ?? null, useAdsData: options.useAdsData === true }),
     }),
 
     getKeywordJobs: (projectId?: string | null) => request<KeywordJob[]>(`/api/keywords/jobs${createQuery({ projectId: projectId || undefined })}`),

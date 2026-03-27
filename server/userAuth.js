@@ -20,7 +20,9 @@ const GOOGLE_CLIENT_ID = process.env.CLIENT_ID;
 const TOKEN_EXPIRY = '7d';
 const DEV_ADMIN_BYPASS = /^(1|true|yes|on)$/i.test(process.env.DEV_ADMIN_BYPASS || '');
 const ALLOWED_ACCESS = new Set(['keywords', 'dashboard', 'audit']);
+const ALLOWED_FEATURES = new Set(['keyword_ads']);
 const DEFAULT_VIEWER_ACCESS = ['keywords'];
+const DEFAULT_VIEWER_FEATURES = [];
 
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
@@ -40,6 +42,14 @@ function normalizeAccess(access) {
 
     const normalized = [...new Set(access.map((entry) => String(entry || '').trim()).filter((entry) => ALLOWED_ACCESS.has(entry)))];
     return normalized.length > 0 ? normalized : [...DEFAULT_VIEWER_ACCESS];
+}
+
+function normalizeFeatures(features) {
+    if (!Array.isArray(features) || features.length === 0) {
+        return [...DEFAULT_VIEWER_FEATURES];
+    }
+
+    return [...new Set(features.map((entry) => String(entry || '').trim()).filter((entry) => ALLOWED_FEATURES.has(entry)))];
 }
 
 function extractHostname(value) {
@@ -97,6 +107,7 @@ function getPublicViewer(viewer, tokenPayload = {}) {
         name: tokenPayload.name || viewer.email,
         picture: tokenPayload.picture || '',
         access: normalizeAccess(viewer.access),
+        features: normalizeFeatures(viewer.features),
         projectIds: normalizeProjectIds(viewer.projectIds),
     };
 }
@@ -133,6 +144,7 @@ function buildAdminUser(email, tokenPayload = {}) {
         name: tokenPayload.name || email,
         picture: tokenPayload.picture || '',
         access: ['keywords', 'dashboard', 'audit'],
+        features: ['keyword_ads'],
         projectIds: [],
     };
 }
@@ -347,6 +359,7 @@ router.post('/viewers', requireAuth, requireAdmin, async (req, res) => {
         const newViewer = await Viewer.create({
             email: normalizedEmail,
             access: normalizeAccess(req.body.access),
+            features: normalizeFeatures(req.body.features),
             projectIds: normalizeProjectIds(req.body.projectIds),
             createdAt: new Date(),
         });
@@ -356,6 +369,7 @@ router.post('/viewers', requireAuth, requireAdmin, async (req, res) => {
             viewer: {
                 email: normalizedEmail,
                 access: normalizeAccess(newViewer.access),
+                features: normalizeFeatures(newViewer.features),
                 projectIds: normalizeProjectIds(newViewer.projectIds),
                 createdAt: newViewer.createdAt,
             },
@@ -377,6 +391,7 @@ router.put('/viewers/:email', requireAuth, requireAdmin, async (req, res) => {
             { email: targetEmail },
             {
                 access: normalizeAccess(req.body.access),
+                features: normalizeFeatures(req.body.features),
                 projectIds: normalizeProjectIds(req.body.projectIds),
             },
             { new: true }
@@ -391,6 +406,7 @@ router.put('/viewers/:email', requireAuth, requireAdmin, async (req, res) => {
             viewer: {
                 email: viewer.email,
                 access: normalizeAccess(viewer.access),
+                features: normalizeFeatures(viewer.features),
                 projectIds: normalizeProjectIds(viewer.projectIds),
                 createdAt: viewer.createdAt,
             },
@@ -407,6 +423,7 @@ router.get('/viewers', requireAuth, requireAdmin, async (req, res) => {
         res.json(viewers.map((viewer) => ({
             email: viewer.email,
             access: normalizeAccess(viewer.access),
+            features: normalizeFeatures(viewer.features),
             projectIds: normalizeProjectIds(viewer.projectIds),
             createdAt: viewer.createdAt,
         })));
@@ -442,6 +459,7 @@ module.exports = {
         normalizeEmail,
         normalizeProjectIds,
         normalizeAccess,
+        normalizeFeatures,
         resolveProjectId,
         getRequiredJwtSecret,
         shouldBypassAdmin,

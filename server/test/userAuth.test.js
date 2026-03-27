@@ -123,6 +123,14 @@ test('requireAccess always allows admins through', () => {
     assert.equal(res.statusCode, 200);
 });
 
+test('normalizeFeatures only keeps supported premium flags', () => {
+    assert.deepEqual(
+        __internal.normalizeFeatures(['keyword_ads', 'keyword_ads', 'unknown']),
+        ['keyword_ads'],
+    );
+    assert.deepEqual(__internal.normalizeFeatures(null), []);
+});
+
 
 test('resolveLoginRole keeps real viewers as viewers even with local dev bypass', () => {
     assert.equal(

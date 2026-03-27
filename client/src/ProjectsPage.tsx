@@ -11,6 +11,10 @@ const ACCESS_OPTIONS = [
     { id: 'audit', label: 'Audit jobs' },
 ] as const;
 
+const FEATURE_OPTIONS = [
+    { id: 'keyword_ads', label: 'Google Ads enrichment' },
+] as const;
+
 interface ProjectFormState {
     id: string;
     name: string;
@@ -25,6 +29,7 @@ interface ProjectFormState {
 interface ViewerFormState {
     email: string;
     access: string[];
+    features: string[];
     projectIds: string[];
 }
 
@@ -42,6 +47,7 @@ const emptyProjectForm: ProjectFormState = {
 const emptyViewerForm: ViewerFormState = {
     email: '',
     access: ['keywords'],
+    features: [],
     projectIds: [],
 };
 
@@ -97,7 +103,7 @@ export default function ProjectsPage() {
         setProjectForm((current) => ({ ...current, [field]: value }));
     };
 
-    const handleViewerToggle = (field: 'access' | 'projectIds', value: string) => {
+    const handleViewerToggle = (field: 'access' | 'features' | 'projectIds', value: string) => {
         setViewerForm((current) => {
             const nextValues = current[field].includes(value)
                 ? current[field].filter((entry) => entry !== value)
@@ -135,6 +141,7 @@ export default function ProjectsPage() {
         setViewerForm({
             email: viewer.email,
             access: viewer.access,
+            features: viewer.features || [],
             projectIds: viewer.projectIds,
         });
     };
@@ -176,10 +183,10 @@ export default function ProjectsPage() {
         setSavingViewer(true);
         try {
             if (editingViewerEmail) {
-                await api.updateViewer(editingViewerEmail, viewerForm.access, viewerForm.projectIds);
+                await api.updateViewer(editingViewerEmail, viewerForm.access, viewerForm.projectIds, viewerForm.features);
                 push({ tone: 'success', title: 'Viewer updated' });
             } else {
-                await api.addViewer(viewerForm.email, viewerForm.access, viewerForm.projectIds);
+                await api.addViewer(viewerForm.email, viewerForm.access, viewerForm.projectIds, viewerForm.features);
                 push({ tone: 'success', title: 'Viewer added' });
             }
 
@@ -364,6 +371,21 @@ export default function ProjectsPage() {
                                 </div>
                             </div>
 
+                            <div className="space-y-2">
+                                <p className="text-sm font-medium text-slate-700">Premium features</p>
+                                <div className="flex flex-wrap gap-2">
+                                    {FEATURE_OPTIONS.map((option) => (
+                                        <Toggle
+                                            key={option.id}
+                                            checked={viewerForm.features.includes(option.id)}
+                                            label={option.label}
+                                            onClick={() => handleViewerToggle('features', option.id)}
+                                        />
+                                    ))}
+                                </div>
+                                <p className="text-xs text-slate-400">Enable paid Google Ads enrichment for this viewer. Selected viewers get 2 fresh Ads-enriched researches per week; admins stay unlimited. Cached seeds do not consume quota.</p>
+                            </div>
+
                             <div className="flex items-center gap-3">
                                 <button type="submit" disabled={savingViewer} className="premium-button bg-emerald-600 text-white hover:bg-emerald-700">
                                     {savingViewer ? <Loader2 className="h-4 w-4 animate-spin" /> : <Shield className="h-4 w-4" />}
@@ -384,6 +406,7 @@ export default function ProjectsPage() {
                                         <div>
                                             <p className="font-semibold text-slate-900">{viewer.email}</p>
                                             <p className="mt-1 text-sm text-slate-500">Access: {viewer.access.join(', ') || 'No access'}</p>
+                                            <p className="mt-1 text-sm text-slate-500">Premium: {viewer.features?.length ? viewer.features.join(', ') : 'No premium features'}</p>
                                             <p className="mt-1 text-sm text-slate-500">Projects: {viewer.projectIds.length ? viewer.projectIds.join(', ') : 'No projects assigned'}</p>
                                         </div>
                                         <div className="flex items-center gap-2">
