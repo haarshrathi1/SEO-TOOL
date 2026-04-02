@@ -56,15 +56,15 @@ function countIndexed(results: AuditResult[]) {
 }
 
 function countIssues(results: AuditResult[]) {
-    return results.filter((result) =>
-        result.status !== 'PASS'
-        || result.h1Count === 0
-        || !result.description
-        || (result.canonicalIssues?.length || 0) > 0
-        || hasStructuredDataError(result)
-        || hasStructuredDataWarning(result)
-        || hasLinkingGapWarning(result)
-    ).length;
+    const isCritical = (result: AuditResult) => {
+        if (result.contentBlocked) return true;
+        if (result.httpStatus && result.httpStatus >= 400) return true;
+        if (result.status !== 'PASS') return true;
+        if ((result.canonicalIssues?.length || 0) > 0) return true;
+        if (hasStructuredDataError(result)) return true;
+        return false;
+    };
+    return results.filter(isCritical).length;
 }
 
 function getFilterLabel(filterId: string) {
@@ -505,13 +505,15 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
             case 'not-indexed':
                 return displayResults.filter((result) => result.status !== 'PASS');
             case 'no-h1':
-                return displayResults.filter((result) => result.h1Count === 0);
+                return displayResults.filter((result) => !result.contentBlocked && result.h1Count === 0);
             case 'multi-h1':
                 return displayResults.filter((result) => (result.h1Count || 0) > 1);
             case 'missing-desc':
-                return displayResults.filter((result) => !result.description);
+                return displayResults.filter((result) => !result.contentBlocked && !result.description);
             case 'low-word-count':
-                return displayResults.filter((result) => (result.wordCount || 0) < 300);
+                return displayResults.filter((result) => !result.contentBlocked && (result.wordCount || 0) < 300);
+            case 'content-blocked':
+                return displayResults.filter((result) => result.contentBlocked || (result.httpStatus || 0) >= 400);
             case 'orphans':
             case 'sitemap-orphans':
                 return displayResults.filter((result) => (result.incomingLinks || 0) === 0);

@@ -9,10 +9,11 @@ interface IssuesProps {
 
 export default function AuditIssues({ results, onReview }: IssuesProps) {
     const indexedCount = results.filter((result) => result.status === 'PASS').length;
-    const reviewCount = results.filter((result) => result.status !== 'PASS').length;
+    const reviewCount = results.filter((result) => result.status !== 'PASS' || result.contentBlocked || (result.httpStatus || 0) >= 400).length;
     const orphanCount = results.filter((result) => isIndexedOrphan(result)).length;
     const highValueUnderlinkedCount = results.filter((result) => isHighValueUnderlinked(result)).length;
     const linkOpportunityCount = orphanCount + highValueUnderlinkedCount;
+    const isBlocked = (result: AuditResult) => Boolean(result.contentBlocked || ((result.httpStatus || 0) >= 400));
 
     const errors = [
         {
@@ -25,7 +26,7 @@ export default function AuditIssues({ results, onReview }: IssuesProps) {
         {
             id: 'no-h1',
             title: 'Missing H1 Tags',
-            count: results.filter((result) => result.h1Count === 0).length,
+            count: results.filter((result) => !isBlocked(result) && result.h1Count === 0).length,
             severity: 'critical',
             desc: 'H1 tags are crucial for ranking. Several pages have none.',
         },
@@ -42,14 +43,14 @@ export default function AuditIssues({ results, onReview }: IssuesProps) {
         {
             id: 'missing-desc',
             title: 'Missing Meta Descriptions',
-            count: results.filter((result) => !result.description).length,
+            count: results.filter((result) => !isBlocked(result) && !result.description).length,
             severity: 'warning',
             desc: 'CTR may be lower because Google will generate random snippets.',
         },
         {
             id: 'low-word-count',
             title: 'Low Word Count (< 300 words)',
-            count: results.filter((result) => (result.wordCount || 0) < 300).length,
+            count: results.filter((result) => !isBlocked(result) && (result.wordCount || 0) < 300).length,
             severity: 'warning',
             desc: 'Thin content is hard to rank.',
         },
@@ -59,6 +60,13 @@ export default function AuditIssues({ results, onReview }: IssuesProps) {
             count: results.filter((result) => (result.psi_data?.desktop?.score || 0) < 50).length,
             severity: 'warning',
             desc: 'User experience is poor on these pages.',
+        },
+        {
+            id: 'content-blocked',
+            title: 'Content not reachable',
+            count: results.filter((result) => isBlocked(result)).length,
+            severity: 'warning',
+            desc: 'Crawler could not fetch content (blocked, 4xx/5xx, or empty body).',
         },
     ].filter((issue) => issue.count > 0);
 

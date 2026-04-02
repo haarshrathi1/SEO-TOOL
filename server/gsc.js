@@ -60,21 +60,43 @@ const getPerformance = async (siteUrl, options = {}) => {
         weekLabel = dateRange.weekLabel;
     }
 
-    // Fetch query/page breakdown
+    // Fetch query/page breakdown with pagination (Search Console caps each page)
     const dimensions = options.dimensions || ['query', 'page'];
-    const res = await searchconsole.searchanalytics.query({
-        siteUrl,
-        requestBody: {
-            startDate,
-            endDate,
-            dimensions,
-            rowLimit: 25000
+    const rows = [];
+    const pageSize = 25000;
+    let startRow = 0;
+
+    while (true) {
+        const res = await searchconsole.searchanalytics.query({
+            siteUrl,
+            requestBody: {
+                startDate,
+                endDate,
+                dimensions,
+                rowLimit: pageSize,
+                startRow,
+            },
+        });
+
+        const pageRows = res.data.rows || [];
+        rows.push(...pageRows);
+
+        if (pageRows.length < pageSize) {
+            break;
         }
-    });
+
+        startRow += pageSize;
+
+        // Safety guard: stop after 200k rows to avoid runaway loops on huge properties
+        if (startRow >= 200000) {
+            console.warn('GSC pagination stopped after 200k rows to prevent runaway queries.');
+            break;
+        }
+    }
 
     return {
-        rows: res.data.rows || [],
-        dateRange: { startDate, endDate, weekLabel }
+        rows,
+        dateRange: { startDate, endDate, weekLabel },
     };
 };
 

@@ -182,10 +182,17 @@ const analyzeSite = async (req, res) => {
             else if (a.scoreDisplayMode === 'informative') psiNotices++;
         });
 
-        // 5. Calculate Health Score (n8n Logic)
+        // 5. Calculate Health Score (sampling-aware)
         let score = 100;
-        // A. GSC Errors
-        score -= Math.min(errors * 1.2, 40);
+
+        const coverageFactor = totalSitemapUrls > 0 && inspectedUrls > 0
+            ? inspectedUrls / totalSitemapUrls
+            : 1;
+        const errorRate = inspectedUrls > 0 ? errors / inspectedUrls : 0;
+        const estimatedErrors = totalSitemapUrls > 0 ? Math.round(errorRate * totalSitemapUrls) : errors;
+
+        // A. GSC Errors (use estimated total when sampling)
+        score -= Math.min(estimatedErrors * 1.2, 40);
         // B. Warnings (PSI)
         score -= Math.min(psiWarnings * 0.7, 20);
         // C. Notices (PSI)
@@ -196,6 +203,11 @@ const analyzeSite = async (req, res) => {
         if (parseFloat(LCP_Desktop) > 2.5) cwvPenalty += 8;
         if (parseFloat(CLS_Desktop) > 0.1) cwvPenalty += 6;
         score -= Math.min(cwvPenalty, 15);
+
+        // E. Coverage confidence (light penalty when sampled)
+        if (coverageFactor < 1) {
+            score -= Math.min(10, Math.round((1 - coverageFactor) * 10));
+        }
 
         score = Math.max(5, Math.round(score));
 

@@ -180,6 +180,8 @@ export interface AuditResult {
     internalLinks?: string[];
     incomingLinks?: number;
     brokenLinks?: string[];
+    contentBlocked?: boolean;
+    contentBlockedReason?: string;
 }
 
 export interface AuditJobProgress {

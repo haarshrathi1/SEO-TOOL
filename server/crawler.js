@@ -357,6 +357,10 @@ const crawlSite = async (startUrl, options = {}) => {
                     let page = null;
                     try {
                         page = await browser.newPage();
+                        await page.setExtraHTTPHeaders({
+                            'Accept-Language': 'en-US,en;q=0.9',
+                        });
+                        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
                         await page.setRequestInterception(true);
                         page.on('request', (req) => {
                             if (['image', 'stylesheet', 'font'].includes(req.resourceType())) req.abort();
@@ -364,20 +368,23 @@ const crawlSite = async (startUrl, options = {}) => {
                         });
 
                         const response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
+                        await page.waitForSelector('title, h1, meta[name="description"]', { timeout: 4000 }).catch(() => {});
                         const finalUrl = page.url();
                         const redirectCount = response?.request()?.redirectChain()?.length || 0;
                         const extracted = await page.evaluate(() => {
                             const title = document.title;
                             const description = document.querySelector('meta[name="description"]')?.content || '';
-                            const h1s = Array.from(document.querySelectorAll('h1')).map((el) => el.textContent.trim());
+                            const h1s = Array.from(document.querySelectorAll('h1')).map((el) => el.textContent?.trim() || '').filter(Boolean);
                             const bodyText = document.body.innerText || '';
-                            const wordCount = bodyText.split(/\s+/).length;
-                            const links = Array.from(document.querySelectorAll('a')).map((anchor) => anchor.href).filter((href) => href.startsWith('http'));
-                            const canonicals = Array.from(document.querySelectorAll('link[rel="canonical"]'))
+                            const wordCount = bodyText.split(/\s+/).filter(Boolean).length;
+                            const links = Array.from(document.querySelectorAll('a'))
+                                .map((anchor) => anchor.href)
+                                .filter((href) => href.startsWith('http'));
+                            const canonicals = Array.from(document.querySelectorAll('link[rel=\"canonical\"]'))
                                 .map((element) => element.getAttribute('href') || '')
-                                .map((href) => href ? new URL(href, document.baseURI).href : '')
+                                .map((href) => (href ? new URL(href, document.baseURI).href : ''))
                                 .filter(Boolean);
-                            const jsonLdBlocks = Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
+                            const jsonLdBlocks = Array.from(document.querySelectorAll('script[type=\"application/ld+json\"]'))
                                 .map((element) => element.textContent || '')
                                 .filter((text) => text.trim().length > 0);
                             const microdataTypes = Array.from(document.querySelectorAll('[itemscope][itemtype]'))
@@ -423,6 +430,26 @@ const crawlSite = async (startUrl, options = {}) => {
                 const impressions = pageImpressions[normalizedFinalUrl] || pageImpressions[normalizedRequestedUrl] || 0;
                 const ga4Views = pageViewsByPath[trafficPathKey] || 0;
 
+                const contentBlocked = (() => {
+                    if (pageData.httpStatus && pageData.httpStatus >= 400) return 'HTTP error';
+                    if ((pageData.wordCount || 0) < 20 && !pageData.title && !pageData.description) return 'Empty body';
+                    return '';
+                })();
+
+                const brokenLinks = [];
+                const linkCheckTargets = [...internalLinks, ...externalLinks].slice(0, 40);
+                for (const link of linkCheckTargets) {
+                    try {
+                        const res = await fetch(link, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(8000) });
+                        const status = res.status || 0;
+                        if (status >= 400) {
+                            brokenLinks.push(`${link} (${status})`);
+                        }
+                    } catch (err) {
+                        brokenLinks.push(`${link} (fetch-error)`);
+                    }
+                }
+
                 if (inspectionData.error) {
                     results.push({
                         url,
@@ -447,7 +474,9 @@ const crawlSite = async (startUrl, options = {}) => {
                         externalLinksOut: externalLinks.length,
                         internalLinks,
                         incomingLinks: 0,
-                        brokenLinks: [],
+                        brokenLinks,
+                        contentBlocked: Boolean(contentBlocked),
+                        contentBlockedReason: contentBlocked || undefined,
                     });
                 } else {
                     const indexStatus = inspectionData.indexStatusResult || {};
@@ -514,7 +543,9 @@ const crawlSite = async (startUrl, options = {}) => {
                         externalLinksOut: externalLinks.length,
                         internalLinks,
                         incomingLinks: 0,
-                        brokenLinks: [],
+                        brokenLinks,
+                        contentBlocked: Boolean(contentBlocked),
+                        contentBlockedReason: contentBlocked || undefined,
                     });
                 }
 
