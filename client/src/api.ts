@@ -18,8 +18,9 @@
 } from './types';
 
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/+$/, '');
+const productionApiBaseUrl = 'https://seo-tool-tcqn.onrender.com';
 const API_BASE_URL = configuredApiBaseUrl || (import.meta.env.PROD
-    ? window.location.origin
+    ? productionApiBaseUrl
     : 'http://localhost:3001');
 
 export const getApiUrl = (endpoint: string) => `${API_BASE_URL}${endpoint}`;
