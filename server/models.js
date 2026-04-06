@@ -130,6 +130,7 @@ keywordFeatureUsageSchema.index({ ownerEmail: 1, feature: 1, weekKey: 1 }, { uni
 
 const keywordAdsCacheSchema = new Schema({
     cacheKey: { type: String, required: true, unique: true, index: true },
+    provider: { type: String, default: 'dataforseo_google_ads', index: true },
     seed: { type: String, required: true, trim: true, index: true },
     locationCode: { type: Number, default: null },
     languageCode: { type: String, default: null },

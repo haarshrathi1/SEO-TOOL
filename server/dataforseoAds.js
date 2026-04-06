@@ -3,6 +3,8 @@ const axios = require('axios');
 
 const { KeywordAdsCache } = require('./models');
 
+const DATAFORSEO_PROVIDER = 'dataforseo_google_ads';
+const DATAFORSEO_PROVIDER_LABEL = 'DataForSEO Google Ads';
 const DATAFORSEO_ENDPOINT = 'https://api.dataforseo.com/v3/keywords_data/google_ads/keywords_for_keywords/live';
 const DEFAULT_LOCATION_CODE = 2840;
 const DEFAULT_LANGUAGE_CODE = 'en';
@@ -56,6 +58,22 @@ function getAuthConfig() {
     return {
         login: String(process.env.DATAFORSEO_LOGIN || '').trim(),
         password: String(process.env.DATAFORSEO_PASSWORD || '').trim(),
+    };
+}
+
+function getDataForSeoAdsProviderConfig() {
+    const auth = getAuthConfig();
+    const configured = Boolean(auth.login && auth.password);
+
+    return {
+        provider: DATAFORSEO_PROVIDER,
+        providerLabel: DATAFORSEO_PROVIDER_LABEL,
+        configured,
+        reason: configured ? 'ok' : 'missing_credentials',
+        locationCode: getLocationCode(),
+        languageCode: getLanguageCode(),
+        searchPartners: getSearchPartners(),
+        cacheTtlDays: getCacheTtlDays(),
     };
 }
 
@@ -113,6 +131,7 @@ function buildAdsSeedKeywords({ seed, suggestions = [], serpData = {}, keywordUn
 
 function buildAdsCacheKey(seed, options = {}) {
     const rawKey = JSON.stringify({
+        provider: options.provider ?? DATAFORSEO_PROVIDER,
         seed: normalizeKeywordText(seed),
         locationCode: options.locationCode ?? getLocationCode(),
         languageCode: options.languageCode ?? getLanguageCode(),
@@ -142,6 +161,7 @@ async function saveKeywordAdsSnapshot(seed, payload, options = {}) {
         { cacheKey },
         {
             cacheKey,
+            provider: options.provider ?? DATAFORSEO_PROVIDER,
             seed: normalizeKeywordText(seed),
             locationCode: options.locationCode ?? getLocationCode(),
             languageCode: options.languageCode ?? getLanguageCode(),
@@ -256,6 +276,8 @@ async function fetchKeywordAdsSnapshot(seed, context = {}, options = {}) {
         .slice(0, MAX_STORED_RESULTS);
 
     return {
+        provider: DATAFORSEO_PROVIDER,
+        providerLabel: DATAFORSEO_PROVIDER_LABEL,
         taskId: task.id || null,
         taskKeywords,
         locationCode,
@@ -268,9 +290,12 @@ async function fetchKeywordAdsSnapshot(seed, context = {}, options = {}) {
 }
 
 module.exports = {
+    DATAFORSEO_PROVIDER,
+    DATAFORSEO_PROVIDER_LABEL,
     buildAdsSeedKeywords,
     buildAdsCacheKey,
     getCachedKeywordAdsSnapshot,
+    getDataForSeoAdsProviderConfig,
     saveKeywordAdsSnapshot,
     fetchKeywordAdsSnapshot,
     getLocationCode,

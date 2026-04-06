@@ -1,4 +1,5 @@
 const { KeywordFeatureUsage } = require('./models');
+const { getPreferredKeywordAdsProviderConfig } = require('./keywordAdsProviders');
 
 const KEYWORD_ADS_FEATURE = 'keyword_ads';
 const DEFAULT_WEEKLY_LIMIT = 2;
@@ -35,7 +36,7 @@ function hasKeywordAdsFeature(user) {
 }
 
 function isKeywordAdsConfigured() {
-    return Boolean(process.env.DATAFORSEO_LOGIN?.trim() && process.env.DATAFORSEO_PASSWORD?.trim());
+    return getPreferredKeywordAdsProviderConfig().configured;
 }
 
 function normalizeOwnerEmail(value) {
@@ -62,14 +63,18 @@ async function getUsageCount(ownerEmail, weekKey) {
 
 async function getKeywordAdsUsageStatus(user, options = {}) {
     const weekKey = options.weekKey || getKeywordAdsWeekKey();
-    const configured = isKeywordAdsConfigured();
+    const providerConfig = getPreferredKeywordAdsProviderConfig();
+    const configured = providerConfig.configured;
     const weeklyLimit = getKeywordAdsWeeklyLimit();
     const isAdmin = user?.role === 'admin';
     const featureEnabled = hasKeywordAdsFeature(user);
 
     if (!configured) {
         return {
+            provider: providerConfig.provider,
+            providerLabel: providerConfig.providerLabel,
             configured,
+            configurationReason: providerConfig.reason || 'not_configured',
             featureEnabled,
             isAdmin,
             allowed: false,
@@ -77,6 +82,9 @@ async function getKeywordAdsUsageStatus(user, options = {}) {
             weeklyLimit,
             usedThisWeek: 0,
             remainingThisWeek: 0,
+            locationCode: providerConfig.locationCode ?? null,
+            languageCode: providerConfig.languageCode ?? '',
+            searchPartners: providerConfig.searchPartners ?? false,
             weekKey,
             reason: 'not_configured',
         };
@@ -84,7 +92,10 @@ async function getKeywordAdsUsageStatus(user, options = {}) {
 
     if (!featureEnabled) {
         return {
+            provider: providerConfig.provider,
+            providerLabel: providerConfig.providerLabel,
             configured,
+            configurationReason: providerConfig.reason || 'ok',
             featureEnabled,
             isAdmin,
             allowed: false,
@@ -92,6 +103,9 @@ async function getKeywordAdsUsageStatus(user, options = {}) {
             weeklyLimit,
             usedThisWeek: 0,
             remainingThisWeek: 0,
+            locationCode: providerConfig.locationCode ?? null,
+            languageCode: providerConfig.languageCode ?? '',
+            searchPartners: providerConfig.searchPartners ?? false,
             weekKey,
             reason: 'feature_not_enabled',
         };
@@ -99,7 +113,10 @@ async function getKeywordAdsUsageStatus(user, options = {}) {
 
     if (isAdmin) {
         return {
+            provider: providerConfig.provider,
+            providerLabel: providerConfig.providerLabel,
             configured,
+            configurationReason: providerConfig.reason || 'ok',
             featureEnabled,
             isAdmin,
             allowed: true,
@@ -107,6 +124,9 @@ async function getKeywordAdsUsageStatus(user, options = {}) {
             weeklyLimit: null,
             usedThisWeek: 0,
             remainingThisWeek: null,
+            locationCode: providerConfig.locationCode ?? null,
+            languageCode: providerConfig.languageCode ?? '',
+            searchPartners: providerConfig.searchPartners ?? false,
             weekKey,
             reason: 'admin_unlimited',
         };
@@ -116,7 +136,10 @@ async function getKeywordAdsUsageStatus(user, options = {}) {
     const remainingThisWeek = Math.max(0, weeklyLimit - usedThisWeek);
 
     return {
+        provider: providerConfig.provider,
+        providerLabel: providerConfig.providerLabel,
         configured,
+        configurationReason: providerConfig.reason || 'ok',
         featureEnabled,
         isAdmin,
         allowed: remainingThisWeek > 0,
@@ -124,6 +147,9 @@ async function getKeywordAdsUsageStatus(user, options = {}) {
         weeklyLimit,
         usedThisWeek,
         remainingThisWeek,
+        locationCode: providerConfig.locationCode ?? null,
+        languageCode: providerConfig.languageCode ?? '',
+        searchPartners: providerConfig.searchPartners ?? false,
         weekKey,
         reason: remainingThisWeek > 0 ? 'ok' : 'weekly_limit_reached',
     };

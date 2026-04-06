@@ -9,13 +9,13 @@ const {
     getProviderRuntime,
 } = require('./genaiProvider');
 const {
-    fetchKeywordAdsSnapshot,
     getCachedKeywordAdsSnapshot,
-    getLanguageCode: getKeywordAdsLanguageCode,
-    getLocationCode: getKeywordAdsLocationCode,
-    getSearchPartners: getKeywordAdsSearchPartners,
     saveKeywordAdsSnapshot,
 } = require('./dataforseoAds');
+const {
+    fetchLiveKeywordAdsSnapshot,
+    getPreferredKeywordAdsProviderConfig,
+} = require('./keywordAdsProviders');
 const {
     getKeywordAdsUsageStatus,
     releaseKeywordAdsUsage,
@@ -1732,22 +1732,26 @@ async function runKeywordResearchV2(seedInput, options = {}) {
     let groundedSearchSkippedReason = null;
     let groundedSearchQuota = null;
     const keywordAdsRequested = options.useAdsData === true;
+    const keywordAdsProviderConfig = getPreferredKeywordAdsProviderConfig();
     let keywordAdsMeta = {
         requested: keywordAdsRequested,
+        provider: keywordAdsProviderConfig.provider,
+        providerLabel: keywordAdsProviderConfig.providerLabel,
         configured: false,
+        configurationReason: keywordAdsProviderConfig.reason || null,
         featureEnabled: false,
         allowed: false,
         unlimited: false,
         cacheHit: false,
         enriched: false,
         usageApplied: false,
-        skippedReason: keywordAdsRequested ? 'not_requested' : null,
+        skippedReason: keywordAdsRequested ? null : 'not_requested',
         weeklyLimit: null,
         usedThisWeek: 0,
         remainingThisWeek: null,
-        locationCode: getKeywordAdsLocationCode(),
-        languageCode: getKeywordAdsLanguageCode(),
-        searchPartners: getKeywordAdsSearchPartners(),
+        locationCode: keywordAdsProviderConfig.locationCode ?? null,
+        languageCode: keywordAdsProviderConfig.languageCode ?? '',
+        searchPartners: keywordAdsProviderConfig.searchPartners ?? false,
         taskCost: 0,
         taskKeywords: [],
         enrichedKeywordCount: 0,
@@ -1870,7 +1874,10 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         const adsStatus = await getKeywordAdsUsageStatus(options.user || null);
         keywordAdsMeta = {
             ...keywordAdsMeta,
+            provider: adsStatus.provider,
+            providerLabel: adsStatus.providerLabel,
             configured: adsStatus.configured,
+            configurationReason: adsStatus.configurationReason || null,
             featureEnabled: adsStatus.featureEnabled,
             allowed: adsStatus.allowed,
             unlimited: adsStatus.unlimited,
@@ -1878,15 +1885,19 @@ async function runKeywordResearchV2(seedInput, options = {}) {
             weeklyLimit: adsStatus.weeklyLimit,
             usedThisWeek: adsStatus.usedThisWeek,
             remainingThisWeek: adsStatus.remainingThisWeek,
+            locationCode: adsStatus.locationCode ?? keywordAdsMeta.locationCode,
+            languageCode: adsStatus.languageCode || keywordAdsMeta.languageCode,
+            searchPartners: typeof adsStatus.searchPartners === 'boolean' ? adsStatus.searchPartners : keywordAdsMeta.searchPartners,
         };
 
         if (adsStatus.configured && adsStatus.featureEnabled) {
-            await pushProgress(options.onProgress, buildProgressUpdate(4, 'Checking cached Google Ads enrichment for this keyword set...', {
+            await pushProgress(options.onProgress, buildProgressUpdate(4, `Checking cached ${keywordAdsMeta.providerLabel} enrichment for this keyword set...`, {
                 phase: 'mid',
-                provider: 'DataForSEO Google Ads',
+                provider: keywordAdsMeta.providerLabel,
             }));
 
             const cachedAds = await getCachedKeywordAdsSnapshot(seed, {
+                provider: keywordAdsMeta.provider,
                 locationCode: keywordAdsMeta.locationCode,
                 languageCode: keywordAdsMeta.languageCode,
                 searchPartners: keywordAdsMeta.searchPartners,
@@ -1916,17 +1927,19 @@ async function runKeywordResearchV2(seedInput, options = {}) {
                 };
 
                 if (reservedUsage.allowed) {
-                    await pushProgress(options.onProgress, buildProgressUpdate(4, 'Pulling Google Ads keyword data from DataForSEO in one live request...', {
+                    await pushProgress(options.onProgress, buildProgressUpdate(4, `Pulling Google Ads keyword data from ${keywordAdsMeta.providerLabel}...`, {
                         phase: 'mid',
-                        provider: 'DataForSEO Google Ads',
+                        provider: keywordAdsMeta.providerLabel,
                     }));
 
                     try {
-                        const adsSnapshot = await fetchKeywordAdsSnapshot(seed, {
+                        const adsSnapshot = await fetchLiveKeywordAdsSnapshot(seed, {
                             suggestions,
                             serpData,
                             keywordUniverse,
                         }, {
+                            providerConfig: keywordAdsProviderConfig,
+                            provider: keywordAdsMeta.provider,
                             locationCode: keywordAdsMeta.locationCode,
                             languageCode: keywordAdsMeta.languageCode,
                             searchPartners: keywordAdsMeta.searchPartners,
@@ -1934,6 +1947,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
                         });
 
                         await saveKeywordAdsSnapshot(seed, adsSnapshot, {
+                            provider: keywordAdsMeta.provider,
                             locationCode: keywordAdsMeta.locationCode,
                             languageCode: keywordAdsMeta.languageCode,
                             searchPartners: keywordAdsMeta.searchPartners,

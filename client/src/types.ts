@@ -460,7 +460,10 @@ export interface KeywordDataV2 {
         backend?: string;
         keywordAds?: {
             requested: boolean;
+            provider: string;
+            providerLabel: string;
             configured: boolean;
+            configurationReason: string | null;
             featureEnabled: boolean;
             allowed: boolean;
             unlimited: boolean;
@@ -500,7 +503,10 @@ export interface KeywordScanResult {
 }
 
 export interface KeywordAdsStatus {
+    provider: string;
+    providerLabel: string;
     configured: boolean;
+    configurationReason: string;
     featureEnabled: boolean;
     isAdmin: boolean;
     allowed: boolean;
@@ -508,6 +514,9 @@ export interface KeywordAdsStatus {
     weeklyLimit: number | null;
     usedThisWeek: number;
     remainingThisWeek: number | null;
+    locationCode: number | null;
+    languageCode: string;
+    searchPartners: boolean;
     weekKey: string;
     reason: string;
 }

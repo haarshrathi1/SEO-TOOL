@@ -78,6 +78,27 @@ function getErrorMessage(error: unknown, fallback: string) {
     return error instanceof Error ? error.message : fallback;
 }
 
+function getAdsConfigurationNote(status: KeywordAdsStatus) {
+    const providerLabel = status.providerLabel || 'Keyword Ads provider';
+
+    switch (status.configurationReason) {
+    case 'missing_developer_token':
+        return 'Google Ads API developer token is missing on the server.';
+    case 'missing_customer_id':
+        return 'Google Ads customer ID is missing on the server.';
+    case 'missing_oauth_scope':
+        return 'Saved Google Ads auth is missing the Ads scope. Reconnect using /auth/google/login/ads.';
+    case 'missing_oauth_credentials':
+        return 'Google Ads auth is missing on the server. Connect the Ads account at /auth/google/login/ads.';
+    case 'missing_oauth_client':
+        return 'Google OAuth client credentials are incomplete for Google Ads.';
+    case 'missing_credentials':
+        return 'Server credentials are not configured for DataForSEO yet.';
+    default:
+        return `${providerLabel} is not configured yet.`;
+    }
+}
+
 function formatLabel(value: string) {
     return value
         .replace(/_/g, ' ')
@@ -747,15 +768,16 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
     const searchSignalLabel = getSearchSignalLabel(searchSignalScore);
     const canSeeAdsToggle = user.role === 'admin' || Boolean(user.features?.includes('keyword_ads')) || Boolean(adsStatus?.featureEnabled);
     const adsToggleDisabled = !adsStatus?.configured || !adsStatus?.featureEnabled;
+    const adsProviderLabel = adsStatus?.providerLabel || keywordAdsMeta?.providerLabel || 'Google Ads';
     const adsToggleNote = !adsStatus
         ? 'Checking Google Ads enrichment access...'
         : !adsStatus.configured
-            ? 'Server credentials are not configured for DataForSEO yet.'
+            ? getAdsConfigurationNote(adsStatus)
             : adsStatus.unlimited
-                ? 'Admin mode: unlimited Google Ads-enriched researches.'
+                ? `Admin mode: unlimited ${adsProviderLabel} enrichments.`
                 : adsStatus.allowed
-                    ? `${adsStatus.remainingThisWeek ?? 0} fresh Google Ads lookups left this week.`
-                    : 'Fresh Google Ads lookups are exhausted this week. Cached seeds can still enrich results.';
+                    ? `${adsStatus.remainingThisWeek ?? 0} fresh ${adsProviderLabel} lookups left this week.`
+                    : `Fresh ${adsProviderLabel} lookups are exhausted this week. Cached seeds can still enrich results.`;
 
     const exportKeywordCsv = () => {
         if (!data) return;
@@ -1199,11 +1221,12 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
                                         <p className={`text-sm font-semibold ${keywordAdsMeta.enriched ? 'text-emerald-800' : 'text-amber-900'}`}>Google Ads enrichment</p>
                                         <p className={`mt-1 text-xs leading-relaxed ${keywordAdsMeta.enriched ? 'text-emerald-700' : 'text-amber-800'}`}>
                                             {keywordAdsMeta.enriched
-                                                ? `Applied using ${keywordAdsMeta.cacheHit ? 'cached' : 'live'} DataForSEO data. ${keywordAdsMeta.enrichedKeywordCount} keywords carry Ads metrics.`
+                                                ? `Applied using ${keywordAdsMeta.cacheHit ? 'cached' : 'live'} ${keywordAdsMeta.providerLabel} data. ${keywordAdsMeta.enrichedKeywordCount} keywords carry Ads metrics.`
                                                 : `Not applied for this run (${keywordAdsMeta.skippedReason || 'unknown reason'}).`}
                                         </p>
                                     </div>
                                     <div className="flex flex-wrap gap-2 text-xs">
+                                        <span className="premium-badge bg-white text-slate-700 border border-slate-200">{keywordAdsMeta.providerLabel}</span>
                                         <span className="premium-badge bg-white text-slate-700 border border-slate-200">Location {keywordAdsMeta.locationCode}</span>
                                         <span className="premium-badge bg-white text-slate-700 border border-slate-200">Language {keywordAdsMeta.languageCode}</span>
                                         <span className="premium-badge bg-white text-slate-700 border border-slate-200">{keywordAdsMeta.cacheHit ? 'Cache hit' : 'Single live call'}</span>

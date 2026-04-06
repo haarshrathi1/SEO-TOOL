@@ -20,11 +20,18 @@ console.log('Initializing OAuth Client with ID:', clientId ? 'Set' : 'Missing');
 
 const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
 const TOKEN_PROVIDER = 'google-oauth';
+const GOOGLE_ADS_TOKEN_PROVIDER = 'google-ads-oauth';
 const isProduction = process.env.NODE_ENV === 'production';
 const disableServiceAccountRaw = process.env.DISABLE_SERVICE_ACCOUNT ?? (isProduction ? 'true' : 'false');
 const DISABLE_SERVICE_ACCOUNT = /^(1|true|yes|on)$/i.test(disableServiceAccountRaw);
+const GOOGLE_ADS_OAUTH_SCOPE = 'https://www.googleapis.com/auth/adwords';
 
 const oauth2Client = new google.auth.OAuth2(
+    clientId,
+    clientSecret,
+    redirectUri
+);
+const googleAdsOauth2Client = new google.auth.OAuth2(
     clientId,
     clientSecret,
     redirectUri
@@ -40,6 +47,13 @@ const SCOPES = [
     'https://www.googleapis.com/auth/indexing',
 ];
 
+const GOOGLE_ADS_SCOPES = [
+    GOOGLE_ADS_OAUTH_SCOPE,
+    'openid',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/userinfo.email',
+];
+
 const SERVICE_ACCOUNT_SCOPES = [
     'https://www.googleapis.com/auth/webmasters.readonly',
     'https://www.googleapis.com/auth/webmasters',
@@ -50,12 +64,22 @@ const SERVICE_ACCOUNT_SCOPES = [
 
 async function initializeAuth() {
     try {
-        const tokenDoc = await OauthToken.findOne({ provider: TOKEN_PROVIDER }).lean();
-        if (!tokenDoc?.tokens) return;
+        const [defaultTokenDoc, googleAdsTokenDoc] = await Promise.all([
+            OauthToken.findOne({ provider: TOKEN_PROVIDER }).lean(),
+            OauthToken.findOne({ provider: GOOGLE_ADS_TOKEN_PROVIDER }).lean(),
+        ]);
 
-        oauth2Client.setCredentials(tokenDoc.tokens);
-        global.oauthTokens = tokenDoc.tokens;
-        console.log('Loaded saved tokens from MongoDB for persistent auth.');
+        if (defaultTokenDoc?.tokens) {
+            oauth2Client.setCredentials(defaultTokenDoc.tokens);
+            global.oauthTokens = defaultTokenDoc.tokens;
+            console.log('Loaded saved default Google tokens from MongoDB for persistent auth.');
+        }
+
+        if (googleAdsTokenDoc?.tokens) {
+            googleAdsOauth2Client.setCredentials(googleAdsTokenDoc.tokens);
+            global.googleAdsOauthTokens = googleAdsTokenDoc.tokens;
+            console.log('Loaded saved Google Ads tokens from MongoDB for persistent auth.');
+        }
     } catch (e) {
         console.error('Failed to load tokens from MongoDB:', e.message);
     }
@@ -66,23 +90,45 @@ router.get('/login', (req, res) => {
         access_type: 'offline',
         scope: SCOPES,
         prompt: 'consent',
+        state: TOKEN_PROVIDER,
+    });
+    res.redirect(url);
+});
+
+router.get('/login/ads', (req, res) => {
+    const url = googleAdsOauth2Client.generateAuthUrl({
+        access_type: 'offline',
+        scope: GOOGLE_ADS_SCOPES,
+        prompt: 'consent',
+        state: GOOGLE_ADS_TOKEN_PROVIDER,
     });
     res.redirect(url);
 });
 
 router.get('/callback', async (req, res) => {
     const { code } = req.query;
+    const requestedProvider = req.query.state === GOOGLE_ADS_TOKEN_PROVIDER
+        ? GOOGLE_ADS_TOKEN_PROVIDER
+        : TOKEN_PROVIDER;
+    const selectedClient = requestedProvider === GOOGLE_ADS_TOKEN_PROVIDER
+        ? googleAdsOauth2Client
+        : oauth2Client;
+
     try {
-        const { tokens } = await oauth2Client.getToken(code);
-        oauth2Client.setCredentials(tokens);
+        const { tokens } = await selectedClient.getToken(code);
+        selectedClient.setCredentials(tokens);
 
         await OauthToken.findOneAndUpdate(
-            { provider: TOKEN_PROVIDER },
-            { provider: TOKEN_PROVIDER, tokens, updatedAt: new Date() },
+            { provider: requestedProvider },
+            { provider: requestedProvider, tokens, updatedAt: new Date() },
             { upsert: true, setDefaultsOnInsert: true }
         );
 
-        global.oauthTokens = tokens;
+        if (requestedProvider === GOOGLE_ADS_TOKEN_PROVIDER) {
+            global.googleAdsOauthTokens = tokens;
+        } else {
+            global.oauthTokens = tokens;
+        }
 
         console.log('Authentication successful & saved to MongoDB');
         res.redirect(`${frontendUrl}?auth=success`);
@@ -109,6 +155,26 @@ const getAuthClient = () => {
     return null;
 };
 
+function getStoredOauthTokens() {
+    return oauth2Client.credentials || global.oauthTokens || null;
+}
+
+function getStoredGoogleAdsOauthTokens() {
+    return googleAdsOauth2Client.credentials || global.googleAdsOauthTokens || null;
+}
+
+function hasOauthScope(scope, tokens = getStoredOauthTokens()) {
+    if (!scope || !tokens?.scope) {
+        return false;
+    }
+
+    const scopes = Array.isArray(tokens.scope)
+        ? tokens.scope
+        : String(tokens.scope).split(/\s+/).filter(Boolean);
+
+    return scopes.includes(scope);
+}
+
 const getServiceAccountAuth = () => {
     const keyPath = path.join(__dirname, 'data', 'service_account.json');
     if (fs.existsSync(keyPath)) {
@@ -123,5 +189,17 @@ const getServiceAccountAuth = () => {
     return null;
 };
 
-module.exports = { router, getAuthClient, oauth2Client, getServiceAccountAuth, initializeAuth };
+module.exports = {
+    GOOGLE_ADS_OAUTH_SCOPE,
+    GOOGLE_ADS_TOKEN_PROVIDER,
+    router,
+    getAuthClient,
+    getStoredOauthTokens,
+    getStoredGoogleAdsOauthTokens,
+    hasOauthScope,
+    googleAdsOauth2Client,
+    oauth2Client,
+    getServiceAccountAuth,
+    initializeAuth,
+};
 
