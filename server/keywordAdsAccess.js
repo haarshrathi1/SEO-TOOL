@@ -1,26 +1,34 @@
-const { KeywordFeatureUsage } = require('./models');
 const { getPreferredKeywordAdsProviderConfig } = require('./keywordAdsProviders');
+const {
+    DAY_PERIOD,
+    WEEK_PERIOD,
+    getDayKey,
+    getWeekKey,
+    getUsageCount,
+    normalizeOwnerEmail,
+    parseLimit,
+    releaseUsageCount,
+    reserveUsageCount,
+} = require('./usageWindows');
 
 const KEYWORD_ADS_FEATURE = 'keyword_ads';
-const DEFAULT_WEEKLY_LIMIT = 2;
-
-function parseWeeklyLimit(value) {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed) || parsed < 0) {
-        return DEFAULT_WEEKLY_LIMIT;
-    }
-    return Math.floor(parsed);
-}
+const DEFAULT_WEEKLY_LIMIT = 5;
+const DEFAULT_DAILY_LIMIT = 2;
 
 function getKeywordAdsWeeklyLimit() {
-    return parseWeeklyLimit(process.env.DATAFORSEO_ADS_WEEKLY_LIMIT);
+    return parseLimit(process.env.DATAFORSEO_ADS_WEEKLY_LIMIT, DEFAULT_WEEKLY_LIMIT);
+}
+
+function getKeywordAdsDailyLimit() {
+    return parseLimit(process.env.DATAFORSEO_ADS_DAILY_LIMIT, DEFAULT_DAILY_LIMIT);
 }
 
 function getKeywordAdsWeekKey(date = new Date()) {
-    const utc = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-    const day = (utc.getUTCDay() + 6) % 7;
-    utc.setUTCDate(utc.getUTCDate() - day);
-    return utc.toISOString().slice(0, 10);
+    return getWeekKey(date);
+}
+
+function getKeywordAdsDayKey(date = new Date()) {
+    return getDayKey(date);
 }
 
 function hasKeywordAdsFeature(user) {
@@ -32,108 +40,22 @@ function hasKeywordAdsFeature(user) {
         return true;
     }
 
-    return Array.isArray(user.features) && user.features.includes(KEYWORD_ADS_FEATURE);
+    return Array.isArray(user.access) && user.access.includes('keywords');
 }
 
 function isKeywordAdsConfigured() {
     return getPreferredKeywordAdsProviderConfig().configured;
 }
 
-function normalizeOwnerEmail(value) {
-    return String(value || '').toLowerCase().trim();
-}
-
-function isDuplicateKeyError(error) {
-    return Number(error?.code) === 11000;
-}
-
-async function getUsageCount(ownerEmail, weekKey) {
-    if (!ownerEmail) {
-        return 0;
-    }
-
-    const usage = await KeywordFeatureUsage.findOne({
-        ownerEmail: String(ownerEmail).toLowerCase().trim(),
-        feature: KEYWORD_ADS_FEATURE,
-        weekKey,
-    }).lean();
-
-    return Number.isFinite(Number(usage?.count)) ? Number(usage.count) : 0;
-}
-
-async function getKeywordAdsUsageStatus(user, options = {}) {
-    const weekKey = options.weekKey || getKeywordAdsWeekKey();
+function buildBaseStatus(user, options = {}) {
     const providerConfig = getPreferredKeywordAdsProviderConfig();
     const configured = providerConfig.configured;
+    const dailyLimit = getKeywordAdsDailyLimit();
     const weeklyLimit = getKeywordAdsWeeklyLimit();
+    const dayKey = options.dayKey || getKeywordAdsDayKey();
+    const weekKey = options.weekKey || getKeywordAdsWeekKey();
     const isAdmin = user?.role === 'admin';
     const featureEnabled = hasKeywordAdsFeature(user);
-
-    if (!configured) {
-        return {
-            provider: providerConfig.provider,
-            providerLabel: providerConfig.providerLabel,
-            configured,
-            configurationReason: providerConfig.reason || 'not_configured',
-            featureEnabled,
-            isAdmin,
-            allowed: false,
-            unlimited: false,
-            weeklyLimit,
-            usedThisWeek: 0,
-            remainingThisWeek: 0,
-            locationCode: providerConfig.locationCode ?? null,
-            languageCode: providerConfig.languageCode ?? '',
-            searchPartners: providerConfig.searchPartners ?? false,
-            weekKey,
-            reason: 'not_configured',
-        };
-    }
-
-    if (!featureEnabled) {
-        return {
-            provider: providerConfig.provider,
-            providerLabel: providerConfig.providerLabel,
-            configured,
-            configurationReason: providerConfig.reason || 'ok',
-            featureEnabled,
-            isAdmin,
-            allowed: false,
-            unlimited: false,
-            weeklyLimit,
-            usedThisWeek: 0,
-            remainingThisWeek: 0,
-            locationCode: providerConfig.locationCode ?? null,
-            languageCode: providerConfig.languageCode ?? '',
-            searchPartners: providerConfig.searchPartners ?? false,
-            weekKey,
-            reason: 'feature_not_enabled',
-        };
-    }
-
-    if (isAdmin) {
-        return {
-            provider: providerConfig.provider,
-            providerLabel: providerConfig.providerLabel,
-            configured,
-            configurationReason: providerConfig.reason || 'ok',
-            featureEnabled,
-            isAdmin,
-            allowed: true,
-            unlimited: true,
-            weeklyLimit: null,
-            usedThisWeek: 0,
-            remainingThisWeek: null,
-            locationCode: providerConfig.locationCode ?? null,
-            languageCode: providerConfig.languageCode ?? '',
-            searchPartners: providerConfig.searchPartners ?? false,
-            weekKey,
-            reason: 'admin_unlimited',
-        };
-    }
-
-    const usedThisWeek = await getUsageCount(user.email, weekKey);
-    const remainingThisWeek = Math.max(0, weeklyLimit - usedThisWeek);
 
     return {
         provider: providerConfig.provider,
@@ -142,29 +64,94 @@ async function getKeywordAdsUsageStatus(user, options = {}) {
         configurationReason: providerConfig.reason || 'ok',
         featureEnabled,
         isAdmin,
-        allowed: remainingThisWeek > 0,
+        allowed: false,
         unlimited: false,
+        dailyLimit,
+        usedToday: 0,
+        remainingToday: 0,
         weeklyLimit,
-        usedThisWeek,
-        remainingThisWeek,
+        usedThisWeek: 0,
+        remainingThisWeek: 0,
         locationCode: providerConfig.locationCode ?? null,
         languageCode: providerConfig.languageCode ?? '',
         searchPartners: providerConfig.searchPartners ?? false,
+        dayKey,
         weekKey,
-        reason: remainingThisWeek > 0 ? 'ok' : 'weekly_limit_reached',
+        reason: 'ok',
+    };
+}
+
+async function getKeywordAdsUsageStatus(user, options = {}) {
+    const baseStatus = buildBaseStatus(user, options);
+
+    if (!baseStatus.configured) {
+        return {
+            ...baseStatus,
+            reason: 'not_configured',
+        };
+    }
+
+    if (!baseStatus.featureEnabled) {
+        return {
+            ...baseStatus,
+            reason: 'feature_not_enabled',
+        };
+    }
+
+    if (baseStatus.isAdmin) {
+        return {
+            ...baseStatus,
+            allowed: true,
+            unlimited: true,
+            dailyLimit: null,
+            remainingToday: null,
+            weeklyLimit: null,
+            remainingThisWeek: null,
+            reason: 'admin_unlimited',
+        };
+    }
+
+    const ownerEmail = normalizeOwnerEmail(user?.email);
+    const [usedToday, usedThisWeek] = await Promise.all([
+        getUsageCount({
+            scope: 'user',
+            ownerEmail,
+            feature: KEYWORD_ADS_FEATURE,
+            period: DAY_PERIOD,
+            windowKey: baseStatus.dayKey,
+        }),
+        getUsageCount({
+            scope: 'user',
+            ownerEmail,
+            feature: KEYWORD_ADS_FEATURE,
+            period: WEEK_PERIOD,
+            windowKey: baseStatus.weekKey,
+        }),
+    ]);
+
+    const remainingToday = Math.max(0, baseStatus.dailyLimit - usedToday);
+    const remainingThisWeek = Math.max(0, baseStatus.weeklyLimit - usedThisWeek);
+    const allowed = remainingToday > 0 && remainingThisWeek > 0;
+    const reason = remainingToday <= 0
+        ? 'daily_limit_reached'
+        : remainingThisWeek <= 0
+            ? 'weekly_limit_reached'
+            : 'ok';
+
+    return {
+        ...baseStatus,
+        allowed,
+        usedToday,
+        remainingToday,
+        usedThisWeek,
+        remainingThisWeek,
+        reason,
     };
 }
 
 async function reserveKeywordAdsUsage(user, options = {}) {
     const status = await getKeywordAdsUsageStatus(user, options);
-    if (!status.allowed) {
-        return {
-            ...status,
-            usageApplied: false,
-        };
-    }
-
-    if (status.unlimited) {
+    if (!status.allowed || status.unlimited) {
         return {
             ...status,
             usageApplied: false,
@@ -172,117 +159,93 @@ async function reserveKeywordAdsUsage(user, options = {}) {
     }
 
     const ownerEmail = normalizeOwnerEmail(user?.email);
-    const weeklyLimit = getKeywordAdsWeeklyLimit();
+    const dailyReservation = await reserveUsageCount({
+        scope: 'user',
+        ownerEmail,
+        feature: KEYWORD_ADS_FEATURE,
+        period: DAY_PERIOD,
+        windowKey: status.dayKey,
+        limit: status.dailyLimit,
+    });
 
-    let nextUsage = await KeywordFeatureUsage.findOneAndUpdate(
-        {
-            ownerEmail,
-            feature: KEYWORD_ADS_FEATURE,
-            weekKey: status.weekKey,
-            count: { $lt: weeklyLimit },
-        },
-        {
-            $inc: { count: 1 },
-        },
-        {
-            new: true,
-        }
-    ).lean();
-
-    if (!nextUsage) {
-        try {
-            nextUsage = await KeywordFeatureUsage.create({
-                ownerEmail,
-                feature: KEYWORD_ADS_FEATURE,
-                weekKey: status.weekKey,
-                count: 1,
-            });
-            nextUsage = typeof nextUsage.toObject === 'function' ? nextUsage.toObject() : nextUsage;
-        } catch (error) {
-            if (!isDuplicateKeyError(error)) {
-                throw error;
-            }
-        }
-    }
-
-    if (!nextUsage) {
-        nextUsage = await KeywordFeatureUsage.findOneAndUpdate(
-            {
-                ownerEmail,
-                feature: KEYWORD_ADS_FEATURE,
-                weekKey: status.weekKey,
-                count: { $lt: weeklyLimit },
-            },
-            {
-                $inc: { count: 1 },
-            },
-            {
-                new: true,
-            }
-        ).lean();
-    }
-
-    if (!nextUsage) {
-        const refreshedStatus = await getKeywordAdsUsageStatus(user, { weekKey: status.weekKey });
+    if (!dailyReservation.applied) {
         return {
-            ...refreshedStatus,
+            ...(await getKeywordAdsUsageStatus(user, { dayKey: status.dayKey, weekKey: status.weekKey })),
             usageApplied: false,
         };
     }
-    const usedThisWeek = Number(nextUsage?.count || 0);
+
+    const weeklyReservation = await reserveUsageCount({
+        scope: 'user',
+        ownerEmail,
+        feature: KEYWORD_ADS_FEATURE,
+        period: WEEK_PERIOD,
+        windowKey: status.weekKey,
+        limit: status.weeklyLimit,
+    });
+
+    if (!weeklyReservation.applied) {
+        await releaseUsageCount({
+            scope: 'user',
+            ownerEmail,
+            feature: KEYWORD_ADS_FEATURE,
+            period: DAY_PERIOD,
+            windowKey: status.dayKey,
+        });
+        return {
+            ...(await getKeywordAdsUsageStatus(user, { dayKey: status.dayKey, weekKey: status.weekKey })),
+            usageApplied: false,
+        };
+    }
 
     return {
         ...status,
         usageApplied: true,
-        usedThisWeek,
-        remainingThisWeek: Math.max(0, weeklyLimit - usedThisWeek),
+        usedToday: dailyReservation.count,
+        remainingToday: Math.max(0, status.dailyLimit - dailyReservation.count),
+        usedThisWeek: weeklyReservation.count,
+        remainingThisWeek: Math.max(0, status.weeklyLimit - weeklyReservation.count),
     };
 }
 
 async function releaseKeywordAdsUsage(user, options = {}) {
-    const isAdmin = user?.role === 'admin';
-    const weekKey = options.weekKey || getKeywordAdsWeekKey();
-
-    if (!user?.email || isAdmin || !hasKeywordAdsFeature(user)) {
+    const status = await getKeywordAdsUsageStatus(user, options);
+    if (!user?.email || status.unlimited || !status.featureEnabled) {
         return {
-            ...(await getKeywordAdsUsageStatus(user, { weekKey })),
+            ...status,
             usageReleased: false,
         };
     }
 
     const ownerEmail = normalizeOwnerEmail(user.email);
-    const nextUsage = await KeywordFeatureUsage.findOneAndUpdate(
-        {
+    const [dailyRelease, weeklyRelease] = await Promise.all([
+        releaseUsageCount({
+            scope: 'user',
             ownerEmail,
             feature: KEYWORD_ADS_FEATURE,
-            weekKey,
-            count: { $gt: 0 },
-        },
-        {
-            $inc: { count: -1 },
-        },
-        {
-            new: true,
-        }
-    ).lean();
-
-    if (nextUsage?.count === 0) {
-        await KeywordFeatureUsage.deleteOne({
+            period: DAY_PERIOD,
+            windowKey: status.dayKey,
+        }),
+        releaseUsageCount({
+            scope: 'user',
             ownerEmail,
             feature: KEYWORD_ADS_FEATURE,
-            weekKey,
-        });
-    }
+            period: WEEK_PERIOD,
+            windowKey: status.weekKey,
+        }),
+    ]);
 
     return {
-        ...(await getKeywordAdsUsageStatus(user, { weekKey })),
-        usageReleased: Boolean(nextUsage),
+        ...(await getKeywordAdsUsageStatus(user, { dayKey: status.dayKey, weekKey: status.weekKey })),
+        usageReleased: dailyRelease.released || weeklyRelease.released,
     };
 }
 
 module.exports = {
     KEYWORD_ADS_FEATURE,
+    getKeywordAdsDayKey,
     getKeywordAdsWeekKey,
+    getKeywordAdsDailyLimit,
     getKeywordAdsWeeklyLimit,
     hasKeywordAdsFeature,
     isKeywordAdsConfigured,
@@ -290,7 +253,6 @@ module.exports = {
     releaseKeywordAdsUsage,
     reserveKeywordAdsUsage,
     __internal: {
-        isDuplicateKeyError,
-        parseWeeklyLimit,
+        parseLimit,
     },
 };

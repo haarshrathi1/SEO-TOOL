@@ -126,6 +126,8 @@ export default function Dashboard({ user }: DashboardProps) {
     const [projectSurfaceRetryKey, setProjectSurfaceRetryKey] = useState(0);
     const [activeTab, setActiveTab] = useState<'dashboard' | 'audit'>(canViewDashboard ? 'dashboard' : 'audit');
     const [history, setHistory] = useState<HistoryItem[]>([]);
+    const [historyHasMore, setHistoryHasMore] = useState(false);
+    const [historyNextBefore, setHistoryNextBefore] = useState<string | null>(null);
     const [selectedHistoryId, setSelectedHistoryId] = useState<string>('live');
     const [liveHistoryId, setLiveHistoryId] = useState<string>('');
     const [auditHistory, setAuditHistory] = useState<AuditHistoryItem[]>([]);
@@ -168,6 +170,8 @@ export default function Dashboard({ user }: DashboardProps) {
                 setProjects([]);
                 setSelectedProjectId('');
                 setHistory([]);
+                setHistoryHasMore(false);
+                setHistoryNextBefore(null);
                 setAuditHistory([]);
                 setData(null);
                 setSelectedHistoryId('live');
@@ -190,6 +194,8 @@ export default function Dashboard({ user }: DashboardProps) {
     useEffect(() => {
         if (!selectedProjectId) {
             setHistory([]);
+            setHistoryHasMore(false);
+            setHistoryNextBefore(null);
             setAuditHistory([]);
             setData(null);
             setSelectedHistoryId('live');
@@ -207,18 +213,20 @@ export default function Dashboard({ user }: DashboardProps) {
 
             try {
                 const [historyData, auditData] = await Promise.all([
-                    canViewDashboard ? api.getHistory(selectedProjectId) : Promise.resolve([]),
-                    canViewAudit ? api.getAuditHistory(selectedProjectId) : Promise.resolve([]),
+                    canViewDashboard ? api.getHistory(selectedProjectId, { limit: 25 }) : Promise.resolve(null),
+                    canViewAudit ? api.getAuditHistory(selectedProjectId, { limit: 25 }) : Promise.resolve(null),
                 ]);
 
                 if (cancelled) {
                     return;
                 }
 
-                const nextHistory = sortByTimestampDesc(historyData);
-                const nextAuditHistory = sortByTimestampDesc(auditData);
+                const nextHistory = sortByTimestampDesc(historyData?.items || []);
+                const nextAuditHistory = sortByTimestampDesc(auditData?.items || []);
 
                 setHistory(nextHistory);
+                setHistoryHasMore(Boolean(historyData?.hasMore));
+                setHistoryNextBefore(historyData?.nextBefore || null);
                 setAuditHistory(nextAuditHistory);
 
                 if (canViewDashboard) {
@@ -243,6 +251,8 @@ export default function Dashboard({ user }: DashboardProps) {
 
                 console.error('Failed to load project surface', e);
                 setHistory([]);
+                setHistoryHasMore(false);
+                setHistoryNextBefore(null);
                 setAuditHistory([]);
                 setSelectedHistoryId('live');
                 setLiveHistoryId('');
@@ -264,21 +274,44 @@ export default function Dashboard({ user }: DashboardProps) {
         };
     }, [selectedProjectId, canViewAudit, canViewDashboard, projectSurfaceRetryKey]);
 
-    const fetchHistory = async (projectId?: string) => {
+    const fetchHistory = async (projectId?: string, options: { append?: boolean; before?: string | null } = {}) => {
         if (!canViewDashboard || !projectId) {
             setHistory([]);
+            setHistoryHasMore(false);
+            setHistoryNextBefore(null);
             setLiveHistoryId('');
             return;
         }
 
         try {
-            const nextHistory = sortByTimestampDesc(await api.getHistory(projectId));
-            setHistory(nextHistory);
+            const response = await api.getHistory(projectId, { before: options.before, limit: 25 });
+            const nextHistory = sortByTimestampDesc(response.items);
+            setHistory((current) => {
+                if (!options.append) {
+                    return nextHistory;
+                }
+
+                const seen = new Set(current.map((item) => item.id));
+                return [...current, ...nextHistory.filter((item) => !seen.has(item.id))];
+            });
+            setHistoryHasMore(response.hasMore);
+            setHistoryNextBefore(response.nextBefore);
             return nextHistory;
         } catch (e) {
             console.error('Failed to fetch history', e);
             return [];
         }
+    };
+
+    const loadMoreDashboardHistory = async () => {
+        if (!selectedProjectId || !historyHasMore || !historyNextBefore) {
+            return;
+        }
+
+        await fetchHistory(selectedProjectId, {
+            append: true,
+            before: historyNextBefore,
+        });
     };
 
     const runAnalysis = async () => {
@@ -631,6 +664,16 @@ export default function Dashboard({ user }: DashboardProps) {
                                         </div>
                                     </div>
                                 </div>
+                                {historyHasMore && (
+                                    <button
+                                        onClick={() => void loadMoreDashboardHistory()}
+                                        disabled={projectDataLoading || !selectedProjectId}
+                                        className="operator-button-secondary h-12 whitespace-nowrap px-5"
+                                    >
+                                        <RefreshCw className="w-4 h-4" />
+                                        Load More Reports
+                                    </button>
+                                )}
                                 {data && (
                                     <button
                                         onClick={exportSummary}

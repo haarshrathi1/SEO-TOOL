@@ -1,87 +1,14 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const net = require('node:net');
 
 const {
     runKeywordResearchV2,
     runLegacyKeywordResearch,
 } = require('./keywordResearchService');
+const { assertPublicHttpUrl, isPrivateHostname, normalizePublicHttpUrl } = require('./networkSafety');
 
 function normalizeScanUrl(value) {
-    if (typeof value !== 'string') {
-        return '';
-    }
-
-    const trimmed = value.trim();
-    if (!trimmed) {
-        return '';
-    }
-
-    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) && !/^https?:\/\//i.test(trimmed)) {
-        return '';
-    }
-
-    const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-
-    try {
-        const parsed = new URL(withProtocol);
-        if (!['http:', 'https:'].includes(parsed.protocol)) {
-            return '';
-        }
-        return parsed.toString();
-    } catch {
-        return '';
-    }
-}
-
-function isPrivateHostname(hostname) {
-    const normalized = String(hostname || '').trim().toLowerCase();
-    if (!normalized) {
-        return true;
-    }
-
-    if (normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1') {
-        return true;
-    }
-
-    if (normalized.endsWith('.local')) {
-        return true;
-    }
-
-    const ipType = net.isIP(normalized);
-    if (ipType === 4) {
-        const parts = normalized.split('.').map((part) => Number(part));
-        if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-            return true;
-        }
-
-        if (parts[0] === 10 || parts[0] === 127 || parts[0] === 0) {
-            return true;
-        }
-
-        if (parts[0] === 169 && parts[1] === 254) {
-            return true;
-        }
-
-        if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) {
-            return true;
-        }
-
-        if (parts[0] === 192 && parts[1] === 168) {
-            return true;
-        }
-
-        return false;
-    }
-
-    if (ipType === 6) {
-        return normalized === '::1'
-            || normalized.startsWith('fc')
-            || normalized.startsWith('fd')
-            || normalized.startsWith('fe80');
-    }
-
-    return false;
+    return normalizePublicHttpUrl(value);
 }
 
 async function researchKeywordV2(req, res) {
@@ -124,18 +51,8 @@ async function analyzePageContent(req, res) {
         return res.status(400).json({ error: 'URL is required' });
     }
 
-    let parsedUrl;
     try {
-        parsedUrl = new URL(normalizedUrl);
-    } catch {
-        return res.status(400).json({ error: 'URL must be a valid http(s) address' });
-    }
-
-    if (isPrivateHostname(parsedUrl.hostname)) {
-        return res.status(400).json({ error: 'Private and localhost URLs are not allowed' });
-    }
-
-    try {
+        await assertPublicHttpUrl(normalizedUrl);
         console.log(`[Content Scanner] Fetching: ${normalizedUrl}`);
         const response = await axios.get(normalizedUrl, {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
@@ -185,6 +102,9 @@ async function analyzePageContent(req, res) {
 
         return res.json({ url: normalizedUrl, totalWords: words.length, topKeywords });
     } catch (error) {
+        if (error instanceof Error && /localhost|private|valid public http\(s\)|hostname could not be resolved/i.test(error.message)) {
+            return res.status(400).json({ error: error.message });
+        }
         console.error('Content Scan Failed:', error.message);
         return res.status(500).json({ error: 'Failed to scan page content. It might be blocking bots.' });
     }

@@ -2,9 +2,13 @@ require('dotenv').config();
 
 const { launchBrowser } = require('./browser');
 const { BACKEND_VERTEX, generateJson } = require('./genaiProvider');
+const { assertPublicHttpUrl } = require('./networkSafety');
+
+const MAX_ANALYSIS_CONTENT_LENGTH = 100000;
 
 async function fetchPageContent(url) {
-    console.log(`Fetching content for analysis: ${url}`);
+    const safeUrl = await assertPublicHttpUrl(url);
+    console.log(`Fetching content for analysis: ${safeUrl}`);
     let browser = null;
 
     try {
@@ -21,7 +25,7 @@ async function fetchPageContent(url) {
             }
         });
 
-        await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
+        await page.goto(safeUrl, { waitUntil: 'networkidle0', timeout: 60000 });
 
         const content = await page.evaluate(() => {
             const noisyNodes = document.querySelectorAll('script, style, noscript, iframe, svg');
@@ -29,7 +33,7 @@ async function fetchPageContent(url) {
             return document.body.innerText;
         });
 
-        console.log(`Fetched content length for ${url}: ${content.length}`);
+        console.log(`Fetched content length for ${safeUrl}: ${content.length}`);
         return content;
     } catch (error) {
         console.error('Puppeteer Fetch Error:', error);
@@ -42,9 +46,10 @@ async function fetchPageContent(url) {
 }
 
 async function analyzePageContent(url, content) {
-    let textToAnalyze = content;
+    const safeUrl = await assertPublicHttpUrl(url);
+    let textToAnalyze = typeof content === 'string' ? content.slice(0, MAX_ANALYSIS_CONTENT_LENGTH) : content;
     if (!textToAnalyze) {
-        textToAnalyze = await fetchPageContent(url);
+        textToAnalyze = await fetchPageContent(safeUrl);
     }
 
     if (!textToAnalyze || textToAnalyze.trim().length < 50) {
@@ -53,7 +58,7 @@ async function analyzePageContent(url, content) {
 
     const prompt = `
 You are an expert Technical SEO Consultant.
-Analyze the following content from the web page: ${url}
+Analyze the following content from the web page: ${safeUrl}
 
 Content Preview:
 ${textToAnalyze.slice(0, 15000)}... (truncated for context)

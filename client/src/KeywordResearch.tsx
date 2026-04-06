@@ -274,6 +274,7 @@ interface KeywordRuntimeLogEntry {
 
 const ACTIVE_KEYWORD_STATUSES: KeywordJob['status'][] = ['queued', 'running'];
 const MAX_RUNTIME_LOG_ITEMS = 10;
+const HISTORY_PAGE_SIZE = 25;
 
 function isActiveKeywordJob(job: KeywordJob | null | undefined) {
     return Boolean(job && ACTIVE_KEYWORD_STATUSES.includes(job.status));
@@ -456,6 +457,9 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
     const [seed, setSeed] = useState('');
     const [data, setData] = useState<KeywordDataV2 | null>(null);
     const [history, setHistory] = useState<KeywordHistoryItem[]>([]);
+    const [historyHasMore, setHistoryHasMore] = useState(false);
+    const [historyNextBefore, setHistoryNextBefore] = useState<string | null>(null);
+    const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [showHistory, setShowHistory] = useState(false);
@@ -572,13 +576,46 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
         });
     }, []);
 
-    const fetchHistory = useCallback(async () => {
+    const fetchHistory = useCallback(async (options: { append?: boolean; before?: string | null } = {}) => {
         try {
-            setHistory(await api.getKeywordHistory());
+            const response = await api.getKeywordHistory(null, {
+                before: options.before,
+                limit: HISTORY_PAGE_SIZE,
+            });
+            setHistory((current) => {
+                if (!options.append) {
+                    return response.items;
+                }
+
+                const seen = new Set(current.map((item) => item.id));
+                return [...current, ...response.items.filter((item) => !seen.has(item.id))];
+            });
+            setHistoryHasMore(response.hasMore);
+            setHistoryNextBefore(response.nextBefore);
+            return response;
         } catch (error) {
             console.error('Failed to load keyword history:', error);
+            if (!options.append) {
+                setHistory([]);
+                setHistoryHasMore(false);
+                setHistoryNextBefore(null);
+            }
+            return null;
         }
     }, []);
+
+    const loadMoreHistory = useCallback(async () => {
+        if (!historyHasMore || !historyNextBefore || historyLoadingMore) {
+            return;
+        }
+
+        setHistoryLoadingMore(true);
+        try {
+            await fetchHistory({ append: true, before: historyNextBefore });
+        } finally {
+            setHistoryLoadingMore(false);
+        }
+    }, [fetchHistory, historyHasMore, historyLoadingMore, historyNextBefore]);
 
     const loadAdsStatus = useCallback(async () => {
         try {
@@ -767,6 +804,7 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
     const searchSignalScore = clampMetricScore(data?.serpSummary?.volumeScore ?? 0);
     const searchSignalLabel = getSearchSignalLabel(searchSignalScore);
     const canSeeAdsToggle = user.role === 'admin' || Boolean(user.features?.includes('keyword_ads')) || Boolean(adsStatus?.featureEnabled);
+    const canUseKeywordAds = user.role === 'admin' || Boolean(user.access?.includes('keywords')) || Boolean(adsStatus?.featureEnabled);
     const adsToggleDisabled = !adsStatus?.configured || !adsStatus?.featureEnabled;
     const adsProviderLabel = adsStatus?.providerLabel || keywordAdsMeta?.providerLabel || 'Google Ads';
     const adsToggleNote = !adsStatus
@@ -776,8 +814,10 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
             : adsStatus.unlimited
                 ? `Admin mode: unlimited ${adsProviderLabel} enrichments.`
                 : adsStatus.allowed
-                    ? `${adsStatus.remainingThisWeek ?? 0} fresh ${adsProviderLabel} lookups left this week.`
-                    : `Fresh ${adsProviderLabel} lookups are exhausted this week. Cached seeds can still enrich results.`;
+                    ? `${adsStatus.remainingToday ?? 0} fresh ${adsProviderLabel} lookups left today and ${adsStatus.remainingThisWeek ?? 0} left this week.`
+                    : adsStatus.reason === 'daily_limit_reached'
+                        ? `Fresh ${adsProviderLabel} lookups hit the daily cap (${adsStatus.dailyLimit ?? 0}/day). Cached seeds can still enrich results.`
+                        : `Fresh ${adsProviderLabel} lookups hit the weekly cap (${adsStatus.weeklyLimit ?? 0}/week). Cached seeds can still enrich results.`;
 
     const exportKeywordCsv = () => {
         if (!data) return;
@@ -844,6 +884,16 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
                                 </button>
                             ))}
                             {history.length === 0 && <p className="text-sm text-slate-400 text-center py-8">No saved research yet</p>}
+                            {historyHasMore && (
+                                <button
+                                    type="button"
+                                    onClick={() => void loadMoreHistory()}
+                                    disabled={historyLoadingMore}
+                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {historyLoadingMore ? 'Loading more...' : 'Load more history'}
+                                </button>
+                            )}
                         </div>
                     </motion.div>
                 </>)}
@@ -894,12 +944,22 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
                                     )}
                                 </div>
                             </form>
-                            {canSeeAdsToggle && (
+                            {(canSeeAdsToggle || canUseKeywordAds) && (
                                 <div className="rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3">
                                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                                         <div>
                                             <p className="text-sm font-semibold text-amber-900">Google Ads enrichment</p>
                                             <p className="mt-1 text-xs leading-relaxed text-amber-800">{adsToggleNote}</p>
+                                            {adsStatus && !adsStatus.unlimited && (
+                                                <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold text-amber-900">
+                                                    <span className="premium-badge border border-amber-200 bg-white text-amber-900">
+                                                        Today: {adsStatus.usedToday}/{adsStatus.dailyLimit}
+                                                    </span>
+                                                    <span className="premium-badge border border-amber-200 bg-white text-amber-900">
+                                                        Week: {adsStatus.usedThisWeek}/{adsStatus.weeklyLimit}
+                                                    </span>
+                                                </div>
+                                            )}
                                         </div>
                                         <button
                                             type="button"
@@ -1230,6 +1290,12 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
                                         <span className="premium-badge bg-white text-slate-700 border border-slate-200">Location {keywordAdsMeta.locationCode}</span>
                                         <span className="premium-badge bg-white text-slate-700 border border-slate-200">Language {keywordAdsMeta.languageCode}</span>
                                         <span className="premium-badge bg-white text-slate-700 border border-slate-200">{keywordAdsMeta.cacheHit ? 'Cache hit' : 'Single live call'}</span>
+                                        {typeof keywordAdsMeta.usedToday === 'number' && keywordAdsMeta.dailyLimit !== null && (
+                                            <span className="premium-badge bg-white text-slate-700 border border-slate-200">Today {keywordAdsMeta.usedToday}/{keywordAdsMeta.dailyLimit}</span>
+                                        )}
+                                        {typeof keywordAdsMeta.usedThisWeek === 'number' && keywordAdsMeta.weeklyLimit !== null && (
+                                            <span className="premium-badge bg-white text-slate-700 border border-slate-200">Week {keywordAdsMeta.usedThisWeek}/{keywordAdsMeta.weeklyLimit}</span>
+                                        )}
                                         {keywordAdsMeta.taskCost > 0 && <span className="premium-badge bg-white text-slate-700 border border-slate-200">${keywordAdsMeta.taskCost.toFixed(3)}</span>}
                                     </div>
                                 </div>

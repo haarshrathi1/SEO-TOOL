@@ -1,5 +1,5 @@
-const net = require('node:net');
 const { Project } = require('./models');
+const { assertPublicHttpUrl, isPrivateHostname } = require('./networkSafety');
 
 const DEFAULT_PROJECTS = [
     {
@@ -30,56 +30,6 @@ function normalizeText(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
 
-function isPrivateHostname(hostname) {
-    const normalized = String(hostname || '').trim().toLowerCase();
-    if (!normalized) {
-        return true;
-    }
-
-    if (normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1') {
-        return true;
-    }
-
-    if (normalized.endsWith('.local')) {
-        return true;
-    }
-
-    const ipType = net.isIP(normalized);
-    if (ipType === 4) {
-        const parts = normalized.split('.').map((part) => Number(part));
-        if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-            return true;
-        }
-
-        if (parts[0] === 10 || parts[0] === 127 || parts[0] === 0) {
-            return true;
-        }
-
-        if (parts[0] === 169 && parts[1] === 254) {
-            return true;
-        }
-
-        if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) {
-            return true;
-        }
-
-        if (parts[0] === 192 && parts[1] === 168) {
-            return true;
-        }
-
-        return false;
-    }
-
-    if (ipType === 6) {
-        return normalized === '::1'
-            || normalized.startsWith('fc')
-            || normalized.startsWith('fd')
-            || normalized.startsWith('fe80');
-    }
-
-    return false;
-}
-
 function extractHostname(value) {
     const raw = normalizeText(value);
     if (!raw) {
@@ -94,23 +44,14 @@ function extractHostname(value) {
     }
 }
 
-function normalizeUrl(value) {
+async function normalizeUrl(value) {
     const raw = normalizeText(value);
     if (!raw) return '';
-
-    const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
-    let parsed;
     try {
-        parsed = new URL(withProtocol);
+        return await assertPublicHttpUrl(raw);
     } catch {
         throw new Error('Project URL must be a valid public http(s) URL');
     }
-
-    if (!['http:', 'https:'].includes(parsed.protocol) || isPrivateHostname(parsed.hostname)) {
-        throw new Error('Project URL must be a valid public http(s) URL');
-    }
-
-    return parsed.toString();
 }
 
 function normalizeDomain(value, url) {
@@ -145,8 +86,8 @@ function toProjectDto(record) {
     };
 }
 
-function buildProjectPayload(input, existing = null) {
-    const url = normalizeUrl(input.url || existing?.url || '');
+async function buildProjectPayload(input, existing = null) {
+    const url = await normalizeUrl(input.url || existing?.url || '');
     if (!url) {
         throw new Error('Project URL is required');
     }
@@ -238,7 +179,7 @@ async function getProject(id, user) {
 }
 
 async function createProject(input) {
-    const payload = buildProjectPayload(input);
+    const payload = await buildProjectPayload(input);
     const existing = await Project.findOne({ id: payload.id }).lean();
     if (existing) {
         throw new Error('Project ID already exists');
@@ -254,7 +195,7 @@ async function updateProject(id, input) {
         throw new Error('Project not found');
     }
 
-    const payload = buildProjectPayload(input, existing.toObject());
+    const payload = await buildProjectPayload(input, existing.toObject());
     payload.id = existing.id;
 
     existing.set(payload);

@@ -185,7 +185,11 @@ app.get('/api/keywords/jobs/:jobId/result', userAuth.requireAuth, userAuth.requi
 
 app.get('/api/keywords/history', userAuth.requireAuth, userAuth.requireAccess('keywords'), async (req, res) => {
     try {
-        res.json(await keywordHistory.getHistory(req.user, { projectId: req.query.projectId }));
+        res.json(await keywordHistory.getHistory(req.user, {
+            projectId: req.query.projectId,
+            limit: req.query.limit,
+            before: req.query.before,
+        }));
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -247,8 +251,11 @@ app.get('/api/analyze', userAuth.requireAuth, userAuth.requireAdmin, async (req,
 
 app.get('/api/history', userAuth.requireAuth, userAuth.requireAccess('dashboard'), async (req, res) => {
     try {
-        const historyData = await history.getHistory(req.user, { projectId: req.query.projectId });
-        historyData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        const historyData = await history.getHistory(req.user, {
+            projectId: req.query.projectId,
+            limit: req.query.limit,
+            before: req.query.before,
+        });
         res.json(historyData);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -293,8 +300,11 @@ app.post('/api/indexing/remove', userAuth.requireAuth, userAuth.requireAdmin, as
 
 app.get('/api/audit/history', userAuth.requireAuth, userAuth.requireAccess('audit'), async (req, res) => {
     try {
-        const auditData = await auditHistory.getAuditHistory(req.user, { projectId: req.query.projectId });
-        auditData.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        const auditData = await auditHistory.getAuditHistory(req.user, {
+            projectId: req.query.projectId,
+            limit: req.query.limit,
+            before: req.query.before,
+        });
         res.json(auditData);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -386,6 +396,9 @@ app.post('/api/ai/analyze', userAuth.requireAuth, userAuth.requireAdmin, async (
         return res.json(analysis);
     } catch (error) {
         console.error('AI Analysis Failed:', error);
+        if (error instanceof Error && /localhost|private|valid public http\(s\)|hostname could not be resolved/i.test(error.message)) {
+            return res.status(400).json({ error: error.message });
+        }
         return res.status(500).json({ error: error.message });
     }
 });

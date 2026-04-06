@@ -13,6 +13,7 @@
     KeywordHistoryItem,
     KeywordJob,
     KeywordScanResult,
+    PaginatedResult,
     Project,
     ViewerRecord,
 } from './types';
@@ -76,6 +77,11 @@ export const api = {
         body: JSON.stringify({ credential }),
     }),
 
+    googleRegister: (credential: string) => request<GoogleLoginResponse>('/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ credential }),
+    }),
+
     getAuthConfig: () => request<AuthConfigResponse>('/api/auth/config'),
 
     authMe: () => request<AuthSessionResponse>('/api/auth/me'),
@@ -122,9 +128,17 @@ export const api = {
 
     analyzeSite: (projectId: string) => request<AnalysisData>(`/api/analyze${createQuery({ projectId })}`),
 
-    getHistory: (projectId?: string) => request<HistoryItem[]>(`/api/history${createQuery({ projectId })}`),
+    getHistory: (projectId?: string, options: { before?: string | null; limit?: number } = {}) => request<PaginatedResult<HistoryItem>>(`/api/history${createQuery({
+        projectId,
+        before: options.before,
+        limit: options.limit,
+    })}`),
 
-    getAuditHistory: (projectId?: string) => request<{ id: string; timestamp: string; projectId: string; results: AuditResult[] }[]>(`/api/audit/history${createQuery({ projectId })}`),
+    getAuditHistory: (projectId?: string, options: { before?: string | null; limit?: number } = {}) => request<PaginatedResult<{ id: string; timestamp: string; projectId: string; results: AuditResult[] }>>(`/api/audit/history${createQuery({
+        projectId,
+        before: options.before,
+        limit: options.limit,
+    })}`),
 
     createAuditJob: (projectId: string) => request<AuditJob>('/api/audit/jobs', {
         method: 'POST',
@@ -165,7 +179,11 @@ export const api = {
 
     getKeywordJobResult: (jobId: string, projectId?: string | null) => request<KeywordJob>(`/api/keywords/jobs/${encodeURIComponent(jobId)}/result${createQuery({ projectId: projectId || undefined })}`),
 
-    getKeywordHistory: (projectId?: string | null) => request<KeywordHistoryItem[]>(`/api/keywords/history${createQuery({ projectId: projectId || undefined })}`),
+    getKeywordHistory: (projectId?: string | null, options: { before?: string | null; limit?: number } = {}) => request<PaginatedResult<KeywordHistoryItem>>(`/api/keywords/history${createQuery({
+        projectId: projectId || undefined,
+        before: options.before,
+        limit: options.limit,
+    })}`),
 
     saveKeywordResearch: (data: KeywordData | KeywordDataV2, projectId?: string | null) => request<KeywordHistoryItem>('/api/keywords/save', {
         method: 'POST',

@@ -1,5 +1,3 @@
-const fs = require('node:fs/promises');
-const path = require('node:path');
 const axios = require('axios');
 
 const {
@@ -21,6 +19,7 @@ const {
     releaseKeywordAdsUsage,
     reserveKeywordAdsUsage,
 } = require('./keywordAdsAccess');
+const { DAY_PERIOD, getDayKey, parseLimit: parseUsageLimit, reserveUsageCount } = require('./usageWindows');
 
 const TOTAL_LAYERS = 5;
 const LAYER_LABELS = {
@@ -31,8 +30,6 @@ const LAYER_LABELS = {
     5: 'Strategic synthesis',
 };
 const DEFAULT_GROUNDED_SEARCH_DAILY_LIMIT = 500;
-const GROUNDED_SEARCH_USAGE_FILE = process.env.GROUNDED_SEARCH_USAGE_FILE || path.join(__dirname, 'data', 'grounding_usage.json');
-let groundingUsageWriteQueue = Promise.resolve();
 
 function parseGroundedSearchDailyLimit(value) {
     const parsed = Number(value);
@@ -898,7 +895,7 @@ function hasUsableKeywordSourceData(suggestions, serpData, groundedSearch) {
 }
 
 function getGroundingDateKey(date = new Date()) {
-    return date.toISOString().slice(0, 10);
+    return getDayKey(date);
 }
 
 function applyGroundedSearchUsageLimit(state, options = {}) {
@@ -952,60 +949,70 @@ function applyGroundedSearchUsageLimit(state, options = {}) {
     };
 }
 
-async function readGroundedSearchUsage(filePath = GROUNDED_SEARCH_USAGE_FILE) {
-    try {
-        const raw = await fs.readFile(filePath, 'utf8');
-        const parsed = JSON.parse(raw);
-        return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch (error) {
-        if (error?.code === 'ENOENT') {
-            return {};
-        }
-        throw error;
-    }
-}
-
-async function writeGroundedSearchUsage(state, filePath = GROUNDED_SEARCH_USAGE_FILE) {
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(state, null, 2), 'utf8');
-}
-
-function withGroundedSearchUsageLock(task) {
-    const run = groundingUsageWriteQueue.then(task, task);
-    groundingUsageWriteQueue = run.catch(() => {});
-    return run;
-}
-
 async function reserveGroundedSearchUsage(options = {}) {
-    return withGroundedSearchUsageLock(async () => {
-        const filePath = options.filePath || GROUNDED_SEARCH_USAGE_FILE;
-        const dateKey = typeof options.dateKey === 'string' && options.dateKey
-            ? options.dateKey
-            : getGroundingDateKey();
-        const limit = options.limit === undefined
-            ? GROUNDED_SEARCH_DAILY_LIMIT
-            : options.limit;
+    const dateKey = typeof options.dateKey === 'string' && options.dateKey
+        ? options.dateKey
+        : getGroundingDateKey();
+    const limit = options.limit === undefined
+        ? GROUNDED_SEARCH_DAILY_LIMIT
+        : options.limit;
+    const normalizedLimit = parseUsageLimit(limit, GROUNDED_SEARCH_DAILY_LIMIT);
 
-        try {
-            const current = await readGroundedSearchUsage(filePath);
-            const decision = applyGroundedSearchUsageLimit(current, { dateKey, limit });
-            if (decision.allowed) {
-                await writeGroundedSearchUsage(decision.nextState, filePath);
-            }
-            return decision;
-        } catch (error) {
+    if (normalizedLimit <= 0) {
+        return {
+            date: dateKey,
+            limit: normalizedLimit,
+            allowed: false,
+            reason: 'limit_disabled',
+            used: 0,
+            remaining: 0,
+            nextState: null,
+        };
+    }
+
+    try {
+        const reservation = await reserveUsageCount({
+            scope: 'global',
+            ownerEmail: '',
+            feature: 'grounded_search',
+            period: DAY_PERIOD,
+            windowKey: dateKey,
+            limit: normalizedLimit,
+        });
+
+        if (!reservation.applied) {
             return {
                 date: dateKey,
-                limit: parseGroundedSearchDailyLimit(limit),
+                limit: normalizedLimit,
                 allowed: false,
-                reason: 'tracking_unavailable',
-                used: null,
-                remaining: null,
+                reason: 'daily_limit_reached',
+                used: reservation.count,
+                remaining: Math.max(0, normalizedLimit - reservation.count),
                 nextState: null,
-                error: error.message || 'Unable to track grounded search quota',
             };
         }
-    });
+
+        return {
+            date: dateKey,
+            limit: normalizedLimit,
+            allowed: true,
+            reason: 'ok',
+            used: reservation.count,
+            remaining: Math.max(0, normalizedLimit - reservation.count),
+            nextState: null,
+        };
+    } catch (error) {
+        return {
+            date: dateKey,
+            limit: normalizedLimit,
+            allowed: false,
+            reason: 'tracking_unavailable',
+            used: null,
+            remaining: null,
+            nextState: null,
+            error: error.message || 'Unable to track grounded search quota',
+        };
+    }
 }
 
 async function fetchGroundedSearchSnapshot(seed, options = {}) {
@@ -1746,6 +1753,9 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         enriched: false,
         usageApplied: false,
         skippedReason: keywordAdsRequested ? null : 'not_requested',
+        dailyLimit: null,
+        usedToday: 0,
+        remainingToday: null,
         weeklyLimit: null,
         usedThisWeek: 0,
         remainingThisWeek: null,
@@ -1882,6 +1892,9 @@ async function runKeywordResearchV2(seedInput, options = {}) {
             allowed: adsStatus.allowed,
             unlimited: adsStatus.unlimited,
             skippedReason: adsStatus.reason,
+            dailyLimit: adsStatus.dailyLimit,
+            usedToday: adsStatus.usedToday,
+            remainingToday: adsStatus.remainingToday,
             weeklyLimit: adsStatus.weeklyLimit,
             usedThisWeek: adsStatus.usedThisWeek,
             remainingThisWeek: adsStatus.remainingThisWeek,
@@ -1922,6 +1935,8 @@ async function runKeywordResearchV2(seedInput, options = {}) {
                     unlimited: reservedUsage.unlimited,
                     usageApplied: reservedUsage.usageApplied,
                     skippedReason: reservedUsage.reason,
+                    usedToday: reservedUsage.usedToday,
+                    remainingToday: reservedUsage.remainingToday,
                     usedThisWeek: reservedUsage.usedThisWeek,
                     remainingThisWeek: reservedUsage.remainingThisWeek,
                 };
@@ -1966,6 +1981,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
                         let releasedUsage = null;
                         if (reservedUsage.usageApplied) {
                             releasedUsage = await releaseKeywordAdsUsage(options.user || null, {
+                                dayKey: reservedUsage.dayKey,
                                 weekKey: reservedUsage.weekKey,
                             });
                         }
@@ -1974,6 +1990,8 @@ async function runKeywordResearchV2(seedInput, options = {}) {
                             ...keywordAdsMeta,
                             allowed: releasedUsage?.allowed ?? keywordAdsMeta.allowed,
                             usageApplied: releasedUsage?.usageReleased ? false : keywordAdsMeta.usageApplied,
+                            usedToday: releasedUsage?.usedToday ?? keywordAdsMeta.usedToday,
+                            remainingToday: releasedUsage?.remainingToday ?? keywordAdsMeta.remainingToday,
                             usedThisWeek: releasedUsage?.usedThisWeek ?? keywordAdsMeta.usedThisWeek,
                             remainingThisWeek: releasedUsage?.remainingThisWeek ?? keywordAdsMeta.remainingThisWeek,
                             skippedReason: 'request_failed',

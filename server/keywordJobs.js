@@ -1,6 +1,44 @@
 const { AdminUser, KeywordJob, Viewer } = require('./models');
 const { runKeywordResearchV2, TOTAL_LAYERS, getRuntimeProviderLabel } = require('./keywordResearchService');
 
+const KEYWORD_WORKER_ID = `keyword-worker:${process.pid}`;
+const DEFAULT_LEASE_MS = 3 * 60 * 1000;
+const DEFAULT_HEARTBEAT_MS = 30 * 1000;
+const DEFAULT_POLL_MS = 1500;
+const DEFAULT_CONCURRENCY = 1;
+const ACTIVE_KEYWORD_STATUSES = ['queued', 'running'];
+
+let keywordWorkerTimer = null;
+const runningKeywordJobs = new Set();
+
+function parsePositiveInt(value, fallback) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return fallback;
+    }
+    return Math.floor(parsed);
+}
+
+function getLeaseMs() {
+    return parsePositiveInt(process.env.KEYWORD_JOB_LEASE_MS, DEFAULT_LEASE_MS);
+}
+
+function getHeartbeatMs() {
+    return parsePositiveInt(process.env.KEYWORD_JOB_HEARTBEAT_MS, DEFAULT_HEARTBEAT_MS);
+}
+
+function getPollMs() {
+    return parsePositiveInt(process.env.KEYWORD_JOB_POLL_MS, DEFAULT_POLL_MS);
+}
+
+function getConcurrency() {
+    return parsePositiveInt(process.env.KEYWORD_JOB_WORKER_CONCURRENCY, DEFAULT_CONCURRENCY);
+}
+
+function getLeaseExpiry(date = new Date()) {
+    return new Date(date.getTime() + getLeaseMs());
+}
+
 function normalizeProjectId(projectId) {
     return typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null;
 }
@@ -78,21 +116,203 @@ function serializeJob(record, options = {}) {
     };
 }
 
-async function initializeKeywordJobs() {
-    await KeywordJob.updateMany(
-        { status: { $in: ['queued', 'running'] } },
+async function touchKeywordJobLease(jobId) {
+    const now = new Date();
+    await KeywordJob.findOneAndUpdate(
         {
-            status: 'failed',
-            error: 'Job interrupted by a server restart.',
-            completedAt: new Date(),
+            _id: jobId,
+            leaseOwner: KEYWORD_WORKER_ID,
+            status: 'running',
+        },
+        {
+            leaseExpiresAt: getLeaseExpiry(now),
+            lastHeartbeatAt: now,
         }
     );
 }
 
-function queueKeywordJob(jobId) {
-    setImmediate(() => {
-        void runKeywordJob(jobId);
-    });
+async function claimNextKeywordJob() {
+    const now = new Date();
+    const claimed = await KeywordJob.findOneAndUpdate(
+        {
+            status: { $in: ACTIVE_KEYWORD_STATUSES },
+            $or: [
+                { leaseExpiresAt: { $exists: false } },
+                { leaseExpiresAt: null },
+                { leaseExpiresAt: { $lte: now } },
+            ],
+        },
+        {
+            $set: {
+                status: 'running',
+                leaseOwner: KEYWORD_WORKER_ID,
+                leaseStartedAt: now,
+                leaseExpiresAt: getLeaseExpiry(now),
+                lastHeartbeatAt: now,
+                error: '',
+                completedAt: null,
+            },
+            $inc: { attemptCount: 1 },
+        },
+        {
+            new: true,
+            sort: { createdAt: 1 },
+        }
+    ).lean();
+
+    return claimed;
+}
+
+async function runKeywordJob(jobRecord) {
+    const jobId = jobRecord._id?.toString?.() || String(jobRecord._id || jobRecord.id || '');
+    if (!jobId) {
+        return;
+    }
+
+    const heartbeat = setInterval(() => {
+        void touchKeywordJobLease(jobId);
+    }, getHeartbeatMs());
+    heartbeat.unref?.();
+
+    let latestProgress = {
+        stage: 'Preparing',
+        label: 'Preparing',
+        currentLayer: 0,
+        totalLayers: TOTAL_LAYERS,
+        completed: 0,
+        total: TOTAL_LAYERS,
+        percent: 0,
+        message: `Preparing keyword research for "${jobRecord.seed}"`,
+        provider: getRuntimeProviderLabel(),
+    };
+
+    try {
+        const user = await loadJobUser(jobRecord);
+        const startedAt = jobRecord.startedAt || new Date();
+        await KeywordJob.findOneAndUpdate(
+            { _id: jobId, leaseOwner: KEYWORD_WORKER_ID },
+            {
+                status: 'running',
+                startedAt,
+                progress: latestProgress,
+                leaseExpiresAt: getLeaseExpiry(),
+                lastHeartbeatAt: new Date(),
+            }
+        );
+
+        const result = await runKeywordResearchV2(jobRecord.seed, {
+            projectId: jobRecord.projectId || null,
+            user,
+            useAdsData: jobRecord.options?.useAdsData === true,
+            onProgress: async (progress) => {
+                latestProgress = {
+                    stage: progress.stage,
+                    label: progress.label,
+                    currentLayer: progress.currentLayer,
+                    totalLayers: progress.totalLayers,
+                    completed: progress.completed,
+                    total: progress.total,
+                    percent: progress.percent,
+                    message: progress.message,
+                    provider: progress.provider || getRuntimeProviderLabel(),
+                };
+                await KeywordJob.findOneAndUpdate(
+                    { _id: jobId, leaseOwner: KEYWORD_WORKER_ID },
+                    {
+                        status: 'running',
+                        progress: latestProgress,
+                        leaseExpiresAt: getLeaseExpiry(),
+                        lastHeartbeatAt: new Date(),
+                    }
+                );
+            },
+        });
+
+        await KeywordJob.findOneAndUpdate(
+            { _id: jobId, leaseOwner: KEYWORD_WORKER_ID },
+            {
+                status: 'completed',
+                progress: {
+                    stage: 'Completed',
+                    label: 'Completed',
+                    currentLayer: TOTAL_LAYERS,
+                    totalLayers: TOTAL_LAYERS,
+                    completed: TOTAL_LAYERS,
+                    total: TOTAL_LAYERS,
+                    percent: 100,
+                    message: `Completed keyword research for "${jobRecord.seed}"`,
+                    provider: result.metadata?.provider || getRuntimeProviderLabel(),
+                },
+                result,
+                error: '',
+                completedAt: new Date(),
+                leaseOwner: null,
+                leaseExpiresAt: null,
+                lastHeartbeatAt: new Date(),
+            }
+        );
+    } catch (error) {
+        await KeywordJob.findOneAndUpdate(
+            { _id: jobId, leaseOwner: KEYWORD_WORKER_ID },
+            {
+                status: 'failed',
+                error: error.message || 'Keyword research failed',
+                completedAt: new Date(),
+                progress: {
+                    stage: 'Failed',
+                    label: latestProgress.label || 'Failed',
+                    currentLayer: latestProgress.currentLayer || 0,
+                    totalLayers: latestProgress.totalLayers || TOTAL_LAYERS,
+                    completed: latestProgress.completed || 0,
+                    total: latestProgress.total || TOTAL_LAYERS,
+                    percent: latestProgress.percent || 0,
+                    message: error.message || 'Keyword research failed',
+                    provider: latestProgress.provider || getRuntimeProviderLabel(),
+                },
+                leaseOwner: null,
+                leaseExpiresAt: null,
+                lastHeartbeatAt: new Date(),
+            }
+        );
+    } finally {
+        clearInterval(heartbeat);
+        runningKeywordJobs.delete(jobId);
+        void runKeywordWorkerTick();
+    }
+}
+
+async function runKeywordWorkerTick() {
+    while (runningKeywordJobs.size < getConcurrency()) {
+        const claimed = await claimNextKeywordJob();
+        if (!claimed) {
+            break;
+        }
+
+        const jobId = claimed._id?.toString?.();
+        if (!jobId || runningKeywordJobs.has(jobId)) {
+            break;
+        }
+
+        runningKeywordJobs.add(jobId);
+        void runKeywordJob(claimed);
+    }
+}
+
+function startKeywordWorkerLoop() {
+    if (keywordWorkerTimer) {
+        return;
+    }
+
+    const pollMs = getPollMs();
+    keywordWorkerTimer = setInterval(() => {
+        void runKeywordWorkerTick();
+    }, pollMs);
+    keywordWorkerTimer.unref?.();
+    void runKeywordWorkerTick();
+}
+
+async function initializeKeywordJobs() {
+    startKeywordWorkerLoop();
 }
 
 async function createKeywordJob(seedInput, user, options = {}) {
@@ -122,88 +342,8 @@ async function createKeywordJob(seedInput, user, options = {}) {
         },
     });
 
-    queueKeywordJob(doc._id.toString());
+    void runKeywordWorkerTick();
     return serializeJob(doc);
-}
-
-async function runKeywordJob(jobId) {
-    const job = await KeywordJob.findById(jobId);
-    if (!job) {
-        return;
-    }
-
-    const user = await loadJobUser(job);
-
-    job.status = 'running';
-    job.startedAt = new Date();
-    job.progress = {
-        ...job.progress,
-        stage: 'Preparing',
-        label: 'Preparing',
-        message: `Preparing keyword research for "${job.seed}"`,
-    };
-    await job.save();
-    let latestProgress = { ...job.progress };
-
-    try {
-        const result = await runKeywordResearchV2(job.seed, {
-            projectId: job.projectId || null,
-            user,
-            useAdsData: job.options?.useAdsData === true,
-            onProgress: async (progress) => {
-                latestProgress = {
-                    stage: progress.stage,
-                    label: progress.label,
-                    currentLayer: progress.currentLayer,
-                    totalLayers: progress.totalLayers,
-                    completed: progress.completed,
-                    total: progress.total,
-                    percent: progress.percent,
-                    message: progress.message,
-                    provider: progress.provider || getRuntimeProviderLabel(),
-                };
-                await KeywordJob.findByIdAndUpdate(jobId, {
-                    status: 'running',
-                    progress: latestProgress,
-                });
-            },
-        });
-
-        await KeywordJob.findByIdAndUpdate(jobId, {
-            status: 'completed',
-            progress: {
-                stage: 'Completed',
-                label: 'Completed',
-                currentLayer: TOTAL_LAYERS,
-                totalLayers: TOTAL_LAYERS,
-                completed: TOTAL_LAYERS,
-                total: TOTAL_LAYERS,
-                percent: 100,
-                message: `Completed keyword research for "${job.seed}"`,
-                provider: result.metadata?.provider || getRuntimeProviderLabel(),
-            },
-            result,
-            error: '',
-            completedAt: new Date(),
-        });
-    } catch (error) {
-        await KeywordJob.findByIdAndUpdate(jobId, {
-            status: 'failed',
-            error: error.message || 'Keyword research failed',
-            completedAt: new Date(),
-            progress: {
-                stage: 'Failed',
-                label: latestProgress.label || 'Failed',
-                currentLayer: latestProgress.currentLayer || 0,
-                totalLayers: latestProgress.totalLayers || TOTAL_LAYERS,
-                completed: latestProgress.completed || 0,
-                total: latestProgress.total || TOTAL_LAYERS,
-                percent: latestProgress.percent || 0,
-                message: error.message || 'Keyword research failed',
-                provider: latestProgress.provider || getRuntimeProviderLabel(),
-            },
-        });
-    }
 }
 
 async function listKeywordJobs(user, options = {}) {
@@ -236,5 +376,6 @@ module.exports = {
         buildKeywordJobQuery,
         canAccessKeywordJob,
         loadJobUser,
+        parsePositiveInt,
     },
 };

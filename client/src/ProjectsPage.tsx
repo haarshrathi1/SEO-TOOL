@@ -11,10 +11,6 @@ const ACCESS_OPTIONS = [
     { id: 'audit', label: 'Audit jobs' },
 ] as const;
 
-const FEATURE_OPTIONS = [
-    { id: 'keyword_ads', label: 'Google Ads enrichment' },
-] as const;
-
 interface ProjectFormState {
     id: string;
     name: string;
@@ -332,7 +328,7 @@ export default function ProjectsPage() {
                             <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-600"><Users className="h-5 w-5" /></div>
                             <div>
                                 <h2 className="text-lg font-bold text-slate-900">Viewer access</h2>
-                                <p className="text-sm text-slate-500">Assign product surfaces and project scopes instead of keeping viewers stuck on one hard-coded tool.</p>
+                                <p className="text-sm text-slate-500">Assign product surfaces and project scopes. Keyword users now inherit Google Ads quota rules automatically instead of needing a manual premium flag.</p>
                             </div>
                         </div>
 
@@ -371,19 +367,8 @@ export default function ProjectsPage() {
                                 </div>
                             </div>
 
-                            <div className="space-y-2">
-                                <p className="text-sm font-medium text-slate-700">Premium features</p>
-                                <div className="flex flex-wrap gap-2">
-                                    {FEATURE_OPTIONS.map((option) => (
-                                        <Toggle
-                                            key={option.id}
-                                            checked={viewerForm.features.includes(option.id)}
-                                            label={option.label}
-                                            onClick={() => handleViewerToggle('features', option.id)}
-                                        />
-                                    ))}
-                                </div>
-                                <p className="text-xs text-slate-400">Enable paid Google Ads enrichment for this viewer. Selected viewers get 2 fresh Ads-enriched researches per week; admins stay unlimited. Cached seeds do not consume quota.</p>
+                            <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-900">
+                                Any viewer with keyword access can request Google Ads enrichment when the provider is configured. Non-admin users share the same quota policy: 2 fresh requests per day and 5 per week. Cached seeds do not consume quota.
                             </div>
 
                             <div className="flex items-center gap-3">
@@ -406,7 +391,7 @@ export default function ProjectsPage() {
                                         <div>
                                             <p className="font-semibold text-slate-900">{viewer.email}</p>
                                             <p className="mt-1 text-sm text-slate-500">Access: {viewer.access.join(', ') || 'No access'}</p>
-                                            <p className="mt-1 text-sm text-slate-500">Premium: {viewer.features?.length ? viewer.features.join(', ') : 'No premium features'}</p>
+                                            <p className="mt-1 text-sm text-slate-500">Ads quota: {viewer.access.includes('keywords') ? '2/day · 5/week' : 'Not applicable'}</p>
                                             <p className="mt-1 text-sm text-slate-500">Projects: {viewer.projectIds.length ? viewer.projectIds.join(', ') : 'No projects assigned'}</p>
                                         </div>
                                         <div className="flex items-center gap-2">

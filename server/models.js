@@ -27,6 +27,12 @@ const viewerSchema = new Schema({
     access: { type: [String], default: ['keywords'] },
     features: { type: [String], default: [] },
     projectIds: { type: [String], default: [] },
+    registrationSource: { type: String, default: null },
+    status: { type: String, default: 'active' },
+    displayName: { type: String, default: '' },
+    picture: { type: String, default: '' },
+    registeredAt: { type: Date, default: null },
+    lastLoginAt: { type: Date, default: null },
     createdAt: { type: Date, default: Date.now },
 }, { versionKey: false });
 
@@ -78,6 +84,11 @@ const auditJobSchema = new Schema({
     error: { type: String, default: '' },
     startedAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
+    leaseOwner: { type: String, default: null, index: true },
+    leaseExpiresAt: { type: Date, default: null, index: true },
+    lastHeartbeatAt: { type: Date, default: null },
+    leaseStartedAt: { type: Date, default: null },
+    attemptCount: { type: Number, default: 0 },
 }, {
     versionKey: false,
     timestamps: true,
@@ -111,22 +122,29 @@ const keywordJobSchema = new Schema({
     error: { type: String, default: '' },
     startedAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
+    leaseOwner: { type: String, default: null, index: true },
+    leaseExpiresAt: { type: Date, default: null, index: true },
+    lastHeartbeatAt: { type: Date, default: null },
+    leaseStartedAt: { type: Date, default: null },
+    attemptCount: { type: Number, default: 0 },
 }, {
     versionKey: false,
     timestamps: true,
 });
 
 const keywordFeatureUsageSchema = new Schema({
-    ownerEmail: { type: String, required: true, lowercase: true, trim: true, index: true },
+    scope: { type: String, default: 'user', index: true },
+    ownerEmail: { type: String, default: '', lowercase: true, trim: true, index: true },
     feature: { type: String, required: true, trim: true, index: true },
-    weekKey: { type: String, required: true, trim: true, index: true },
+    period: { type: String, required: true, trim: true, index: true },
+    windowKey: { type: String, required: true, trim: true, index: true },
     count: { type: Number, default: 0 },
 }, {
     versionKey: false,
     timestamps: true,
 });
 
-keywordFeatureUsageSchema.index({ ownerEmail: 1, feature: 1, weekKey: 1 }, { unique: true });
+keywordFeatureUsageSchema.index({ scope: 1, ownerEmail: 1, feature: 1, period: 1, windowKey: 1 }, { unique: true });
 
 const keywordAdsCacheSchema = new Schema({
     cacheKey: { type: String, required: true, unique: true, index: true },

@@ -50,6 +50,7 @@ type Tab = 'overview' | 'changes' | 'indexation' | 'links' | 'templates' | 'cano
 
 const ACTIVE_AUDIT_STATUSES: AuditJob['status'][] = ['queued', 'running'];
 const MAX_RUNTIME_LOG_ITEMS = 8;
+const HISTORY_PAGE_SIZE = 25;
 
 function countIndexed(results: AuditResult[]) {
     return results.filter((result) => result.status === 'PASS').length;
@@ -165,6 +166,9 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
     const [activeTab, setActiveTab] = useState<Tab>('overview');
     const [filterId, setFilterId] = useState('');
     const [history, setHistory] = useState<AuditHistoryItem[]>([]);
+    const [historyHasMore, setHistoryHasMore] = useState(false);
+    const [historyNextBefore, setHistoryNextBefore] = useState<string | null>(null);
+    const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
     const [jobs, setJobs] = useState<AuditJob[]>([]);
     const [selectedHistoryId, setSelectedHistoryId] = useState('live');
     const [activeJob, setActiveJob] = useState<AuditJob | null>(null);
@@ -250,14 +254,40 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
 
     const fetchHistory = useCallback(async () => {
         try {
-            const historyData = await api.getAuditHistory(projectId);
-            setHistory(historyData);
-            return historyData;
+            const historyData = await api.getAuditHistory(projectId, { limit: HISTORY_PAGE_SIZE });
+            setHistory(historyData.items);
+            setHistoryHasMore(historyData.hasMore);
+            setHistoryNextBefore(historyData.nextBefore);
+            return historyData.items;
         } catch (issue) {
             console.error('Failed to fetch audit history', issue);
             return null;
         }
     }, [projectId]);
+
+    const loadMoreHistory = useCallback(async () => {
+        if (!historyHasMore || !historyNextBefore || historyLoadingMore) {
+            return;
+        }
+
+        setHistoryLoadingMore(true);
+        try {
+            const response = await api.getAuditHistory(projectId, {
+                before: historyNextBefore,
+                limit: HISTORY_PAGE_SIZE,
+            });
+            setHistory((current) => {
+                const seen = new Set(current.map((item) => item.id));
+                return [...current, ...response.items.filter((item) => !seen.has(item.id))];
+            });
+            setHistoryHasMore(response.hasMore);
+            setHistoryNextBefore(response.nextBefore);
+        } catch (issue) {
+            console.error('Failed to load more audit history', issue);
+        } finally {
+            setHistoryLoadingMore(false);
+        }
+    }, [historyHasMore, historyLoadingMore, historyNextBefore, projectId]);
 
     const fetchJobs = useCallback(async () => {
         try {
@@ -352,23 +382,27 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
             setLiveResults([]);
             setDisplayResults([]);
             setHistory([]);
+            setHistoryHasMore(false);
+            setHistoryNextBefore(null);
             setJobs([]);
             setFilterId('');
             setActiveTab('overview');
             setSelectedHistoryId('live');
 
             try {
-                const [historyData, jobData] = await Promise.all([api.getAuditHistory(projectId), api.getAuditJobs(projectId)]);
+                const [historyData, jobData] = await Promise.all([api.getAuditHistory(projectId, { limit: HISTORY_PAGE_SIZE }), api.getAuditJobs(projectId)]);
                 if (cancelled) return;
 
-                const sortedHistory = historyData
+                const sortedHistory = historyData.items
                     .filter((entry) => entry.projectId === projectId)
                     .sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime());
                 const latestHistory = sortedHistory[0] || null;
                 const latestActiveJob = getLatestActiveJob(jobData);
                 const nextResults = latestHistory?.results || [];
 
-                setHistory(historyData);
+                setHistory(historyData.items);
+                setHistoryHasMore(historyData.hasMore);
+                setHistoryNextBefore(historyData.nextBefore);
                 setJobs(jobData);
                 setLiveResults(nextResults);
                 setDisplayResults(nextResults);
@@ -387,6 +421,8 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                     setLiveResults([]);
                     setDisplayResults([]);
                     setHistory([]);
+                    setHistoryHasMore(false);
+                    setHistoryNextBefore(null);
                     setJobs([]);
                     setSelectedHistoryId('live');
                     clearRuntimeState();
@@ -608,6 +644,16 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                                 </select>
                                 <History className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black" />
                             </div>
+                        )}
+                        {historyHasMore && (
+                            <button
+                                onClick={() => void loadMoreHistory()}
+                                disabled={historyLoadingMore}
+                                className="operator-button-secondary px-5 py-3"
+                            >
+                                {historyLoadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                                {historyLoadingMore ? 'Loading...' : 'Load More Audits'}
+                            </button>
                         )}
 
                         {canRunAudit && displayResults.length > 0 && (

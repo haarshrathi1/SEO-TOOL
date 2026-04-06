@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const keywordAdsAccess = require('../keywordAdsAccess');
 const dataforseoAds = require('../dataforseoAds');
+const usageWindows = require('../usageWindows');
 
 test('getKeywordAdsWeekKey is stable for dates within the same UTC week', () => {
     const monday = keywordAdsAccess.getKeywordAdsWeekKey(new Date('2026-03-23T12:00:00Z'));
@@ -12,6 +13,17 @@ test('getKeywordAdsWeekKey is stable for dates within the same UTC week', () => 
     assert.equal(monday, '2026-03-23');
     assert.equal(thursday, '2026-03-23');
     assert.equal(nextWeek, '2026-03-30');
+});
+
+test('getKeywordAdsDayKey keeps the UTC day boundary stable', () => {
+    assert.equal(
+        keywordAdsAccess.getKeywordAdsDayKey(new Date('2026-03-23T23:59:59Z')),
+        '2026-03-23',
+    );
+    assert.equal(
+        keywordAdsAccess.getKeywordAdsDayKey(new Date('2026-03-24T00:00:01Z')),
+        '2026-03-24',
+    );
 });
 
 test('buildAdsSeedKeywords deduplicates, normalizes, and skips question-style inputs', () => {
@@ -41,8 +53,8 @@ test('buildAdsSeedKeywords deduplicates, normalizes, and skips question-style in
     ]);
 });
 
-test('isDuplicateKeyError only flags Mongo duplicate-key failures', () => {
-    assert.equal(keywordAdsAccess.__internal.isDuplicateKeyError({ code: 11000 }), true);
-    assert.equal(keywordAdsAccess.__internal.isDuplicateKeyError({ code: 500 }), false);
-    assert.equal(keywordAdsAccess.__internal.isDuplicateKeyError(null), false);
+test('duplicate-key detection only flags Mongo duplicate-key failures', () => {
+    assert.equal(usageWindows.__internal.isDuplicateKeyError({ code: 11000 }), true);
+    assert.equal(usageWindows.__internal.isDuplicateKeyError({ code: 500 }), false);
+    assert.equal(usageWindows.__internal.isDuplicateKeyError(null), false);
 });

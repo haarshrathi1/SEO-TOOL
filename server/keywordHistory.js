@@ -1,4 +1,5 @@
-﻿const { KeywordResearch } = require('./models');
+const { KeywordResearch } = require('./models');
+const { buildPaginatedResult, parseBefore, parseLimit } = require('./pagination');
 
 function normalizeProjectId(projectId) {
     return typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null;
@@ -29,10 +30,15 @@ function buildHistoryQuery(user, options = {}) {
 
 async function getHistory(user, options = {}) {
     const query = buildHistoryQuery(user, options);
+    const limit = parseLimit(options.limit);
+    const before = parseBefore(options.before);
+    if (before) {
+        query.timestamp = { $lt: before };
+    }
 
     try {
-        const records = await KeywordResearch.find(query).sort({ timestamp: -1 }).lean();
-        return records.map((record) => ({
+        const records = await KeywordResearch.find(query).sort({ timestamp: -1 }).limit(limit + 1).lean();
+        return buildPaginatedResult(records, limit, (record) => ({
             id: record._id.toString(),
             timestamp: record.timestamp,
             ownerEmail: record.ownerEmail || user.email,
@@ -41,7 +47,7 @@ async function getHistory(user, options = {}) {
         }));
     } catch (e) {
         console.error('Failed to read keyword history:', e.message);
-        return [];
+        return { items: [], hasMore: false, nextBefore: null };
     }
 }
 

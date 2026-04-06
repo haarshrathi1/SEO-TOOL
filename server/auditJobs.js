@@ -1,7 +1,45 @@
-﻿const { AuditJob } = require('./models');
+const { AuditJob } = require('./models');
 const auditHistory = require('./auditHistory');
 const crawler = require('./crawler');
 const { getProject } = require('./projects');
+
+const AUDIT_WORKER_ID = `audit-worker:${process.pid}`;
+const DEFAULT_LEASE_MS = 5 * 60 * 1000;
+const DEFAULT_HEARTBEAT_MS = 30 * 1000;
+const DEFAULT_POLL_MS = 2000;
+const DEFAULT_CONCURRENCY = 1;
+const ACTIVE_AUDIT_STATUSES = ['queued', 'running'];
+
+let auditWorkerTimer = null;
+const runningAuditJobs = new Set();
+
+function parsePositiveInt(value, fallback) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return fallback;
+    }
+    return Math.floor(parsed);
+}
+
+function getLeaseMs() {
+    return parsePositiveInt(process.env.AUDIT_JOB_LEASE_MS, DEFAULT_LEASE_MS);
+}
+
+function getHeartbeatMs() {
+    return parsePositiveInt(process.env.AUDIT_JOB_HEARTBEAT_MS, DEFAULT_HEARTBEAT_MS);
+}
+
+function getPollMs() {
+    return parsePositiveInt(process.env.AUDIT_JOB_POLL_MS, DEFAULT_POLL_MS);
+}
+
+function getConcurrency() {
+    return parsePositiveInt(process.env.AUDIT_JOB_WORKER_CONCURRENCY, DEFAULT_CONCURRENCY);
+}
+
+function getLeaseExpiry(date = new Date()) {
+    return new Date(date.getTime() + getLeaseMs());
+}
 
 function normalizeProjectId(projectId) {
     return typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null;
@@ -64,15 +102,211 @@ function serializeJob(record, options = {}) {
     };
 }
 
-async function initializeAuditJobs() {
-    await AuditJob.updateMany(
-        { status: { $in: ['queued', 'running'] } },
+async function touchAuditJobLease(jobId) {
+    const now = new Date();
+    await AuditJob.findOneAndUpdate(
         {
-            status: 'failed',
-            error: 'Job interrupted by a server restart.',
-            completedAt: new Date(),
+            _id: jobId,
+            leaseOwner: AUDIT_WORKER_ID,
+            status: 'running',
+        },
+        {
+            leaseExpiresAt: getLeaseExpiry(now),
+            lastHeartbeatAt: now,
         }
     );
+}
+
+async function claimNextAuditJob() {
+    const now = new Date();
+    const claimed = await AuditJob.findOneAndUpdate(
+        {
+            status: { $in: ACTIVE_AUDIT_STATUSES },
+            $or: [
+                { leaseExpiresAt: { $exists: false } },
+                { leaseExpiresAt: null },
+                { leaseExpiresAt: { $lte: now } },
+            ],
+        },
+        {
+            $set: {
+                status: 'running',
+                leaseOwner: AUDIT_WORKER_ID,
+                leaseStartedAt: now,
+                leaseExpiresAt: getLeaseExpiry(now),
+                lastHeartbeatAt: now,
+                error: '',
+                completedAt: null,
+            },
+            $inc: { attemptCount: 1 },
+        },
+        {
+            new: true,
+            sort: { createdAt: 1 },
+        }
+    ).lean();
+
+    return claimed;
+}
+
+async function runAuditJob(jobRecord) {
+    const jobId = jobRecord._id?.toString?.() || String(jobRecord._id || jobRecord.id || '');
+    if (!jobId) {
+        return;
+    }
+
+    const heartbeat = setInterval(() => {
+        void touchAuditJobLease(jobId);
+    }, getHeartbeatMs());
+    heartbeat.unref?.();
+
+    let latestProgress = {
+        stage: 'Preparing crawl',
+        completed: 0,
+        total: 0,
+        percent: 0,
+        message: `Preparing crawl for ${jobRecord.projectId}`,
+        currentUrl: '',
+    };
+
+    try {
+        const project = await getProject(jobRecord.projectId);
+        if (!project) {
+            await AuditJob.findOneAndUpdate(
+                { _id: jobId, leaseOwner: AUDIT_WORKER_ID },
+                {
+                    status: 'failed',
+                    error: 'Project not found',
+                    completedAt: new Date(),
+                    leaseOwner: null,
+                    leaseExpiresAt: null,
+                    lastHeartbeatAt: new Date(),
+                }
+            );
+            return;
+        }
+
+        latestProgress = {
+            ...latestProgress,
+            message: `Preparing crawl for ${project.name}`,
+        };
+
+        await AuditJob.findOneAndUpdate(
+            { _id: jobId, leaseOwner: AUDIT_WORKER_ID },
+            {
+                status: 'running',
+                startedAt: jobRecord.startedAt || new Date(),
+                progress: latestProgress,
+                leaseExpiresAt: getLeaseExpiry(),
+                lastHeartbeatAt: new Date(),
+            }
+        );
+
+        const results = await crawler.crawlSite(project.url, {
+            maxPages: project.auditMaxPages || 200,
+            ga4PropertyId: project.ga4PropertyId || '',
+            onProgress: async (progress) => {
+                latestProgress = {
+                    stage: progress.stage,
+                    completed: progress.completed,
+                    total: progress.total,
+                    percent: progress.percent,
+                    message: progress.message,
+                    currentUrl: progress.currentUrl || '',
+                };
+
+                await AuditJob.findOneAndUpdate(
+                    { _id: jobId, leaseOwner: AUDIT_WORKER_ID },
+                    {
+                        status: 'running',
+                        progress: latestProgress,
+                        leaseExpiresAt: getLeaseExpiry(),
+                        lastHeartbeatAt: new Date(),
+                    }
+                );
+            },
+        });
+
+        const historyRecord = await auditHistory.addAudit(results, project.id);
+        await AuditJob.findOneAndUpdate(
+            { _id: jobId, leaseOwner: AUDIT_WORKER_ID },
+            {
+                status: 'completed',
+                progress: {
+                    stage: 'Completed',
+                    completed: results.length,
+                    total: results.length,
+                    percent: 100,
+                    message: `Completed audit for ${project.name}`,
+                    currentUrl: '',
+                },
+                result: results,
+                auditHistoryId: historyRecord?.id || null,
+                error: '',
+                completedAt: new Date(),
+                leaseOwner: null,
+                leaseExpiresAt: null,
+                lastHeartbeatAt: new Date(),
+            }
+        );
+    } catch (error) {
+        await AuditJob.findOneAndUpdate(
+            { _id: jobId, leaseOwner: AUDIT_WORKER_ID },
+            {
+                status: 'failed',
+                error: error.message || 'Audit failed',
+                completedAt: new Date(),
+                progress: {
+                    stage: 'Failed',
+                    completed: latestProgress.completed || 0,
+                    total: latestProgress.total || 0,
+                    percent: latestProgress.percent || 0,
+                    message: error.message || 'Audit failed',
+                    currentUrl: latestProgress.currentUrl || '',
+                },
+                leaseOwner: null,
+                leaseExpiresAt: null,
+                lastHeartbeatAt: new Date(),
+            }
+        );
+    } finally {
+        clearInterval(heartbeat);
+        runningAuditJobs.delete(jobId);
+        void runAuditWorkerTick();
+    }
+}
+
+async function runAuditWorkerTick() {
+    while (runningAuditJobs.size < getConcurrency()) {
+        const claimed = await claimNextAuditJob();
+        if (!claimed) {
+            break;
+        }
+
+        const jobId = claimed._id?.toString?.();
+        if (!jobId || runningAuditJobs.has(jobId)) {
+            break;
+        }
+
+        runningAuditJobs.add(jobId);
+        void runAuditJob(claimed);
+    }
+}
+
+function startAuditWorkerLoop() {
+    if (auditWorkerTimer) {
+        return;
+    }
+
+    auditWorkerTimer = setInterval(() => {
+        void runAuditWorkerTick();
+    }, getPollMs());
+    auditWorkerTimer.unref?.();
+    void runAuditWorkerTick();
+}
+
+async function initializeAuditJobs() {
+    startAuditWorkerLoop();
 }
 
 async function createAuditJob(projectId, user) {
@@ -95,90 +329,8 @@ async function createAuditJob(projectId, user) {
         },
     });
 
-    queueAuditJob(doc._id.toString());
+    void runAuditWorkerTick();
     return serializeJob(doc);
-}
-
-function queueAuditJob(jobId) {
-    setImmediate(() => {
-        void runAuditJob(jobId);
-    });
-}
-
-async function runAuditJob(jobId) {
-    const job = await AuditJob.findById(jobId);
-    if (!job) {
-        return;
-    }
-
-    const project = await getProject(job.projectId);
-    if (!project) {
-        job.status = 'failed';
-        job.error = 'Project not found';
-        job.completedAt = new Date();
-        await job.save();
-        return;
-    }
-
-    job.status = 'running';
-    job.startedAt = new Date();
-    job.progress = {
-        ...job.progress,
-        stage: 'Preparing crawl',
-        message: `Preparing crawl for ${project.name}`,
-    };
-    await job.save();
-
-    try {
-        const results = await crawler.crawlSite(project.url, {
-            maxPages: project.auditMaxPages || 200,
-            ga4PropertyId: project.ga4PropertyId || '',
-            onProgress: async (progress) => {
-                await AuditJob.findByIdAndUpdate(jobId, {
-                    status: 'running',
-                    progress: {
-                        stage: progress.stage,
-                        completed: progress.completed,
-                        total: progress.total,
-                        percent: progress.percent,
-                        message: progress.message,
-                        currentUrl: progress.currentUrl || '',
-                    },
-                });
-            },
-        });
-
-        const historyRecord = await auditHistory.addAudit(results, project.id);
-        await AuditJob.findByIdAndUpdate(jobId, {
-            status: 'completed',
-            progress: {
-                stage: 'Completed',
-                completed: results.length,
-                total: results.length,
-                percent: 100,
-                message: `Completed audit for ${project.name}`,
-                currentUrl: '',
-            },
-            result: results,
-            auditHistoryId: historyRecord?.id || null,
-            error: '',
-            completedAt: new Date(),
-        });
-    } catch (error) {
-        await AuditJob.findByIdAndUpdate(jobId, {
-            status: 'failed',
-            error: error.message || 'Audit failed',
-            completedAt: new Date(),
-            progress: {
-                stage: 'Failed',
-                completed: job.progress?.completed || 0,
-                total: job.progress?.total || 0,
-                percent: job.progress?.percent || 0,
-                message: error.message || 'Audit failed',
-                currentUrl: '',
-            },
-        });
-    }
 }
 
 async function listAuditJobs(user, options = {}) {
@@ -214,5 +366,6 @@ module.exports = {
         normalizeProjectId,
         buildAuditJobListQuery,
         canAccessAuditJob,
+        parsePositiveInt,
     },
 };

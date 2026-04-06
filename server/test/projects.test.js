@@ -3,8 +3,8 @@ const assert = require('node:assert/strict');
 
 const { __internal } = require('../projects');
 
-test('buildProjectPayload normalizes urls, domains, and crawl caps', () => {
-    const payload = __internal.buildProjectPayload({
+test('buildProjectPayload normalizes urls, domains, and crawl caps', async () => {
+    const payload = await __internal.buildProjectPayload({
         id: 'New Project',
         name: 'New Project',
         url: 'example.com',
@@ -17,17 +17,17 @@ test('buildProjectPayload normalizes urls, domains, and crawl caps', () => {
     assert.equal(payload.auditMaxPages, 500);
 });
 
-test('buildProjectPayload rejects non-http and private project URLs', () => {
-    assert.throws(
-        () => __internal.buildProjectPayload({
+test('buildProjectPayload rejects non-http and private project URLs', async () => {
+    await assert.rejects(
+        __internal.buildProjectPayload({
             name: 'Bad protocol',
             url: 'ftp://example.com',
         }),
         /valid public http\(s\) URL/
     );
 
-    assert.throws(
-        () => __internal.buildProjectPayload({
+    await assert.rejects(
+        __internal.buildProjectPayload({
             name: 'Private host',
             url: 'http://localhost:3000',
         }),
@@ -35,8 +35,8 @@ test('buildProjectPayload rejects non-http and private project URLs', () => {
     );
 });
 
-test('buildProjectPayload normalizes domain hostnames from URL-like domain input', () => {
-    const payload = __internal.buildProjectPayload({
+test('buildProjectPayload normalizes domain hostnames from URL-like domain input', async () => {
+    const payload = await __internal.buildProjectPayload({
         name: 'Domain project',
         url: 'example.com',
         domain: 'HTTPS://BLOG.Example.com/path?q=1',

@@ -1,4 +1,5 @@
 const { AnalysisHistory } = require('./models');
+const { buildPaginatedResult, parseBefore, parseLimit } = require('./pagination');
 
 const LEGACY_DEFAULT_PROJECT_ID = 'laserlift';
 
@@ -61,12 +62,18 @@ const addToHistory = async (analysisData, projectId) => {
 const getHistory = async (user, options = {}) => {
     const query = buildHistoryQuery(user, options);
     if (!query) {
-        return [];
+        return { items: [], hasMore: false, nextBefore: null };
+    }
+
+    const limit = parseLimit(options.limit);
+    const before = parseBefore(options.before);
+    if (before) {
+        query.timestamp = { $lt: before };
     }
 
     try {
-        const records = await AnalysisHistory.find(query).sort({ timestamp: -1 }).lean();
-        return records.map((record) => ({
+        const records = await AnalysisHistory.find(query).sort({ timestamp: -1 }).limit(limit + 1).lean();
+        return buildPaginatedResult(records, limit, (record) => ({
             id: record._id.toString(),
             timestamp: record.timestamp,
             projectId: record.projectId,
@@ -74,7 +81,7 @@ const getHistory = async (user, options = {}) => {
         }));
     } catch (error) {
         console.error('Failed to read history:', error);
-        return [];
+        return { items: [], hasMore: false, nextBefore: null };
     }
 };
 

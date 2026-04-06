@@ -1,4 +1,5 @@
-﻿const { AuditHistory } = require('./models');
+const { AuditHistory } = require('./models');
+const { buildPaginatedResult, parseBefore, parseLimit } = require('./pagination');
 
 function normalizeProjectId(projectId) {
     return typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null;
@@ -52,12 +53,18 @@ const addAudit = async (results, projectId) => {
 const getAuditHistory = async (user, options = {}) => {
     const query = buildAuditHistoryQuery(user, options);
     if (!query) {
-        return [];
+        return { items: [], hasMore: false, nextBefore: null };
+    }
+
+    const limit = parseLimit(options.limit);
+    const before = parseBefore(options.before);
+    if (before) {
+        query.timestamp = { $lt: before };
     }
 
     try {
-        const records = await AuditHistory.find(query).sort({ timestamp: -1 }).lean();
-        return records.map((record) => ({
+        const records = await AuditHistory.find(query).sort({ timestamp: -1 }).limit(limit + 1).lean();
+        return buildPaginatedResult(records, limit, (record) => ({
             id: record._id.toString(),
             timestamp: record.timestamp,
             projectId: record.projectId,
@@ -65,7 +72,7 @@ const getAuditHistory = async (user, options = {}) => {
         }));
     } catch (error) {
         console.error('Failed to read audit history:', error);
-        return [];
+        return { items: [], hasMore: false, nextBefore: null };
     }
 };
 

@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Brain, Loader2 } from 'lucide-react';
 import { api } from '../../api';
 import type { AuthUser } from '../../types';
@@ -6,6 +6,8 @@ import type { AuthUser } from '../../types';
 interface GoogleCredentialResponse {
     credential: string;
 }
+
+type AuthMode = 'login' | 'register';
 
 interface GoogleIdentityClient {
     initialize(config: {
@@ -19,7 +21,7 @@ interface GoogleIdentityClient {
         size: 'large';
         shape: 'pill';
         width: number;
-        text: 'signin_with';
+        text: 'signin_with' | 'signup_with';
         logo_alignment: 'left';
     }): void;
     disableAutoSelect(): void;
@@ -40,9 +42,11 @@ function getErrorMessage(error: unknown, fallback: string): string {
 }
 
 export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => void }) {
+    const [authMode, setAuthMode] = useState<AuthMode>('login');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
     const [configLoading, setConfigLoading] = useState(true);
+    const [googleClientId, setGoogleClientId] = useState('');
 
     const handleCredential = useCallback(async (response: GoogleCredentialResponse) => {
         if (!response.credential) {
@@ -53,19 +57,21 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
         setLoading(true);
         setError('');
         try {
-            const res = await api.googleLogin(response.credential);
+            const res = authMode === 'register'
+                ? await api.googleRegister(response.credential)
+                : await api.googleLogin(response.credential);
             onLogin(res.user);
         } catch (issue) {
-            setError(getErrorMessage(issue, 'Login failed'));
+            setError(getErrorMessage(issue, authMode === 'register' ? 'Registration failed' : 'Login failed'));
         } finally {
             setLoading(false);
         }
-    }, [onLogin]);
+    }, [authMode, onLogin]);
 
     useEffect(() => {
         const renderGoogleButton = (clientId: string) => {
             const googleId = window.google?.accounts?.id;
-            const buttonElement = document.getElementById('google-signin-btn');
+            const buttonElement = document.getElementById('google-auth-btn');
 
             if (!googleId || !(buttonElement instanceof HTMLElement)) {
                 setError('Failed to initialize Google Sign-In.');
@@ -73,6 +79,7 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
                 return;
             }
 
+            buttonElement.innerHTML = '';
             googleId.initialize({
                 client_id: clientId,
                 callback: handleCredential,
@@ -84,7 +91,7 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
                 size: 'large',
                 shape: 'pill',
                 width: 360,
-                text: 'signin_with',
+                text: authMode === 'register' ? 'signup_with' : 'signin_with',
                 logo_alignment: 'left',
             });
             setConfigLoading(false);
@@ -92,13 +99,24 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
 
         const initGoogle = async () => {
             try {
-                const config = await api.getAuthConfig();
-                if (!config.googleClientId) {
-                    throw new Error('Google client ID is missing from the server config.');
+                let nextClientId = googleClientId;
+                if (!nextClientId) {
+                    const config = await api.getAuthConfig();
+                    if (!config.googleClientId) {
+                        throw new Error('Google client ID is missing from the server config.');
+                    }
+                    nextClientId = config.googleClientId;
+                    setGoogleClientId(nextClientId);
                 }
 
                 if (window.google?.accounts?.id) {
-                    renderGoogleButton(config.googleClientId);
+                    renderGoogleButton(nextClientId);
+                    return;
+                }
+
+                const existingScript = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+                if (existingScript) {
+                    existingScript.addEventListener('load', () => renderGoogleButton(nextClientId), { once: true });
                     return;
                 }
 
@@ -106,7 +124,7 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
                 script.src = 'https://accounts.google.com/gsi/client';
                 script.async = true;
                 script.defer = true;
-                script.onload = () => renderGoogleButton(config.googleClientId);
+                script.onload = () => renderGoogleButton(nextClientId);
                 script.onerror = () => {
                     setError('Failed to load Google Sign-In.');
                     setConfigLoading(false);
@@ -118,8 +136,9 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
             }
         };
 
+        setConfigLoading(true);
         void initGoogle();
-    }, [handleCredential]);
+    }, [authMode, googleClientId, handleCredential]);
 
     return (
         <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 via-white to-indigo-50/40 p-6">
@@ -129,7 +148,7 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
                         <Brain className="h-8 w-8 text-white" />
                     </div>
                     <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">SEO Intelligence</h1>
-                    <p className="mt-1 text-sm text-slate-500">Sign in with Google to access your tools</p>
+                    <p className="mt-1 text-sm text-slate-500">Choose how you want to use Google access in the app</p>
                 </div>
 
                 <div className="space-y-5 rounded-2xl border border-slate-200 bg-white p-8" style={{ boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.06)' }}>
@@ -137,18 +156,38 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
                         <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-medium text-rose-600">{error}</div>
                     )}
 
+                    <div className="grid gap-3 sm:grid-cols-2">
+                        <button
+                            type="button"
+                            onClick={() => setAuthMode('login')}
+                            className={`rounded-2xl border px-4 py-4 text-left transition ${authMode === 'login' ? 'border-indigo-500 bg-indigo-50 text-indigo-900' : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'}`}
+                        >
+                            <p className="text-sm font-semibold">Sign in</p>
+                            <p className="mt-1 text-xs leading-relaxed text-slate-500">Use your existing access level, whether that is admin, viewer, or keyword-only.</p>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setAuthMode('register')}
+                            className={`rounded-2xl border px-4 py-4 text-left transition ${authMode === 'register' ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'}`}
+                        >
+                            <p className="text-sm font-semibold">Register for keyword research</p>
+                            <p className="mt-1 text-xs leading-relaxed text-slate-500">Create a self-serve keyword workspace. Dashboard, audit, and project access still stay admin-assigned.</p>
+                        </button>
+                    </div>
+
                     {(loading || configLoading) && (
                         <div className="flex justify-center py-4">
                             <Loader2 className="h-6 w-6 animate-spin text-indigo-500" />
                         </div>
                     )}
 
-                    <div id="google-signin-btn" className="flex justify-center" />
+                    <div id="google-auth-btn" className="flex justify-center" />
 
-                    <p className="text-center text-xs leading-relaxed text-slate-400">
-                        Admin access comes from the Mongo admin list.<br />
-                        Viewer access is managed by an admin inside the app.
-                    </p>
+                    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-xs leading-relaxed text-slate-500">
+                        {authMode === 'register'
+                            ? 'Registration creates a keyword-only viewer account with Google Ads enrichment controlled by daily and weekly usage limits.'
+                            : 'Sign in uses the access already stored for your Google email. Admin and viewer permissions are still managed on the server.'}
+                    </div>
                 </div>
                 <p className="mt-6 text-center text-xs text-slate-400">seotool.harshrathi.com</p>
             </div>

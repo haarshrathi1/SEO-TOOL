@@ -79,14 +79,26 @@ export interface AuthUser {
     access?: string[];
     features?: string[];
     projectIds?: string[];
+    registrationSource?: string | null;
+    status?: string | null;
+    createdAt?: string | null;
+    registeredAt?: string | null;
+    lastLoginAt?: string | null;
 }
 
 export interface ViewerRecord {
     email: string;
+    role?: 'viewer';
+    name?: string;
+    picture?: string;
     access: string[];
     features: string[];
     projectIds: string[];
-    createdAt: string;
+    registrationSource?: string | null;
+    status?: string | null;
+    createdAt?: string | null;
+    registeredAt?: string | null;
+    lastLoginAt?: string | null;
 }
 
 export interface AuthConfigResponse {
@@ -99,6 +111,12 @@ export interface AuthSessionResponse {
 
 export interface GoogleLoginResponse {
     user: AuthUser;
+}
+
+export interface PaginatedResult<T> {
+    items: T[];
+    hasMore: boolean;
+    nextBefore: string | null;
 }
 
 export interface HistoryItem {
@@ -471,10 +489,13 @@ export interface KeywordDataV2 {
             enriched: boolean;
             usageApplied: boolean;
             skippedReason: string | null;
+            dailyLimit: number | null;
+            usedToday: number;
+            remainingToday: number | null;
             weeklyLimit: number | null;
             usedThisWeek: number;
             remainingThisWeek: number | null;
-            locationCode: number;
+            locationCode: number | null;
             languageCode: string;
             searchPartners: boolean;
             taskCost: number;
@@ -511,12 +532,16 @@ export interface KeywordAdsStatus {
     isAdmin: boolean;
     allowed: boolean;
     unlimited: boolean;
+    dailyLimit: number | null;
+    usedToday: number;
+    remainingToday: number | null;
     weeklyLimit: number | null;
     usedThisWeek: number;
     remainingThisWeek: number | null;
     locationCode: number | null;
     languageCode: string;
     searchPartners: boolean;
+    dayKey: string;
     weekKey: string;
     reason: string;
 }

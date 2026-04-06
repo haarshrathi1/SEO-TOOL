@@ -23,6 +23,7 @@ const ALLOWED_ACCESS = new Set(['keywords', 'dashboard', 'audit']);
 const ALLOWED_FEATURES = new Set(['keyword_ads']);
 const DEFAULT_VIEWER_ACCESS = ['keywords'];
 const DEFAULT_VIEWER_FEATURES = [];
+const SELF_SERVICE_REGISTRATION_SOURCE = 'google_self_service';
 
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
@@ -104,11 +105,16 @@ function getPublicViewer(viewer, tokenPayload = {}) {
     return {
         email: viewer.email,
         role: 'viewer',
-        name: tokenPayload.name || viewer.email,
-        picture: tokenPayload.picture || '',
+        name: viewer.displayName || tokenPayload.name || viewer.email,
+        picture: viewer.picture || tokenPayload.picture || '',
         access: normalizeAccess(viewer.access),
         features: normalizeFeatures(viewer.features),
         projectIds: normalizeProjectIds(viewer.projectIds),
+        registrationSource: viewer.registrationSource || null,
+        status: viewer.status || 'active',
+        createdAt: viewer.createdAt || null,
+        registeredAt: viewer.registeredAt || null,
+        lastLoginAt: viewer.lastLoginAt || null,
     };
 }
 
@@ -147,6 +153,23 @@ function buildAdminUser(email, tokenPayload = {}) {
         features: ['keyword_ads'],
         projectIds: [],
     };
+}
+
+function buildViewerSessionPayload(viewer, tokenPayload = {}) {
+    const name = tokenPayload.name || viewer?.displayName || viewer?.email || '';
+    const picture = tokenPayload.picture || viewer?.picture || '';
+    return {
+        email: viewer.email,
+        role: 'viewer',
+        name,
+        picture,
+    };
+}
+
+function issueSession(res, payload, user) {
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
+    res.cookie('seo_token', token, getCookieOptions());
+    return res.json({ user });
 }
 
 function resolveLoginRole({ adminAllowed, viewerExists, allowDevAdmin }) {
@@ -205,6 +228,61 @@ async function loadFreshUser(decoded, req) {
     }
 
     return null;
+}
+
+async function verifyGoogleCredential(credential) {
+    const ticket = await googleClient.verifyIdToken({
+        idToken: credential,
+        audience: GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    return {
+        payload,
+        email: normalizeEmail(payload?.email),
+        name: payload?.name || normalizeEmail(payload?.email),
+        picture: payload?.picture || '',
+    };
+}
+
+async function upsertViewerLoginProfile(email, tokenPayload = {}, defaults = {}) {
+    const update = {
+        displayName: tokenPayload.name || defaults.displayName || '',
+        picture: tokenPayload.picture || defaults.picture || '',
+        lastLoginAt: new Date(),
+    };
+
+    if (defaults.registrationSource) {
+        update.registrationSource = defaults.registrationSource;
+    }
+
+    if (defaults.status) {
+        update.status = defaults.status;
+    }
+
+    if (defaults.registeredAt) {
+        update.registeredAt = defaults.registeredAt;
+    }
+
+    if (defaults.access) {
+        update.access = normalizeAccess(defaults.access);
+    }
+
+    if (defaults.features) {
+        update.features = normalizeFeatures(defaults.features);
+    }
+
+    if (defaults.projectIds) {
+        update.projectIds = normalizeProjectIds(defaults.projectIds);
+    }
+
+    const viewer = await Viewer.findOneAndUpdate(
+        { email },
+        { $set: update },
+        { new: true }
+    ).lean();
+
+    return viewer;
 }
 
 async function requireAuth(req, res, next) {
@@ -274,15 +352,7 @@ router.post('/google-login', async (req, res) => {
     }
 
     try {
-        const ticket = await googleClient.verifyIdToken({
-            idToken: credential,
-            audience: GOOGLE_CLIENT_ID,
-        });
-
-        const payload = ticket.getPayload();
-        const email = normalizeEmail(payload.email);
-        const name = payload.name || email;
-        const picture = payload.picture || '';
+        const { payload, email, name, picture } = await verifyGoogleCredential(credential);
         const adminAllowed = await isAdminEmail(email);
         const viewer = adminAllowed ? null : await Viewer.findOne({ email }).lean();
         const role = resolveLoginRole({
@@ -292,31 +362,76 @@ router.post('/google-login', async (req, res) => {
         });
 
         if (role === 'admin') {
-            const token = jwt.sign(
+            return issueSession(
+                res,
                 { email, role: 'admin', name, picture },
-                JWT_SECRET,
-                { expiresIn: TOKEN_EXPIRY }
+                buildAdminUser(email, { name, picture })
             );
-
-            res.cookie('seo_token', token, getCookieOptions());
-            return res.json({ user: buildAdminUser(email, { name, picture }) });
         }
 
         if (role === 'viewer' && viewer) {
-            const token = jwt.sign(
-                { email, role: 'viewer', name, picture },
-                JWT_SECRET,
-                { expiresIn: TOKEN_EXPIRY }
+            const refreshedViewer = await upsertViewerLoginProfile(email, { name, picture });
+            const user = getPublicViewer(refreshedViewer || viewer, { name, picture });
+            return issueSession(
+                res,
+                buildViewerSessionPayload(refreshedViewer || viewer, { name, picture }),
+                user
             );
-
-            const user = getPublicViewer(viewer, { name, picture });
-            res.cookie('seo_token', token, getCookieOptions());
-            return res.json({ user });
         }
 
         return res.status(403).json({ error: 'Access denied. Your email is not authorized. Contact the admin.' });
     } catch (e) {
         console.error('Google login error:', e.message);
+        return res.status(401).json({ error: 'Invalid Google credential' });
+    }
+});
+
+router.post('/register', async (req, res) => {
+    const { credential } = req.body;
+    if (!credential) {
+        return res.status(400).json({ error: 'Google credential required' });
+    }
+
+    try {
+        const { email, name, picture } = await verifyGoogleCredential(credential);
+        const adminAllowed = await isAdminEmail(email);
+
+        if (adminAllowed) {
+            return issueSession(
+                res,
+                { email, role: 'admin', name, picture },
+                buildAdminUser(email, { name, picture })
+            );
+        }
+
+        let viewer = await Viewer.findOne({ email }).lean();
+        if (!viewer) {
+            viewer = await Viewer.create({
+                email,
+                access: normalizeAccess(DEFAULT_VIEWER_ACCESS),
+                features: normalizeFeatures(DEFAULT_VIEWER_FEATURES),
+                projectIds: [],
+                registrationSource: SELF_SERVICE_REGISTRATION_SOURCE,
+                status: 'active',
+                displayName: name,
+                picture,
+                registeredAt: new Date(),
+                lastLoginAt: new Date(),
+                createdAt: new Date(),
+            });
+            viewer = typeof viewer.toObject === 'function' ? viewer.toObject() : viewer;
+        } else {
+            viewer = await upsertViewerLoginProfile(email, { name, picture });
+        }
+
+        const user = getPublicViewer(viewer, { name, picture });
+        return issueSession(
+            res,
+            buildViewerSessionPayload(viewer, { name, picture }),
+            user
+        );
+    } catch (error) {
+        console.error('Google registration error:', error.message);
         return res.status(401).json({ error: 'Invalid Google credential' });
     }
 });
@@ -362,17 +477,12 @@ router.post('/viewers', requireAuth, requireAdmin, async (req, res) => {
             features: normalizeFeatures(req.body.features),
             projectIds: normalizeProjectIds(req.body.projectIds),
             createdAt: new Date(),
+            status: 'active',
         });
 
         res.json({
             message: 'Viewer added',
-            viewer: {
-                email: normalizedEmail,
-                access: normalizeAccess(newViewer.access),
-                features: normalizeFeatures(newViewer.features),
-                projectIds: normalizeProjectIds(newViewer.projectIds),
-                createdAt: newViewer.createdAt,
-            },
+            viewer: getPublicViewer(newViewer.toObject ? newViewer.toObject() : newViewer),
         });
     } catch (e) {
         console.error('Failed to add viewer:', e.message);
@@ -403,13 +513,7 @@ router.put('/viewers/:email', requireAuth, requireAdmin, async (req, res) => {
 
         return res.json({
             message: 'Viewer updated',
-            viewer: {
-                email: viewer.email,
-                access: normalizeAccess(viewer.access),
-                features: normalizeFeatures(viewer.features),
-                projectIds: normalizeProjectIds(viewer.projectIds),
-                createdAt: viewer.createdAt,
-            },
+            viewer: getPublicViewer(viewer),
         });
     } catch (e) {
         console.error('Failed to update viewer:', e.message);
@@ -420,13 +524,7 @@ router.put('/viewers/:email', requireAuth, requireAdmin, async (req, res) => {
 router.get('/viewers', requireAuth, requireAdmin, async (req, res) => {
     try {
         const viewers = await Viewer.find({}).sort({ createdAt: -1 }).lean();
-        res.json(viewers.map((viewer) => ({
-            email: viewer.email,
-            access: normalizeAccess(viewer.access),
-            features: normalizeFeatures(viewer.features),
-            projectIds: normalizeProjectIds(viewer.projectIds),
-            createdAt: viewer.createdAt,
-        })));
+        res.json(viewers.map((viewer) => getPublicViewer(viewer)));
     } catch (e) {
         console.error('Failed to list viewers:', e.message);
         res.status(500).json({ error: 'Failed to list viewers' });
@@ -464,8 +562,11 @@ module.exports = {
         getRequiredJwtSecret,
         shouldBypassAdmin,
         buildAdminUser,
+        buildViewerSessionPayload,
         resolveLoginRole,
         resolveFreshRole,
+        verifyGoogleCredential,
+        upsertViewerLoginProfile,
     },
 };
 
