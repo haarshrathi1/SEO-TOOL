@@ -119,6 +119,9 @@ app.post('/api/keywords/research-v2', userAuth.requireAuth, userAuth.requireAcce
 app.post('/api/keywords/analyze-content', userAuth.requireAuth, userAuth.requireAccess('keywords'), keywords.analyzePageContent);
 app.get('/api/keywords/ads-access', userAuth.requireAuth, userAuth.requireAccess('keywords'), async (req, res) => {
     try {
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
         res.json(await keywordAdsAccess.getKeywordAdsUsageStatus(req.user));
     } catch (e) {
         res.status(500).json({ error: e.message });

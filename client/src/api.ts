@@ -166,7 +166,12 @@ export const api = {
         body: JSON.stringify({ seed }),
     }),
 
-    getKeywordAdsStatus: () => request<KeywordAdsStatus>('/api/keywords/ads-access'),
+    getKeywordAdsStatus: () => request<KeywordAdsStatus>('/api/keywords/ads-access', {
+        cache: 'no-store',
+        headers: {
+            'Cache-Control': 'no-cache',
+        },
+    }),
 
     createKeywordJob: (seed: string, projectId?: string | null) => request<KeywordJob>('/api/keywords/jobs', {
         method: 'POST',

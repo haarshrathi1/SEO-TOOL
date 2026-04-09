@@ -97,6 +97,46 @@ function getAdsConfigurationNote(status: KeywordAdsStatus) {
     }
 }
 
+type KeywordAdsRunMeta = NonNullable<KeywordDataV2['metadata']['keywordAds']>;
+
+function mergeAdsStatusWithRunMeta(current: KeywordAdsStatus | null, meta: KeywordAdsRunMeta, user: AuthUser): KeywordAdsStatus {
+    const reason = !meta.configured
+        ? 'not_configured'
+        : !meta.featureEnabled
+            ? 'feature_not_enabled'
+            : meta.unlimited
+                ? 'admin_unlimited'
+                : meta.skippedReason || 'ok';
+
+    const remainingToday = typeof meta.remainingToday === 'number' ? meta.remainingToday : null;
+    const remainingThisWeek = typeof meta.remainingThisWeek === 'number' ? meta.remainingThisWeek : null;
+
+    return {
+        provider: meta.provider,
+        providerLabel: meta.providerLabel,
+        configured: meta.configured,
+        configurationReason: meta.configurationReason || 'ok',
+        featureEnabled: meta.featureEnabled,
+        isAdmin: user.role === 'admin',
+        allowed: meta.unlimited || (remainingToday !== null && remainingThisWeek !== null
+            ? remainingToday > 0 && remainingThisWeek > 0
+            : meta.allowed),
+        unlimited: meta.unlimited,
+        dailyLimit: meta.dailyLimit,
+        usedToday: meta.usedToday,
+        remainingToday,
+        weeklyLimit: meta.weeklyLimit,
+        usedThisWeek: meta.usedThisWeek,
+        remainingThisWeek,
+        locationCode: meta.locationCode,
+        languageCode: meta.languageCode,
+        searchPartners: meta.searchPartners,
+        dayKey: current?.dayKey || '',
+        weekKey: current?.weekKey || '',
+        reason,
+    };
+}
+
 function formatLabel(value: string) {
     return value
         .replace(/_/g, ' ')
@@ -619,7 +659,6 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
             setAdsStatus(await api.getKeywordAdsStatus());
         } catch (error) {
             console.error('Failed to load keyword ads status:', error);
-            setAdsStatus(null);
         }
     }, []);
 
@@ -633,15 +672,20 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
                 const completedJob = await api.getKeywordJobResult(jobId);
                 trackActiveJob(completedJob);
                 if (completedJob.result) {
-                    setData(completedJob.result);
-                    setSeed(completedJob.result.seed);
+                    const result = completedJob.result;
+                    const resultKeywordAds = result.metadata?.keywordAds;
+                    setData(result);
+                    setSeed(result.seed);
+                    if (resultKeywordAds) {
+                        setAdsStatus((current) => mergeAdsStatusWithRunMeta(current, resultKeywordAds, user));
+                    }
                 }
                 if (completedJob.keywordHistoryId) {
                     setSelectedHistoryId(completedJob.keywordHistoryId);
                 }
                 setLoading(false);
                 await fetchHistory();
-                void loadAdsStatus();
+                await loadAdsStatus();
                 if (completedJob.historySaveError) {
                     push({
                         tone: 'info',
@@ -662,7 +706,7 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
             setLoading(false);
             push({ tone: 'error', title: 'Job sync failed', description: getErrorMessage(error, 'Unable to read keyword job progress.') });
         }
-    }, [clearPoll, fetchHistory, loadAdsStatus, push, trackActiveJob]);
+    }, [clearPoll, fetchHistory, loadAdsStatus, push, trackActiveJob, user]);
 
     const beginPolling = useCallback((jobId: string) => {
         clearPoll();
