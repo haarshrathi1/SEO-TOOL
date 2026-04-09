@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Loader2, Target, BarChart3, Layers, Sparkles, ExternalLink, Zap, Save, History, ChevronRight, TrendingUp, Brain, Lightbulb, Crosshair, Rocket, ArrowRight, ChevronDown, ChevronUp, HelpCircle, Star, Shield, Eye, BookOpen, Filter, Download, Check, type LucideIcon } from 'lucide-react';
+import { Search, Loader2, Target, BarChart3, Layers, Sparkles, ExternalLink, Zap, History, ChevronRight, TrendingUp, Brain, Lightbulb, Crosshair, Rocket, ArrowRight, ChevronDown, ChevronUp, HelpCircle, Star, Shield, Eye, BookOpen, Filter, Download, Check, type LucideIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from './api';
 import { downloadCsv } from './csv';
@@ -92,8 +92,6 @@ function getAdsConfigurationNote(status: KeywordAdsStatus) {
         return 'Google Ads auth is missing on the server. Connect the Ads account at /auth/google/login/ads.';
     case 'missing_oauth_client':
         return 'Google OAuth client credentials are incomplete for Google Ads.';
-    case 'missing_credentials':
-        return 'Server credentials are not configured for DataForSEO yet.';
     default:
         return `${providerLabel} is not configured yet.`;
     }
@@ -461,8 +459,8 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
     const [historyNextBefore, setHistoryNextBefore] = useState<string | null>(null);
     const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
     const [loading, setLoading] = useState(false);
-    const [saving, setSaving] = useState(false);
     const [showHistory, setShowHistory] = useState(false);
+    const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
     const [currentLayer, setCurrentLayer] = useState(0);
     const [activeJob, setActiveJob] = useState<KeywordJob | null>(null);
     const [runtimeLog, setRuntimeLog] = useState<KeywordRuntimeLogEntry[]>([]);
@@ -472,7 +470,6 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
     const [kwFilter, setKwFilter] = useState('all');
     const [kwSort, setKwSort] = useState<'opportunityScore' | 'term'>('opportunityScore');
     const [activeBanter, setActiveBanter] = useState('');
-    const [useAdsData, setUseAdsData] = useState(false);
     const [adsStatus, setAdsStatus] = useState<KeywordAdsStatus | null>(null);
     const pollRef = useRef<number | null>(null);
     const banterIndexRef = useRef<Record<number, number>>({});
@@ -639,8 +636,19 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
                     setData(completedJob.result);
                     setSeed(completedJob.result.seed);
                 }
+                if (completedJob.keywordHistoryId) {
+                    setSelectedHistoryId(completedJob.keywordHistoryId);
+                }
                 setLoading(false);
+                await fetchHistory();
                 void loadAdsStatus();
+                if (completedJob.historySaveError) {
+                    push({
+                        tone: 'info',
+                        title: 'Research completed without history save',
+                        description: completedJob.historySaveError,
+                    });
+                }
                 return;
             }
 
@@ -654,7 +662,7 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
             setLoading(false);
             push({ tone: 'error', title: 'Job sync failed', description: getErrorMessage(error, 'Unable to read keyword job progress.') });
         }
-    }, [clearPoll, loadAdsStatus, push, trackActiveJob]);
+    }, [clearPoll, fetchHistory, loadAdsStatus, push, trackActiveJob]);
 
     const beginPolling = useCallback((jobId: string) => {
         clearPoll();
@@ -688,21 +696,6 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
         };
     }, [beginPolling, clearPoll, fetchHistory, loadAdsStatus, trackActiveJob]);
 
-    const handleSave = async () => {
-        if (!data) return;
-
-        setSaving(true);
-        try {
-            await api.saveKeywordResearch(data);
-            await fetchHistory();
-            push({ tone: 'success', title: 'Research saved', description: 'The current analysis was added to your history.' });
-        } catch (error) {
-            push({ tone: 'error', title: 'Failed to save research', description: getErrorMessage(error, 'Unknown error') });
-        } finally {
-            setSaving(false);
-        }
-    };
-
     const loadFromHistory = (item: KeywordHistoryItem) => {
         if (!isKeywordDataV2(item)) {
             push({ tone: 'info', title: 'Legacy research', description: 'This saved research uses the legacy format and cannot be opened in the new interface.' });
@@ -714,6 +707,7 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
         setLoading(false);
         setData(item);
         setSeed(item.seed);
+        setSelectedHistoryId(item.id);
         setShowHistory(false);
     };
 
@@ -737,9 +731,10 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
         clearRuntimeState();
         setLoading(true);
         setData(null);
+        setSelectedHistoryId(null);
         setCurrentLayer(0);
         try {
-            const job = await api.createKeywordJob(nextSeed, null, { useAdsData });
+            const job = await api.createKeywordJob(nextSeed, null);
             trackActiveJob(job, { resetLog: true });
             beginPolling(job.id);
         } catch (error) {
@@ -803,12 +798,11 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
     const headlineSerpPersonality = useMemo(() => deriveHeadlineSerpPersonality(data), [data]);
     const searchSignalScore = clampMetricScore(data?.serpSummary?.volumeScore ?? 0);
     const searchSignalLabel = getSearchSignalLabel(searchSignalScore);
-    const canSeeAdsToggle = user.role === 'admin' || Boolean(user.features?.includes('keyword_ads')) || Boolean(adsStatus?.featureEnabled);
-    const canUseKeywordAds = user.role === 'admin' || Boolean(user.access?.includes('keywords')) || Boolean(adsStatus?.featureEnabled);
-    const adsToggleDisabled = !adsStatus?.configured || !adsStatus?.featureEnabled;
     const adsProviderLabel = adsStatus?.providerLabel || keywordAdsMeta?.providerLabel || 'Google Ads';
-    const adsToggleNote = !adsStatus
-        ? 'Checking Google Ads enrichment access...'
+    const adsInfoNote = !adsStatus
+        ? user.role === 'admin'
+            ? 'Checking Google Ads enrichment access for the admin workspace...'
+            : 'Checking Google Ads enrichment access...'
         : !adsStatus.configured
             ? getAdsConfigurationNote(adsStatus)
             : adsStatus.unlimited
@@ -874,7 +868,11 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
                                     key={item.id}
                                     type="button"
                                     onClick={() => loadFromHistory(item)}
-                                    className="w-full p-3.5 rounded-xl hover:bg-indigo-50 cursor-pointer transition-all border border-transparent hover:border-indigo-100 group text-left focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                                    className={`w-full p-3.5 rounded-xl cursor-pointer transition-all border group text-left focus:outline-none focus:ring-2 focus:ring-indigo-500/30 ${
+                                        selectedHistoryId === item.id
+                                            ? 'border-indigo-200 bg-indigo-50'
+                                            : 'border-transparent hover:border-indigo-100 hover:bg-indigo-50'
+                                    }`}
                                 >
                                     <div className="flex justify-between items-center">
                                         <span className="font-semibold text-slate-800 group-hover:text-indigo-700">{item.seed}</span>
@@ -933,54 +931,34 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
                                         {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><ArrowRight className="w-5 h-5" /> Analyze</>}
                                     </button>
                                     {data && (
-                                        <>
-                                            <button onClick={handleSave} disabled={saving} type="button" className="premium-button bg-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-200">
-                                                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                                            </button>
-                                            <button onClick={exportKeywordCsv} type="button" className="premium-button border border-slate-200 bg-white text-slate-700 hover:bg-slate-50">
-                                                <Download className="w-4 h-4" /> Export
-                                            </button>
-                                        </>
+                                        <button onClick={exportKeywordCsv} type="button" className="premium-button border border-slate-200 bg-white text-slate-700 hover:bg-slate-50">
+                                            <Download className="w-4 h-4" /> Export
+                                        </button>
                                     )}
                                 </div>
                             </form>
-                            {(canSeeAdsToggle || canUseKeywordAds) && (
-                                <div className="rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3">
-                                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                                        <div>
-                                            <p className="text-sm font-semibold text-amber-900">Google Ads enrichment</p>
-                                            <p className="mt-1 text-xs leading-relaxed text-amber-800">{adsToggleNote}</p>
-                                            {adsStatus && !adsStatus.unlimited && (
-                                                <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold text-amber-900">
-                                                    <span className="premium-badge border border-amber-200 bg-white text-amber-900">
-                                                        Today: {adsStatus.usedToday}/{adsStatus.dailyLimit}
-                                                    </span>
-                                                    <span className="premium-badge border border-amber-200 bg-white text-amber-900">
-                                                        Week: {adsStatus.usedThisWeek}/{adsStatus.weeklyLimit}
-                                                    </span>
-                                                </div>
-                                            )}
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                if (!adsToggleDisabled) {
-                                                    setUseAdsData((current) => !current);
-                                                }
-                                            }}
-                                            disabled={adsToggleDisabled}
-                                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-semibold transition ${
-                                                useAdsData
-                                                    ? 'border-amber-500 bg-amber-500 text-white'
-                                                    : 'border-amber-300 bg-white text-amber-900'
-                                            } ${adsToggleDisabled ? 'cursor-not-allowed opacity-60' : ''}`}
-                                        >
-                                            <span className={`h-2.5 w-2.5 rounded-full ${useAdsData ? 'bg-white' : 'bg-amber-500'}`} />
-                                            {useAdsData ? 'Enabled for this run' : 'Use Google Ads data'}
-                                        </button>
+                            <div className="rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3">
+                                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                    <div>
+                                        <p className="text-sm font-semibold text-amber-900">Google Ads enrichment</p>
+                                        <p className="mt-1 text-xs leading-relaxed text-amber-800">{adsInfoNote}</p>
+                                        {adsStatus && !adsStatus.unlimited && (
+                                            <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold text-amber-900">
+                                                <span className="premium-badge border border-amber-200 bg-white text-amber-900">
+                                                    Today: {adsStatus.usedToday}/{adsStatus.dailyLimit}
+                                                </span>
+                                                <span className="premium-badge border border-amber-200 bg-white text-amber-900">
+                                                    Week: {adsStatus.usedThisWeek}/{adsStatus.weeklyLimit}
+                                                </span>
+                                            </div>
+                                        )}
                                     </div>
+                                    <span className="inline-flex items-center gap-2 rounded-full border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-900">
+                                        <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />
+                                        Automatic for every run
+                                    </span>
                                 </div>
-                            )}
+                            </div>
                             <div className="space-y-3">
                                 <div className="flex flex-wrap gap-2">
                                     {SAMPLE_SEEDS.map((sample) => (
@@ -1820,7 +1798,10 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
                                 <div className="mb-4 p-3 rounded-xl bg-slate-50 border border-slate-100">
                                     <p className="text-xs font-medium text-slate-500">TARGET</p>
                                     <p className="text-sm font-mono text-slate-700 truncate">{scanResult.url}</p>
-                                    <p className="text-xs text-slate-400 mt-1">Words: {scanResult.totalWords}</p>
+                                    <p className="text-xs text-slate-400 mt-1">
+                                        Words: {scanResult.totalWords}
+                                        {scanResult.scanSource ? ` · Source: ${scanResult.scanSource}` : ''}
+                                    </p>
                                 </div>
                                 <div className="rounded-xl border border-slate-200 overflow-hidden">
                                     <div className="grid grid-cols-12 gap-2 px-4 py-2.5 bg-slate-50 text-xs font-semibold text-slate-500 uppercase border-b border-slate-200">

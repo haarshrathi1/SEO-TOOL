@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const keywordAdsAccess = require('../keywordAdsAccess');
-const dataforseoAds = require('../dataforseoAds');
+const keywordAdsData = require('../keywordAdsData');
 const usageWindows = require('../usageWindows');
 
 test('getKeywordAdsWeekKey is stable for dates within the same UTC week', () => {
@@ -27,7 +27,7 @@ test('getKeywordAdsDayKey keeps the UTC day boundary stable', () => {
 });
 
 test('buildAdsSeedKeywords deduplicates, normalizes, and skips question-style inputs', () => {
-    const seeds = dataforseoAds.buildAdsSeedKeywords({
+    const seeds = keywordAdsData.buildAdsSeedKeywords({
         seed: 'Preventive Fleet Maintenance',
         suggestions: ['fleet maintenance checklist', 'How to build a fleet maintenance schedule', 'fleet maintenance checklist'],
         serpData: {

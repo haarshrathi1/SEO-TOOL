@@ -16,11 +16,11 @@ const DEFAULT_WEEKLY_LIMIT = 5;
 const DEFAULT_DAILY_LIMIT = 2;
 
 function getKeywordAdsWeeklyLimit() {
-    return parseLimit(process.env.DATAFORSEO_ADS_WEEKLY_LIMIT, DEFAULT_WEEKLY_LIMIT);
+    return parseLimit(process.env.GOOGLE_ADS_WEEKLY_LIMIT, DEFAULT_WEEKLY_LIMIT);
 }
 
 function getKeywordAdsDailyLimit() {
-    return parseLimit(process.env.DATAFORSEO_ADS_DAILY_LIMIT, DEFAULT_DAILY_LIMIT);
+    return parseLimit(process.env.GOOGLE_ADS_DAILY_LIMIT, DEFAULT_DAILY_LIMIT);
 }
 
 function getKeywordAdsWeekKey(date = new Date()) {

@@ -9,7 +9,7 @@ const {
 const {
     getCachedKeywordAdsSnapshot,
     saveKeywordAdsSnapshot,
-} = require('./dataforseoAds');
+} = require('./keywordAdsData');
 const {
     fetchLiveKeywordAdsSnapshot,
     getPreferredKeywordAdsProviderConfig,
@@ -1738,7 +1738,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
     let lastAiMeta = null;
     let groundedSearchSkippedReason = null;
     let groundedSearchQuota = null;
-    const keywordAdsRequested = options.useAdsData === true;
+    const keywordAdsRequested = true;
     const keywordAdsProviderConfig = getPreferredKeywordAdsProviderConfig();
     let keywordAdsMeta = {
         requested: keywordAdsRequested,
@@ -1752,7 +1752,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         cacheHit: false,
         enriched: false,
         usageApplied: false,
-        skippedReason: keywordAdsRequested ? null : 'not_requested',
+        skippedReason: null,
         dailyLimit: null,
         usedToday: 0,
         remainingToday: null,
@@ -1880,124 +1880,122 @@ async function runKeywordResearchV2(seedInput, options = {}) {
     let keywordUniverse = rescoreKeywordUniverse(normalizeKeywordUniverse(keywordUniverseResponse.data), keywordContext);
     lastAiMeta = keywordUniverseResponse.meta || lastAiMeta;
 
-    if (keywordAdsRequested) {
-        const adsStatus = await getKeywordAdsUsageStatus(options.user || null);
-        keywordAdsMeta = {
-            ...keywordAdsMeta,
-            provider: adsStatus.provider,
-            providerLabel: adsStatus.providerLabel,
-            configured: adsStatus.configured,
-            configurationReason: adsStatus.configurationReason || null,
-            featureEnabled: adsStatus.featureEnabled,
-            allowed: adsStatus.allowed,
-            unlimited: adsStatus.unlimited,
-            skippedReason: adsStatus.reason,
-            dailyLimit: adsStatus.dailyLimit,
-            usedToday: adsStatus.usedToday,
-            remainingToday: adsStatus.remainingToday,
-            weeklyLimit: adsStatus.weeklyLimit,
-            usedThisWeek: adsStatus.usedThisWeek,
-            remainingThisWeek: adsStatus.remainingThisWeek,
-            locationCode: adsStatus.locationCode ?? keywordAdsMeta.locationCode,
-            languageCode: adsStatus.languageCode || keywordAdsMeta.languageCode,
-            searchPartners: typeof adsStatus.searchPartners === 'boolean' ? adsStatus.searchPartners : keywordAdsMeta.searchPartners,
-        };
+    const adsStatus = await getKeywordAdsUsageStatus(options.user || null);
+    keywordAdsMeta = {
+        ...keywordAdsMeta,
+        provider: adsStatus.provider,
+        providerLabel: adsStatus.providerLabel,
+        configured: adsStatus.configured,
+        configurationReason: adsStatus.configurationReason || null,
+        featureEnabled: adsStatus.featureEnabled,
+        allowed: adsStatus.allowed,
+        unlimited: adsStatus.unlimited,
+        skippedReason: adsStatus.reason,
+        dailyLimit: adsStatus.dailyLimit,
+        usedToday: adsStatus.usedToday,
+        remainingToday: adsStatus.remainingToday,
+        weeklyLimit: adsStatus.weeklyLimit,
+        usedThisWeek: adsStatus.usedThisWeek,
+        remainingThisWeek: adsStatus.remainingThisWeek,
+        locationCode: adsStatus.locationCode ?? keywordAdsMeta.locationCode,
+        languageCode: adsStatus.languageCode || keywordAdsMeta.languageCode,
+        searchPartners: typeof adsStatus.searchPartners === 'boolean' ? adsStatus.searchPartners : keywordAdsMeta.searchPartners,
+    };
 
-        if (adsStatus.configured && adsStatus.featureEnabled) {
-            await pushProgress(options.onProgress, buildProgressUpdate(4, `Checking cached ${keywordAdsMeta.providerLabel} enrichment for this keyword set...`, {
-                phase: 'mid',
-                provider: keywordAdsMeta.providerLabel,
-            }));
+    if (adsStatus.configured && adsStatus.featureEnabled) {
+        await pushProgress(options.onProgress, buildProgressUpdate(4, `Checking cached ${keywordAdsMeta.providerLabel} enrichment for this keyword set...`, {
+            phase: 'mid',
+            provider: keywordAdsMeta.providerLabel,
+        }));
 
-            const cachedAds = await getCachedKeywordAdsSnapshot(seed, {
-                provider: keywordAdsMeta.provider,
-                locationCode: keywordAdsMeta.locationCode,
-                languageCode: keywordAdsMeta.languageCode,
-                searchPartners: keywordAdsMeta.searchPartners,
-            });
+        const cachedAds = await getCachedKeywordAdsSnapshot(seed, {
+            provider: keywordAdsMeta.provider,
+            locationCode: keywordAdsMeta.locationCode,
+            languageCode: keywordAdsMeta.languageCode,
+            searchPartners: keywordAdsMeta.searchPartners,
+        });
 
-            if (cachedAds?.payload) {
-                keywordUniverse = mergeKeywordAdsData(keywordUniverse, cachedAds.payload, keywordContext);
-                keywordAdsMeta = {
-                    ...keywordAdsMeta,
-                    cacheHit: true,
-                    enriched: true,
-                    skippedReason: 'cache_hit',
-                    taskCost: Number(cachedAds.payload.cost || 0),
-                    taskKeywords: Array.isArray(cachedAds.payload.taskKeywords) ? cachedAds.payload.taskKeywords : [],
-                    enrichedKeywordCount: keywordUniverse.keywords.filter((keyword) => keyword.adsMetrics).length,
-                };
-            } else if (adsStatus.allowed || adsStatus.unlimited) {
-                const reservedUsage = await reserveKeywordAdsUsage(options.user || null);
-                keywordAdsMeta = {
-                    ...keywordAdsMeta,
-                    allowed: reservedUsage.allowed,
-                    unlimited: reservedUsage.unlimited,
-                    usageApplied: reservedUsage.usageApplied,
-                    skippedReason: reservedUsage.reason,
-                    usedToday: reservedUsage.usedToday,
-                    remainingToday: reservedUsage.remainingToday,
-                    usedThisWeek: reservedUsage.usedThisWeek,
-                    remainingThisWeek: reservedUsage.remainingThisWeek,
-                };
+        if (cachedAds?.payload) {
+            keywordUniverse = mergeKeywordAdsData(keywordUniverse, cachedAds.payload, keywordContext);
+            keywordAdsMeta = {
+                ...keywordAdsMeta,
+                cacheHit: true,
+                enriched: true,
+                skippedReason: 'cache_hit',
+                taskCost: Number(cachedAds.payload.cost || 0),
+                taskKeywords: Array.isArray(cachedAds.payload.taskKeywords) ? cachedAds.payload.taskKeywords : [],
+                enrichedKeywordCount: keywordUniverse.keywords.filter((keyword) => keyword.adsMetrics).length,
+            };
+        } else if (adsStatus.allowed || adsStatus.unlimited) {
+            const reservedUsage = await reserveKeywordAdsUsage(options.user || null);
+            keywordAdsMeta = {
+                ...keywordAdsMeta,
+                allowed: reservedUsage.allowed,
+                unlimited: reservedUsage.unlimited,
+                usageApplied: reservedUsage.usageApplied,
+                skippedReason: reservedUsage.reason,
+                usedToday: reservedUsage.usedToday,
+                remainingToday: reservedUsage.remainingToday,
+                usedThisWeek: reservedUsage.usedThisWeek,
+                remainingThisWeek: reservedUsage.remainingThisWeek,
+            };
 
-                if (reservedUsage.allowed) {
-                    await pushProgress(options.onProgress, buildProgressUpdate(4, `Pulling Google Ads keyword data from ${keywordAdsMeta.providerLabel}...`, {
-                        phase: 'mid',
-                        provider: keywordAdsMeta.providerLabel,
-                    }));
+            if (reservedUsage.allowed) {
+                await pushProgress(options.onProgress, buildProgressUpdate(4, `Pulling Google Ads keyword data from ${keywordAdsMeta.providerLabel}...`, {
+                    phase: 'mid',
+                    provider: keywordAdsMeta.providerLabel,
+                }));
 
-                    try {
-                        const adsSnapshot = await fetchLiveKeywordAdsSnapshot(seed, {
-                            suggestions,
-                            serpData,
-                            keywordUniverse,
-                        }, {
-                            providerConfig: keywordAdsProviderConfig,
-                            provider: keywordAdsMeta.provider,
-                            locationCode: keywordAdsMeta.locationCode,
-                            languageCode: keywordAdsMeta.languageCode,
-                            searchPartners: keywordAdsMeta.searchPartners,
-                            tag: `keyword-research:${seed}`,
+                try {
+                    const adsSnapshot = await fetchLiveKeywordAdsSnapshot(seed, {
+                        suggestions,
+                        serpData,
+                        keywordUniverse,
+                    }, {
+                        providerConfig: keywordAdsProviderConfig,
+                        provider: keywordAdsMeta.provider,
+                        locationCode: keywordAdsMeta.locationCode,
+                        languageCode: keywordAdsMeta.languageCode,
+                        searchPartners: keywordAdsMeta.searchPartners,
+                        tag: `keyword-research:${seed}`,
+                    });
+
+                    await saveKeywordAdsSnapshot(seed, adsSnapshot, {
+                        provider: keywordAdsMeta.provider,
+                        locationCode: keywordAdsMeta.locationCode,
+                        languageCode: keywordAdsMeta.languageCode,
+                        searchPartners: keywordAdsMeta.searchPartners,
+                    });
+
+                    keywordUniverse = mergeKeywordAdsData(keywordUniverse, adsSnapshot, keywordContext);
+                    keywordAdsMeta = {
+                        ...keywordAdsMeta,
+                        enriched: true,
+                        skippedReason: null,
+                        taskCost: Number(adsSnapshot.cost || 0),
+                        taskKeywords: adsSnapshot.taskKeywords || [],
+                        enrichedKeywordCount: keywordUniverse.keywords.filter((keyword) => keyword.adsMetrics).length,
+                    };
+                } catch (error) {
+                    let releasedUsage = null;
+                    if (reservedUsage.usageApplied) {
+                        releasedUsage = await releaseKeywordAdsUsage(options.user || null, {
+                            dayKey: reservedUsage.dayKey,
+                            weekKey: reservedUsage.weekKey,
                         });
-
-                        await saveKeywordAdsSnapshot(seed, adsSnapshot, {
-                            provider: keywordAdsMeta.provider,
-                            locationCode: keywordAdsMeta.locationCode,
-                            languageCode: keywordAdsMeta.languageCode,
-                            searchPartners: keywordAdsMeta.searchPartners,
-                        });
-
-                        keywordUniverse = mergeKeywordAdsData(keywordUniverse, adsSnapshot, keywordContext);
-                        keywordAdsMeta = {
-                            ...keywordAdsMeta,
-                            enriched: true,
-                            skippedReason: null,
-                            taskCost: Number(adsSnapshot.cost || 0),
-                            taskKeywords: adsSnapshot.taskKeywords || [],
-                            enrichedKeywordCount: keywordUniverse.keywords.filter((keyword) => keyword.adsMetrics).length,
-                        };
-                    } catch (error) {
-                        let releasedUsage = null;
-                        if (reservedUsage.usageApplied) {
-                            releasedUsage = await releaseKeywordAdsUsage(options.user || null, {
-                                dayKey: reservedUsage.dayKey,
-                                weekKey: reservedUsage.weekKey,
-                            });
-                        }
-
-                        keywordAdsMeta = {
-                            ...keywordAdsMeta,
-                            allowed: releasedUsage?.allowed ?? keywordAdsMeta.allowed,
-                            usageApplied: releasedUsage?.usageReleased ? false : keywordAdsMeta.usageApplied,
-                            usedToday: releasedUsage?.usedToday ?? keywordAdsMeta.usedToday,
-                            remainingToday: releasedUsage?.remainingToday ?? keywordAdsMeta.remainingToday,
-                            usedThisWeek: releasedUsage?.usedThisWeek ?? keywordAdsMeta.usedThisWeek,
-                            remainingThisWeek: releasedUsage?.remainingThisWeek ?? keywordAdsMeta.remainingThisWeek,
-                            skippedReason: 'request_failed',
-                        };
-                        console.error('[Keyword Ads] Error:', error.message);
                     }
+
+                    keywordAdsMeta = {
+                        ...keywordAdsMeta,
+                        allowed: releasedUsage?.allowed ?? keywordAdsMeta.allowed,
+                        usageApplied: releasedUsage?.usageReleased ? false : keywordAdsMeta.usageApplied,
+                        usedToday: releasedUsage?.usedToday ?? keywordAdsMeta.usedToday,
+                        remainingToday: releasedUsage?.remainingToday ?? keywordAdsMeta.remainingToday,
+                        usedThisWeek: releasedUsage?.usedThisWeek ?? keywordAdsMeta.usedThisWeek,
+                        remainingThisWeek: releasedUsage?.remainingThisWeek ?? keywordAdsMeta.remainingThisWeek,
+                        skippedReason: 'request_failed',
+                    };
+                    console.error('[Keyword Ads] Error:', error.message);
                 }
             }
         }

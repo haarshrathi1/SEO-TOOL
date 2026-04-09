@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const auth = require('./auth');
 const userAuth = require('./userAuth');
-const { connectMongo } = require('./db');
+const { connectMongo, __internal: dbInternal } = require('./db');
 
 const keywords = require('./keywords');
 const keywordHistory = require('./keywordHistory');
@@ -142,7 +142,6 @@ app.post('/api/keywords/jobs', userAuth.requireAuth, userAuth.requireAccess('key
 
         const job = await keywordJobs.createKeywordJob(seed, req.user, {
             projectId: req.body?.projectId,
-            useAdsData: req.body?.useAdsData === true,
         });
         return res.status(202).json(job);
     } catch (e) {
@@ -412,23 +411,55 @@ app.get('*', (req, res) => {
     }
 });
 
+const STARTUP_RETRY_DELAY_MS = Math.max(Number(process.env.STARTUP_RETRY_DELAY_MS || 5000), 1000);
+
+function sleep(ms) {
+    return new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
+}
+
+async function initializeAppDependencies() {
+    await connectMongo();
+    await projects.initializeProjects();
+    await userAuth.initializeUserAccess();
+    await keywordJobs.initializeKeywordJobs();
+    await auditJobs.initializeAuditJobs();
+    await auth.initializeAuth();
+}
+
+function isRetriableStartupError(error) {
+    return dbInternal.isRetriableMongoError(error);
+}
+
 async function startServer() {
-    try {
-        await connectMongo();
-        await projects.initializeProjects();
-        await userAuth.initializeUserAccess();
-        await keywordJobs.initializeKeywordJobs();
-        await auditJobs.initializeAuditJobs();
-        await auth.initializeAuth();
+    let attempt = 0;
 
-        const server = app.listen(PORT, () => {
-            console.log(`Server running on http://localhost:${PORT}`);
-        });
+    while (true) {
+        attempt += 1;
 
-        server.setTimeout(1200000);
-    } catch (error) {
-        console.error('Failed to start server:', error);
-        process.exit(1);
+        try {
+            await initializeAppDependencies();
+
+            const server = app.listen(PORT, () => {
+                console.log(`Server running on http://localhost:${PORT}`);
+            });
+
+            server.setTimeout(1200000);
+            return server;
+        } catch (error) {
+            if (!isRetriableStartupError(error)) {
+                console.error('Failed to start server:', error);
+                process.exit(1);
+            }
+
+            const reason = error?.cause?.code || error?.code || error?.name || 'startup error';
+            console.error(`[Startup] MongoDB connection failed on attempt ${attempt} (${reason}). Retrying in ${STARTUP_RETRY_DELAY_MS}ms...`);
+            if (error?.message) {
+                console.error(`[Startup] ${error.message}`);
+            }
+            await sleep(STARTUP_RETRY_DELAY_MS);
+        }
     }
 }
 

@@ -185,7 +185,7 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
 
                     <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-xs leading-relaxed text-slate-500">
                         {authMode === 'register'
-                            ? 'Registration creates a keyword-only viewer account with Google Ads enrichment controlled by daily and weekly usage limits.'
+                            ? 'Registration creates a keyword-only viewer account with Google Ads enrichment applied automatically, subject to daily and weekly usage limits.'
                             : 'Sign in uses the access already stored for your Google email. Admin and viewer permissions are still managed on the server.'}
                     </div>
                 </div>

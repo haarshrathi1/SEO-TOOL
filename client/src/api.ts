@@ -168,9 +168,9 @@ export const api = {
 
     getKeywordAdsStatus: () => request<KeywordAdsStatus>('/api/keywords/ads-access'),
 
-    createKeywordJob: (seed: string, projectId?: string | null, options: { useAdsData?: boolean } = {}) => request<KeywordJob>('/api/keywords/jobs', {
+    createKeywordJob: (seed: string, projectId?: string | null) => request<KeywordJob>('/api/keywords/jobs', {
         method: 'POST',
-        body: JSON.stringify({ seed, projectId: projectId ?? null, useAdsData: options.useAdsData === true }),
+        body: JSON.stringify({ seed, projectId: projectId ?? null }),
     }),
 
     getKeywordJobs: (projectId?: string | null) => request<KeywordJob[]>(`/api/keywords/jobs${createQuery({ projectId: projectId || undefined })}`),
@@ -184,11 +184,6 @@ export const api = {
         before: options.before,
         limit: options.limit,
     })}`),
-
-    saveKeywordResearch: (data: KeywordData | KeywordDataV2, projectId?: string | null) => request<KeywordHistoryItem>('/api/keywords/save', {
-        method: 'POST',
-        body: JSON.stringify({ ...data, projectId: projectId ?? data.projectId ?? null }),
-    }),
 
     analyzeContent: (url: string, content?: string) => request<Record<string, unknown>>('/api/ai/analyze', {
         method: 'POST',

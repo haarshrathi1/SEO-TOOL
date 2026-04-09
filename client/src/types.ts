@@ -242,13 +242,12 @@ export interface KeywordJob {
     id: string;
     seed: string;
     projectId?: string | null;
-    options?: {
-        useAdsData?: boolean;
-    };
     ownerEmail: string;
     status: 'queued' | 'running' | 'completed' | 'failed';
     progress: KeywordJobProgress;
     error: string;
+    keywordHistoryId?: string | null;
+    historySaveError?: string;
     createdAt: string;
     updatedAt: string;
     startedAt?: string | null;
@@ -516,6 +515,7 @@ export type KeywordHistoryItem = SavedResearch | SavedResearchV2;
 export interface KeywordScanResult {
     url: string;
     totalWords: number;
+    scanSource?: 'static' | 'rendered';
     topKeywords: {
         keyword: string;
         count: number;

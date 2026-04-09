@@ -98,9 +98,7 @@ const keywordJobSchema = new Schema({
     seed: { type: String, required: true, trim: true, index: true },
     projectId: { type: String, default: null, index: true },
     ownerEmail: { type: String, required: true, lowercase: true, trim: true, index: true },
-    options: {
-        useAdsData: { type: Boolean, default: false },
-    },
+    options: { type: Schema.Types.Mixed, default: {} },
     status: {
         type: String,
         enum: ['queued', 'running', 'completed', 'failed'],
@@ -119,6 +117,8 @@ const keywordJobSchema = new Schema({
         provider: { type: String, default: '' },
     },
     result: { type: Schema.Types.Mixed, default: null },
+    keywordHistoryId: { type: String, default: null },
+    historySaveError: { type: String, default: '' },
     error: { type: String, default: '' },
     startedAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
@@ -148,7 +148,7 @@ keywordFeatureUsageSchema.index({ scope: 1, ownerEmail: 1, feature: 1, period: 1
 
 const keywordAdsCacheSchema = new Schema({
     cacheKey: { type: String, required: true, unique: true, index: true },
-    provider: { type: String, default: 'dataforseo_google_ads', index: true },
+    provider: { type: String, default: 'google_ads_api', index: true },
     seed: { type: String, required: true, trim: true, index: true },
     locationCode: { type: Number, default: null },
     languageCode: { type: String, default: null },

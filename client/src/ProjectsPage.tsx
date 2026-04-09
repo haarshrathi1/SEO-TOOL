@@ -328,7 +328,7 @@ export default function ProjectsPage() {
                             <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-600"><Users className="h-5 w-5" /></div>
                             <div>
                                 <h2 className="text-lg font-bold text-slate-900">Viewer access</h2>
-                                <p className="text-sm text-slate-500">Assign product surfaces and project scopes. Keyword users now inherit Google Ads quota rules automatically instead of needing a manual premium flag.</p>
+                                    <p className="text-sm text-slate-500">Assign product surfaces and project scopes. Keyword users automatically receive Google Ads enrichment when the provider is configured and quota is available.</p>
                             </div>
                         </div>
 
@@ -368,7 +368,7 @@ export default function ProjectsPage() {
                             </div>
 
                             <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-900">
-                                Any viewer with keyword access can request Google Ads enrichment when the provider is configured. Non-admin users share the same quota policy: 2 fresh requests per day and 5 per week. Cached seeds do not consume quota.
+                                Any viewer with keyword access gets Google Ads enrichment automatically when the provider is configured. Non-admin users share the same quota policy: 2 fresh requests per day and 5 per week. Cached seeds do not consume quota.
                             </div>
 
                             <div className="flex items-center gap-3">

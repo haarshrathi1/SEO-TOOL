@@ -19,3 +19,33 @@ test('isPrivateHostname blocks localhost and private networks', () => {
     assert.equal(__internal.isPrivateHostname('example.com'), false);
     assert.equal(__internal.isPrivateHostname('8.8.8.8'), false);
 });
+
+test('shouldUseRenderedFallback switches on for thin SPA shells', () => {
+    assert.equal(__internal.shouldUseRenderedFallback({
+        wordCount: 80,
+        hasSpaShellMarkers: false,
+    }), true);
+
+    assert.equal(__internal.shouldUseRenderedFallback({
+        wordCount: 250,
+        hasSpaShellMarkers: true,
+    }), true);
+
+    assert.equal(__internal.shouldUseRenderedFallback({
+        wordCount: 640,
+        hasSpaShellMarkers: true,
+    }), false);
+});
+
+test('buildKeywordScanResult returns scan source and top keyword counts', () => {
+    const result = __internal.buildKeywordScanResult(
+        'https://example.com/',
+        'CRM software crm software automation platform platform crm software',
+        'rendered'
+    );
+
+    assert.equal(result.scanSource, 'rendered');
+    assert.equal(result.totalWords, 9);
+    const crmSoftware = result.topKeywords.find((keyword) => keyword.keyword === 'crm software');
+    assert.equal(crmSoftware?.count, 3);
+});

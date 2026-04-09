@@ -10,7 +10,12 @@ const {
     googleAdsOauth2Client,
     oauth2Client,
 } = require('./auth');
-const { buildAdsSeedKeywords } = require('./dataforseoAds');
+const {
+    buildAdsSeedKeywords,
+    getKeywordAdsCacheTtlDays,
+    getKeywordAdsLanguageCode,
+    getKeywordAdsSearchPartners,
+} = require('./keywordAdsData');
 
 const GOOGLE_ADS_PROVIDER = 'google_ads_api';
 const GOOGLE_ADS_PROVIDER_LABEL = 'Google Ads API';
@@ -117,7 +122,7 @@ function getApiVersion() {
 }
 
 function getLocationIds() {
-    const raw = String(process.env.GOOGLE_ADS_LOCATION_IDS || process.env.DATAFORSEO_ADS_LOCATION_CODE || DEFAULT_LOCATION_ID);
+    const raw = String(process.env.GOOGLE_ADS_LOCATION_IDS || DEFAULT_LOCATION_ID);
     const values = raw
         .split(',')
         .map((entry) => normalizeCustomerId(entry))
@@ -137,22 +142,15 @@ function getLanguageId() {
 }
 
 function getLanguageCode() {
-    return String(
-        process.env.GOOGLE_ADS_LANGUAGE_CODE
-        || process.env.DATAFORSEO_ADS_LANGUAGE_CODE
-        || DEFAULT_LANGUAGE_CODE
-    ).trim().toLowerCase() || DEFAULT_LANGUAGE_CODE;
+    return getKeywordAdsLanguageCode() || DEFAULT_LANGUAGE_CODE;
 }
 
 function getSearchPartners() {
-    return parseBoolean(
-        process.env.GOOGLE_ADS_SEARCH_PARTNERS ?? process.env.DATAFORSEO_ADS_SEARCH_PARTNERS,
-        false
-    );
+    return getKeywordAdsSearchPartners();
 }
 
 function getCacheTtlDays() {
-    return Math.max(1, parseInteger(process.env.GOOGLE_ADS_CACHE_TTL_DAYS, DEFAULT_CACHE_TTL_DAYS));
+    return getKeywordAdsCacheTtlDays() || DEFAULT_CACHE_TTL_DAYS;
 }
 
 function getPageSize() {

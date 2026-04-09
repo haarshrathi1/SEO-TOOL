@@ -1,5 +1,6 @@
 const { AdminUser, KeywordJob, Viewer } = require('./models');
 const { runKeywordResearchV2, TOTAL_LAYERS, getRuntimeProviderLabel } = require('./keywordResearchService');
+const { persistKeywordResearchResult } = require('./keywordResearchPersistence');
 
 const KEYWORD_WORKER_ID = `keyword-worker:${process.pid}`;
 const DEFAULT_LEASE_MS = 3 * 60 * 1000;
@@ -103,11 +104,12 @@ function serializeJob(record, options = {}) {
         id: job._id?.toString?.() || job.id,
         seed: job.seed,
         projectId: job.projectId || null,
-        options: job.options || { useAdsData: false },
         ownerEmail: job.ownerEmail,
         status: job.status,
         progress: job.progress,
         error: job.error || '',
+        keywordHistoryId: job.keywordHistoryId || null,
+        historySaveError: job.historySaveError || '',
         createdAt: job.createdAt,
         updatedAt: job.updatedAt,
         startedAt: job.startedAt,
@@ -203,7 +205,6 @@ async function runKeywordJob(jobRecord) {
         const result = await runKeywordResearchV2(jobRecord.seed, {
             projectId: jobRecord.projectId || null,
             user,
-            useAdsData: jobRecord.options?.useAdsData === true,
             onProgress: async (progress) => {
                 latestProgress = {
                     stage: progress.stage,
@@ -227,6 +228,9 @@ async function runKeywordJob(jobRecord) {
                 );
             },
         });
+        const persistence = await persistKeywordResearchResult(user, result, {
+            projectId: jobRecord.projectId || null,
+        });
 
         await KeywordJob.findOneAndUpdate(
             { _id: jobId, leaseOwner: KEYWORD_WORKER_ID },
@@ -244,6 +248,8 @@ async function runKeywordJob(jobRecord) {
                     provider: result.metadata?.provider || getRuntimeProviderLabel(),
                 },
                 result,
+                keywordHistoryId: persistence.keywordHistoryId,
+                historySaveError: persistence.historySaveError,
                 error: '',
                 completedAt: new Date(),
                 leaseOwner: null,
@@ -269,6 +275,8 @@ async function runKeywordJob(jobRecord) {
                     message: error.message || 'Keyword research failed',
                     provider: latestProgress.provider || getRuntimeProviderLabel(),
                 },
+                keywordHistoryId: null,
+                historySaveError: '',
                 leaseOwner: null,
                 leaseExpiresAt: null,
                 lastHeartbeatAt: new Date(),
@@ -322,11 +330,9 @@ async function createKeywordJob(seedInput, user, options = {}) {
     }
 
     const projectId = normalizeProjectId(options.projectId);
-    const useAdsData = options.useAdsData === true;
     const doc = await KeywordJob.create({
         seed,
         projectId,
-        options: { useAdsData },
         ownerEmail: user.email,
         status: 'queued',
         progress: {
@@ -340,6 +346,8 @@ async function createKeywordJob(seedInput, user, options = {}) {
             message: `Queued keyword research for "${seed}"`,
             provider: getRuntimeProviderLabel(),
         },
+        keywordHistoryId: null,
+        historySaveError: '',
     });
 
     void runKeywordWorkerTick();
@@ -377,5 +385,6 @@ module.exports = {
         canAccessKeywordJob,
         loadJobUser,
         parsePositiveInt,
+        serializeJob,
     },
 };
