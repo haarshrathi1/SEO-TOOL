@@ -2,9 +2,9 @@ services:
   - type: web
     name: seo-tool
     runtime: node
-    rootDir: .
-    buildCommand: npm run build
-    startCommand: npm run start
+    rootDir: server
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
     autoDeploy: true
     healthCheckPath: /health
     envVars:

@@ -4,6 +4,7 @@
     "description": "SEO Analytics Server",
     "main": "index.js",
     "scripts": {
+        "build": "npm --prefix ../client ci && npm --prefix ../client run build",
         "start": "node index.js",
         "dev": "nodemon index.js",
         "test": "node --test",
