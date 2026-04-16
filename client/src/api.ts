@@ -4,7 +4,9 @@
     AuditJob,
     AuditResult,
     AuthConfigResponse,
+    GoogleConnectionStatus,
     AuthSessionResponse,
+    GoogleResourcesResponse,
     GoogleLoginResponse,
     HistoryItem,
     KeywordData,
@@ -106,8 +108,22 @@ export const api = {
 
     checkHealth: () => request<{ status: string; authenticated: boolean }>('/health'),
 
+    getGoogleConnectionStatus: () => request<GoogleConnectionStatus>('/api/google/connection'),
+
+    getGoogleResources: (projectId?: string | null) => request<GoogleResourcesResponse>(`/api/google/resources${createQuery({
+        projectId: projectId || undefined,
+    })}`),
+
     loginGoogle: () => {
         window.location.href = getApiUrl('/auth/google/login');
+    },
+
+    connectProjectGoogle: (projectId?: string | null, redirectPath = '/projects') => {
+        const query = createQuery({
+            projectId: projectId || undefined,
+            redirectPath,
+        });
+        window.location.href = getApiUrl(`/api/google/connect${query}`);
     },
 
     getProjects: (includeInactive = false) => request<Project[]>(`/api/projects${createQuery({ includeInactive: includeInactive ? 'true' : undefined })}`),
@@ -122,7 +138,11 @@ export const api = {
         body: JSON.stringify(project),
     }),
 
-    archiveProject: (projectId: string) => request<Project>(`/api/projects/${encodeURIComponent(projectId)}`, {
+    archiveProject: (projectId: string) => request<Project>(`/api/projects/${encodeURIComponent(projectId)}${createQuery({ mode: 'archive' })}`, {
+        method: 'DELETE',
+    }),
+
+    deleteProject: (projectId: string) => request<Project>(`/api/projects/${encodeURIComponent(projectId)}`, {
         method: 'DELETE',
     }),
 

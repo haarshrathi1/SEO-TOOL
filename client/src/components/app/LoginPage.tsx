@@ -170,8 +170,8 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
                             onClick={() => setAuthMode('register')}
                             className={`rounded-2xl border px-4 py-4 text-left transition ${authMode === 'register' ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'}`}
                         >
-                            <p className="text-sm font-semibold">Register for keyword research</p>
-                            <p className="mt-1 text-xs leading-relaxed text-slate-500">Create a self-serve keyword workspace. Dashboard, audit, and project access still stay admin-assigned.</p>
+                            <p className="text-sm font-semibold">Register your workspace</p>
+                            <p className="mt-1 text-xs leading-relaxed text-slate-500">Create your own account, connect your Google properties, and set up your own projects without admin help.</p>
                         </button>
                     </div>
 
@@ -185,7 +185,7 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
 
                     <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-xs leading-relaxed text-slate-500">
                         {authMode === 'register'
-                            ? 'Registration creates a keyword-only viewer account with Google Ads enrichment applied automatically, subject to daily and weekly usage limits.'
+                            ? 'Registration creates a self-serve workspace with project setup, dashboard, audit, and keyword access enabled by default.'
                             : 'Sign in uses the access already stored for your Google email. Admin and viewer permissions are still managed on the server.'}
                     </div>
                 </div>

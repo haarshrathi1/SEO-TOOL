@@ -6,6 +6,7 @@ const utils = require('./utils');
 const history = require('./history');
 const sheets = require('./sheets');
 const { fetchSitemapUrls } = require('./sitemaps');
+const auth = require('./auth');
 
 const { getProject } = require('./projects');
 
@@ -18,17 +19,22 @@ const analyzeSite = async (req, res) => {
             return res.status(404).json({ error: 'Project not found' });
         }
 
-        const siteUrl = project.url;
+        const authClient = await auth.getProjectAuthClient(project);
+        if (!authClient) {
+            return res.status(401).json({ error: 'Google service not authenticated for this project. Connect Google from the project setup page first.' });
+        }
+
+        const siteUrl = project.gscSiteUrl || project.url;
         const ga4PropertyId = project.ga4PropertyId;
 
         // 1. GSC Performance (for Lists)
         console.log('Fetching GSC Performance (Query/Page)...');
-        const performance = await gsc.getPerformance(siteUrl);
+        const performance = await gsc.getPerformance(siteUrl, { authClient });
         const rows = performance.rows || [];
 
         // 1b. GSC Totals (Date dimension - Authoritative)
         console.log('Fetching GSC Site Totals...');
-        const siteTotals = await gsc.getSiteTotals(siteUrl);
+        const siteTotals = await gsc.getSiteTotals(siteUrl, { authClient });
 
         // Use authoritative totals for main metrics
         const impressions = siteTotals.impressions;
@@ -104,7 +110,7 @@ const analyzeSite = async (req, res) => {
             for (let index = 0; index < urlsToInspect.length; index += batchSize) {
                 const batch = urlsToInspect.slice(index, index + batchSize);
                 const batchIssues = await Promise.all(batch.map(async (url) => {
-                    const result = await gsc.inspectUrl(siteUrl, url);
+                    const result = await gsc.inspectUrl(siteUrl, url, { authClient });
                     const idxResult = result?.inspectionResult?.indexStatusResult;
                     const hasIssue = idxResult?.verdict !== 'PASS'
                         || idxResult?.robotsTxtState === 'BLOCKED'
@@ -137,7 +143,7 @@ const analyzeSite = async (req, res) => {
         console.log('Fetching GA4 Data...');
         let gaResult = { engagementRate: '0', averageSessionDuration: '0' };
         try {
-            gaResult = await ga4.getGA4Data(ga4PropertyId);
+            gaResult = await ga4.getGA4Data(ga4PropertyId, { authClient });
         } catch (e) {
             console.error('GA4 Error:', e.message);
         }
@@ -319,7 +325,7 @@ const analyzeSite = async (req, res) => {
         let spreadsheetUrl = null;
         if (project.spreadsheetId) {
             console.log('Exporting to Google Sheets...');
-            sheetStatus = await sheets.appendRow(project.spreadsheetId, project.sheetGid, finalResponse.report);
+            sheetStatus = await sheets.appendRow(project.spreadsheetId, project.sheetGid, finalResponse.report, { authClient });
             spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${project.spreadsheetId}/edit#gid=${project.sheetGid}`;
         }
 
@@ -341,7 +347,7 @@ const analyzeSite = async (req, res) => {
         if (statusCode === 403 || String(e?.message || '').includes('403')) {
             if (errorReason === 'insufficientPermissions' || errorReason === 'PERMISSION_DENIED') {
                 res.status(403).json({
-                    error: 'Google account is authenticated but lacks required Search Console/GA4 permissions. Re-auth via /auth/google/login with the correct Google account and ensure it has access to the selected properties.'
+                    error: 'Google account is authenticated but lacks required Search Console/GA4 permissions. Reconnect the correct Google account from the project setup page and ensure it has access to the selected properties.'
                 });
                 return;
             }

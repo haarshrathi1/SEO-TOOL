@@ -84,7 +84,7 @@ export default function App() {
             <Suspense fallback={<FullScreenLoader />}>
                 {route === '/keywords' && <KeywordResearch user={user} />}
                 {route === '/dashboard' && canAccessDashboardSurface(user) && <Dashboard user={user} />}
-                {route === '/projects' && user.role === 'admin' && <ProjectsPage />}
+                {route === '/projects' && <ProjectsPage user={user} />}
             </Suspense>
         </div>
     );

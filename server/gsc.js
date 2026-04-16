@@ -3,6 +3,12 @@ const { getAuthClient } = require('./auth');
 const axios = require('axios'); // For fetching sitemap XML
 const { getWeeklyDateRange } = require('./utils');
 
+function resolveAuthClient(authClient) {
+    const resolved = authClient || getAuthClient();
+    if (!resolved) throw new Error('Not authenticated');
+    return resolved;
+}
+
 const parseSitemap = async (url) => {
     try {
         const response = await axios.get(url);
@@ -43,8 +49,7 @@ function computeSiteTotals(rows = []) {
 }
 
 const getPerformance = async (siteUrl, options = {}) => {
-    const auth = getAuthClient();
-    if (!auth) throw new Error('Not authenticated');
+    const auth = resolveAuthClient(options.authClient);
     const searchconsole = google.searchconsole({ version: 'v1', auth });
 
     // Use provided range or fallback to weekly default
@@ -100,9 +105,8 @@ const getPerformance = async (siteUrl, options = {}) => {
     };
 };
 
-const getSiteTotals = async (siteUrl) => {
-    const auth = getAuthClient();
-    if (!auth) throw new Error('Not authenticated');
+const getSiteTotals = async (siteUrl, options = {}) => {
+    const auth = resolveAuthClient(options.authClient);
     const searchconsole = google.searchconsole({ version: 'v1', auth });
 
     const { startDate, endDate } = getWeeklyDateRange();
@@ -121,9 +125,8 @@ const getSiteTotals = async (siteUrl) => {
     return computeSiteTotals(res.data.rows || []);
 };
 
-const inspectUrl = async (siteUrl, inspectionUrl) => {
-    const auth = getAuthClient();
-    if (!auth) throw new Error('Not authenticated');
+const inspectUrl = async (siteUrl, inspectionUrl, options = {}) => {
+    const auth = resolveAuthClient(options.authClient);
     const searchconsole = google.searchconsole({ version: 'v1', auth });
 
     try {
@@ -140,9 +143,8 @@ const inspectUrl = async (siteUrl, inspectionUrl) => {
     }
 };
 
-const getSitemaps = async (siteUrl) => {
-    const auth = getAuthClient();
-    if (!auth) throw new Error('Not authenticated');
+const getSitemaps = async (siteUrl, options = {}) => {
+    const auth = resolveAuthClient(options.authClient);
     const searchconsole = google.searchconsole({ version: 'v1', auth });
 
     const res = await searchconsole.sitemaps.list({ siteUrl });

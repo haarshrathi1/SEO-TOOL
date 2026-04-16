@@ -22,6 +22,7 @@ const DEV_ADMIN_BYPASS = /^(1|true|yes|on)$/i.test(process.env.DEV_ADMIN_BYPASS 
 const ALLOWED_ACCESS = new Set(['keywords', 'dashboard', 'audit']);
 const ALLOWED_FEATURES = new Set(['keyword_ads']);
 const DEFAULT_VIEWER_ACCESS = ['keywords'];
+const DEFAULT_SELF_SERVICE_ACCESS = ['keywords', 'dashboard', 'audit'];
 const DEFAULT_VIEWER_FEATURES = [];
 const SELF_SERVICE_REGISTRATION_SOURCE = 'google_self_service';
 
@@ -408,7 +409,7 @@ router.post('/register', async (req, res) => {
         if (!viewer) {
             viewer = await Viewer.create({
                 email,
-                access: normalizeAccess(DEFAULT_VIEWER_ACCESS),
+                access: normalizeAccess(DEFAULT_SELF_SERVICE_ACCESS),
                 features: normalizeFeatures(DEFAULT_VIEWER_FEATURES),
                 projectIds: [],
                 registrationSource: SELF_SERVICE_REGISTRATION_SOURCE,
@@ -421,7 +422,9 @@ router.post('/register', async (req, res) => {
             });
             viewer = typeof viewer.toObject === 'function' ? viewer.toObject() : viewer;
         } else {
-            viewer = await upsertViewerLoginProfile(email, { name, picture });
+            viewer = await upsertViewerLoginProfile(email, { name, picture }, {
+                access: DEFAULT_SELF_SERVICE_ACCESS,
+            });
         }
 
         const user = getPublicViewer(viewer, { name, picture });
@@ -558,6 +561,7 @@ module.exports = {
         normalizeProjectIds,
         normalizeAccess,
         normalizeFeatures,
+        DEFAULT_SELF_SERVICE_ACCESS,
         resolveProjectId,
         getRequiredJwtSecret,
         shouldBypassAdmin,

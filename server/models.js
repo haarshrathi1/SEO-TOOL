@@ -42,6 +42,18 @@ const oauthTokenSchema = new Schema({
     updatedAt: { type: Date, default: Date.now },
 }, { versionKey: false });
 
+const userGoogleConnectionSchema = new Schema({
+    ownerEmail: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
+    provider: { type: String, default: 'google-user-oauth', index: true },
+    googleEmail: { type: String, default: '', lowercase: true, trim: true },
+    displayName: { type: String, default: '' },
+    picture: { type: String, default: '' },
+    scope: { type: String, default: '' },
+    tokens: { type: Schema.Types.Mixed, required: true },
+    connectedAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now },
+}, { versionKey: false });
+
 const adminUserSchema = new Schema({
     email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
     createdAt: { type: Date, default: Date.now },
@@ -52,6 +64,9 @@ const projectSchema = new Schema({
     name: { type: String, required: true, trim: true },
     domain: { type: String, required: true, trim: true },
     url: { type: String, required: true, trim: true },
+    ownerEmail: { type: String, default: '', lowercase: true, trim: true, index: true },
+    googleConnectionEmail: { type: String, default: '', lowercase: true, trim: true },
+    gscSiteUrl: { type: String, default: '', trim: true },
     ga4PropertyId: { type: String, default: '' },
     spreadsheetId: { type: String, default: '' },
     sheetGid: { type: Number, default: 0 },
@@ -165,6 +180,7 @@ const AuditHistory = mongoose.models.AuditHistory || mongoose.model('AuditHistor
 const KeywordResearch = mongoose.models.KeywordResearch || mongoose.model('KeywordResearch', keywordResearchSchema);
 const Viewer = mongoose.models.Viewer || mongoose.model('Viewer', viewerSchema);
 const OauthToken = mongoose.models.OauthToken || mongoose.model('OauthToken', oauthTokenSchema);
+const UserGoogleConnection = mongoose.models.UserGoogleConnection || mongoose.model('UserGoogleConnection', userGoogleConnectionSchema);
 const AdminUser = mongoose.models.AdminUser || mongoose.model('AdminUser', adminUserSchema);
 const Project = mongoose.models.Project || mongoose.model('Project', projectSchema);
 const AuditJob = mongoose.models.AuditJob || mongoose.model('AuditJob', auditJobSchema);
@@ -178,6 +194,7 @@ module.exports = {
     KeywordResearch,
     Viewer,
     OauthToken,
+    UserGoogleConnection,
     AdminUser,
     Project,
     AuditJob,

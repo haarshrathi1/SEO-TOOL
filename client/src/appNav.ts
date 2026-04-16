@@ -45,7 +45,7 @@ export function canAccessRoute(user: AuthUser, path: string) {
     }
 
     if (normalized === '/projects') {
-        return user.role === 'admin';
+        return true;
     }
 
     return false;
@@ -54,6 +54,10 @@ export function canAccessRoute(user: AuthUser, path: string) {
 export function getDefaultRouteForUser(user: AuthUser) {
     if (user.role === 'admin') {
         return '/dashboard';
+    }
+
+    if (!Array.isArray(user.projectIds) || user.projectIds.length === 0) {
+        return '/projects';
     }
 
     if (canAccessDashboardSurface(user)) {
@@ -85,6 +89,8 @@ export function getNavItemsForUser(user: AuthUser): NavItem[] {
     if (canAccessKeywords(user)) {
         items.push({ path: '/keywords', label: 'Keywords', icon: Search });
     }
+
+    items.push({ path: '/projects', label: 'Projects', icon: FolderCog });
 
     return items;
 }

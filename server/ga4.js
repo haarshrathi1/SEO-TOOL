@@ -2,6 +2,12 @@ const { google } = require('googleapis');
 const { getAuthClient } = require('./auth');
 const { getWeeklyDateRange } = require('./utils');
 
+function resolveAuthClient(authClient) {
+    const resolved = authClient || getAuthClient();
+    if (!resolved) throw new Error('Not authenticated');
+    return resolved;
+}
+
 function normalizePagePathKey(value) {
     if (typeof value !== 'string' || !value.trim()) {
         return '';
@@ -17,9 +23,8 @@ function normalizePagePathKey(value) {
     }
 }
 
-const getGA4Data = async (propertyId) => {
-    const auth = getAuthClient();
-    if (!auth) throw new Error('Not authenticated');
+const getGA4Data = async (propertyId, options = {}) => {
+    const auth = resolveAuthClient(options.authClient);
 
     const analyticsData = google.analyticsdata({ version: 'v1beta', auth });
     const { startDate, endDate } = getWeeklyDateRange();
@@ -53,8 +58,7 @@ const getPageViewMap = async (propertyId, options = {}) => {
         return {};
     }
 
-    const auth = getAuthClient();
-    if (!auth) throw new Error('Not authenticated');
+    const auth = resolveAuthClient(options.authClient);
 
     const analyticsData = google.analyticsdata({ version: 'v1beta', auth });
     const { startDate, endDate } = options.startDate && options.endDate

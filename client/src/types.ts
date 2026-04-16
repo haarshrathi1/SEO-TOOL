@@ -62,6 +62,9 @@ export interface Project {
     name: string;
     domain: string;
     url: string;
+    ownerEmail: string;
+    googleConnectionEmail: string;
+    gscSiteUrl: string;
     ga4PropertyId: string;
     spreadsheetId: string;
     sheetGid: number;
@@ -103,6 +106,44 @@ export interface ViewerRecord {
 
 export interface AuthConfigResponse {
     googleClientId: string;
+}
+
+export interface GoogleConnectionStatus {
+    connected: boolean;
+    ownerEmail: string;
+    googleEmail: string;
+    displayName: string;
+    picture: string;
+    scope: string;
+    connectedAt: string | null;
+    updatedAt: string | null;
+}
+
+export interface SearchConsoleSite {
+    siteUrl: string;
+    permissionLevel: string;
+    label: string;
+    type: 'domain' | 'url-prefix';
+}
+
+export interface Ga4PropertyOption {
+    propertyId: string;
+    propertyName: string;
+    displayName: string;
+    account: string;
+    propertyType: string;
+    parent: string;
+    label: string;
+}
+
+export interface GoogleResourcesResponse {
+    connection: GoogleConnectionStatus;
+    sites: SearchConsoleSite[];
+    properties: Ga4PropertyOption[];
+    recommendations: {
+        gscSiteUrl: string;
+        ga4PropertyId: string;
+    };
 }
 
 export interface AuthSessionResponse {

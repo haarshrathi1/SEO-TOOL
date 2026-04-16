@@ -109,6 +109,7 @@ app.get('/sitemap.xml', (req, res) => {
 
 app.use('/api/auth', userAuth.router);
 app.use('/auth/google', auth.router);
+app.use('/api/google', userAuth.requireAuth, auth.userRouter);
 
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', authenticated: !!auth.getAuthClient() });
@@ -215,39 +216,40 @@ app.get('/api/projects', userAuth.requireAuth, async (req, res) => {
     }
 });
 
-app.post('/api/projects', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
+app.post('/api/projects', userAuth.requireAuth, async (req, res) => {
     try {
-        const project = await projects.createProject(req.body);
+        const project = await projects.createProject(req.body, req.user);
         res.status(201).json(project);
     } catch (e) {
-        res.status(400).json({ error: e.message });
-    }
-});
-
-app.put('/api/projects/:projectId', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
-    try {
-        const project = await projects.updateProject(req.params.projectId, req.body);
-        res.json(project);
-    } catch (e) {
-        const status = e.message === 'Project not found' ? 404 : 400;
+        const status = e.message === 'Project access denied' ? 403 : 400;
         res.status(status).json({ error: e.message });
     }
 });
 
-app.delete('/api/projects/:projectId', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
+app.put('/api/projects/:projectId', userAuth.requireAuth, async (req, res) => {
     try {
-        const project = await projects.archiveProject(req.params.projectId);
+        const project = await projects.updateProject(req.params.projectId, req.body, req.user);
         res.json(project);
     } catch (e) {
-        const status = e.message === 'Project not found' ? 404 : 400;
+        const status = e.message === 'Project not found' ? 404 : e.message === 'Project access denied' ? 403 : 400;
         res.status(status).json({ error: e.message });
     }
 });
 
-app.get('/api/analyze', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
-    if (!auth.getAuthClient()) {
-        return res.status(401).json({ error: 'Google service not authenticated. Please visit /auth/google/login' });
+app.delete('/api/projects/:projectId', userAuth.requireAuth, async (req, res) => {
+    try {
+        const mode = req.query.mode === 'archive' ? 'archive' : 'delete';
+        const project = mode === 'archive'
+            ? await projects.archiveProject(req.params.projectId, req.user)
+            : await projects.deleteProject(req.params.projectId, req.user);
+        res.json(project);
+    } catch (e) {
+        const status = e.message === 'Project not found' ? 404 : e.message === 'Project access denied' ? 403 : 400;
+        res.status(status).json({ error: e.message });
     }
+});
+
+app.get('/api/analyze', userAuth.requireAuth, userAuth.requireAccess('dashboard'), async (req, res) => {
     return analyze.analyzeSite(req, res);
 });
 
@@ -321,20 +323,25 @@ app.get('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAccess('audit')
     }
 });
 
-app.post('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
+app.post('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAccess('audit'), async (req, res) => {
     try {
-        if (!auth.getAuthClient()) {
-            return res.status(401).json({ error: 'Google service not authenticated.' });
-        }
-
         if (!req.body.projectId) {
             return res.status(400).json({ error: 'Project ID is required' });
+        }
+
+        const project = await projects.getProject(req.body.projectId, req.user);
+        if (!project) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        if (!await auth.hasProjectAuth(project)) {
+            return res.status(401).json({ error: 'Google service not authenticated for this project. Connect Google from the project setup page first.' });
         }
 
         const job = await auditJobs.createAuditJob(req.body.projectId, req.user);
         return res.status(202).json(job);
     } catch (e) {
-        const status = e.message === 'Project not found' ? 404 : 400;
+        const status = e.message === 'Project not found' ? 404 : e.message === 'Project access denied' ? 403 : 400;
         return res.status(status).json({ error: e.message });
     }
 });
@@ -369,20 +376,25 @@ app.get('/api/audit/jobs/:jobId/result', userAuth.requireAuth, userAuth.requireA
     }
 });
 
-app.post('/api/audit', userAuth.requireAuth, userAuth.requireAdmin, async (req, res) => {
+app.post('/api/audit', userAuth.requireAuth, userAuth.requireAccess('audit'), async (req, res) => {
     try {
-        if (!auth.getAuthClient()) {
-            return res.status(401).json({ error: 'Google service not authenticated.' });
-        }
-
         if (!req.body.projectId) {
             return res.status(400).json({ error: 'Project ID is required' });
+        }
+
+        const project = await projects.getProject(req.body.projectId, req.user);
+        if (!project) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        if (!await auth.hasProjectAuth(project)) {
+            return res.status(401).json({ error: 'Google service not authenticated for this project. Connect Google from the project setup page first.' });
         }
 
         const job = await auditJobs.createAuditJob(req.body.projectId, req.user);
         return res.status(202).json(job);
     } catch (e) {
-        const status = e.message === 'Project not found' ? 404 : 400;
+        const status = e.message === 'Project not found' ? 404 : e.message === 'Project access denied' ? 403 : 400;
         return res.status(status).json({ error: e.message });
     }
 });

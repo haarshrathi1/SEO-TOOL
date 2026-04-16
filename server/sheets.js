@@ -1,14 +1,14 @@
 const { google } = require('googleapis');
 const { getAuthClient } = require('./auth');
 
-const getSheetsClient = () => {
-    const auth = getAuthClient();
+const getSheetsClient = (authClient = null) => {
+    const auth = authClient || getAuthClient();
     if (!auth) throw new Error('Not authenticated for Sheets');
     return google.sheets({ version: 'v4', auth });
 };
 
-const getSheetNameByGid = async (spreadsheetId, gid) => {
-    const sheets = getSheetsClient();
+const getSheetNameByGid = async (spreadsheetId, gid, authClient = null) => {
+    const sheets = getSheetsClient(authClient);
     const res = await sheets.spreadsheets.get({
         spreadsheetId,
         fields: 'sheets(properties(sheetId,title))'
@@ -17,8 +17,8 @@ const getSheetNameByGid = async (spreadsheetId, gid) => {
     return sheet ? sheet.properties.title : null;
 };
 
-const ensureHeader = async (spreadsheetId, sheetName, headers) => {
-    const sheets = getSheetsClient();
+const ensureHeader = async (spreadsheetId, sheetName, headers, authClient = null) => {
+    const sheets = getSheetsClient(authClient);
     const range = `'${sheetName}'!A1:Z1`;
 
     // Check if first row exists
@@ -38,19 +38,20 @@ const ensureHeader = async (spreadsheetId, sheetName, headers) => {
     }
 };
 
-const appendRow = async (spreadsheetId, gid, rowData) => {
+const appendRow = async (spreadsheetId, gid, rowData, options = {}) => {
     try {
-        const sheetName = await getSheetNameByGid(spreadsheetId, gid);
+        const authClient = options.authClient || null;
+        const sheetName = await getSheetNameByGid(spreadsheetId, gid, authClient);
         if (!sheetName) throw new Error(`Sheet with GID ${gid} not found`);
 
         const headers = Object.keys(rowData);
         const values = Object.values(rowData);
 
         // Ensure headers exist
-        await ensureHeader(spreadsheetId, sheetName, headers);
+        await ensureHeader(spreadsheetId, sheetName, headers, authClient);
 
         // Append Row
-        const sheets = getSheetsClient();
+        const sheets = getSheetsClient(authClient);
         console.log(`Appending row to ${sheetName}...`);
 
         await sheets.spreadsheets.values.append({

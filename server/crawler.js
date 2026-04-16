@@ -211,13 +211,15 @@ function annotateCanonicalSignals(results) {
 
 function getCrawlOptions(options) {
     if (typeof options === 'number') {
-        return { maxPages: options, onProgress: null, ga4PropertyId: '' };
+        return { maxPages: options, onProgress: null, ga4PropertyId: '', gscSiteUrl: '', authClient: null };
     }
 
     return {
         maxPages: Number(options?.maxPages || 200),
         onProgress: typeof options?.onProgress === 'function' ? options.onProgress : null,
         ga4PropertyId: typeof options?.ga4PropertyId === 'string' ? options.ga4PropertyId.trim() : '',
+        gscSiteUrl: typeof options?.gscSiteUrl === 'string' ? options.gscSiteUrl.trim() : '',
+        authClient: options?.authClient || null,
     };
 }
 
@@ -237,9 +239,9 @@ async function reportProgress(onProgress, payload) {
 }
 
 const crawlSite = async (startUrl, options = {}) => {
-    const { maxPages, onProgress, ga4PropertyId } = getCrawlOptions(options);
+    const { maxPages, onProgress, ga4PropertyId, gscSiteUrl: selectedGscSiteUrl, authClient } = getCrawlOptions(options);
     console.log('Starting GSC Index Audit + Live Crawl...');
-    const auth = getAuthClient();
+    const auth = authClient || getAuthClient();
     if (!auth) {
         throw new Error('Google Auth missing. Please login again.');
     }
@@ -265,24 +267,26 @@ const crawlSite = async (startUrl, options = {}) => {
         message: `Preparing ${urlsToAudit.length} URLs for crawling`,
     });
 
-    let gscSiteUrl = startUrl;
-    try {
-        const searchconsole = google.searchconsole({ version: 'v1', auth });
-        const sitesRes = await searchconsole.sites.list({});
-        const sites = sitesRes.data.siteEntry || [];
+    let gscSiteUrl = selectedGscSiteUrl || startUrl;
+    if (!selectedGscSiteUrl) {
+        try {
+            const searchconsole = google.searchconsole({ version: 'v1', auth });
+            const sitesRes = await searchconsole.sites.list({});
+            const sites = sitesRes.data.siteEntry || [];
 
-        const exactMatch = sites.find((site) => site.siteUrl === startUrl || site.siteUrl === `${startUrl}/`);
-        const domainMatch = sites.find((site) => site.siteUrl.includes('sc-domain:') && startUrl.includes(site.siteUrl.replace('sc-domain:', '')));
+            const exactMatch = sites.find((site) => site.siteUrl === startUrl || site.siteUrl === `${startUrl}/`);
+            const domainMatch = sites.find((site) => site.siteUrl.includes('sc-domain:') && startUrl.includes(site.siteUrl.replace('sc-domain:', '')));
 
-        if (exactMatch) {
-            gscSiteUrl = exactMatch.siteUrl;
-        } else if (domainMatch) {
-            gscSiteUrl = domainMatch.siteUrl;
-        } else if (!gscSiteUrl.endsWith('/') && !gscSiteUrl.includes('sc-domain:')) {
-            gscSiteUrl += '/';
+            if (exactMatch) {
+                gscSiteUrl = exactMatch.siteUrl;
+            } else if (domainMatch) {
+                gscSiteUrl = domainMatch.siteUrl;
+            } else if (!gscSiteUrl.endsWith('/') && !gscSiteUrl.includes('sc-domain:')) {
+                gscSiteUrl += '/';
+            }
+        } catch (e) {
+            console.error('Failed to list sites:', e.message);
         }
-    } catch (e) {
-        console.error('Failed to list sites:', e.message);
     }
 
     const end = new Date();
@@ -296,6 +300,7 @@ const crawlSite = async (startUrl, options = {}) => {
             startDate: ymd(start),
             endDate: ymd(end),
             dimensions: ['page'],
+            authClient: auth,
         });
 
         (perfData.rows || []).forEach((row) => {
@@ -315,6 +320,7 @@ const crawlSite = async (startUrl, options = {}) => {
             pageViewsByPath = await ga4.getPageViewMap(ga4PropertyId, {
                 startDate: ymd(start),
                 endDate: ymd(end),
+                authClient: auth,
             });
         } catch (e) {
             console.warn('Could not fetch page-level GA4 data:', e.message);
@@ -336,7 +342,7 @@ const crawlSite = async (startUrl, options = {}) => {
             console.log(`Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(urlsToAudit.length / batchSize)} (${batch.length} URLs)...`);
 
             await Promise.all(batch.map(async (url) => {
-                const inspectPromise = gsc.inspectUrl(gscSiteUrl, url).then((res) => {
+                const inspectPromise = gsc.inspectUrl(gscSiteUrl, url, { authClient: auth }).then((res) => {
                     if (res.error) return { error: res.error };
                     return res.inspectionResult || {};
                 });

@@ -2,6 +2,7 @@ const { AuditJob } = require('./models');
 const auditHistory = require('./auditHistory');
 const crawler = require('./crawler');
 const { getProject } = require('./projects');
+const auth = require('./auth');
 
 const AUDIT_WORKER_ID = `audit-worker:${process.pid}`;
 const DEFAULT_LEASE_MS = 5 * 60 * 1000;
@@ -190,6 +191,10 @@ async function runAuditJob(jobRecord) {
             ...latestProgress,
             message: `Preparing crawl for ${project.name}`,
         };
+        const authClient = await auth.getProjectAuthClient(project);
+        if (!authClient) {
+            throw new Error('Google service not authenticated for this project. Connect Google from the project setup page first.');
+        }
 
         await AuditJob.findOneAndUpdate(
             { _id: jobId, leaseOwner: AUDIT_WORKER_ID },
@@ -205,6 +210,8 @@ async function runAuditJob(jobRecord) {
         const results = await crawler.crawlSite(project.url, {
             maxPages: project.auditMaxPages || 200,
             ga4PropertyId: project.ga4PropertyId || '',
+            gscSiteUrl: project.gscSiteUrl || project.url,
+            authClient,
             onProgress: async (progress) => {
                 latestProgress = {
                     stage: progress.stage,

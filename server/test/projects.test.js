@@ -48,26 +48,46 @@ test('buildProjectPayload normalizes domain hostnames from URL-like domain input
 test('buildListProjectsQuery limits viewers to active assigned projects', () => {
     assert.deepEqual(
         __internal.buildListProjectsQuery(
-            { role: 'viewer', projectIds: ['laserlift', 'fleetflow'] },
+            { role: 'viewer', email: 'owner@example.com', projectIds: ['laserlift', 'fleetflow'] },
             { includeInactive: true }
         ),
         {
             isActive: true,
-            id: { $in: ['laserlift', 'fleetflow'] },
+            $or: [
+                { id: { $in: ['laserlift', 'fleetflow'] } },
+                { ownerEmail: 'owner@example.com' },
+            ],
         }
     );
 });
 
-test('buildGetProjectQuery rejects viewer access outside assigned projects', () => {
-    assert.equal(
-        __internal.buildGetProjectQuery('secret-project', { role: 'viewer', projectIds: ['laserlift'] }),
-        null
+test('buildGetProjectQuery scopes viewer access to assigned or owned projects', () => {
+    assert.deepEqual(
+        __internal.buildGetProjectQuery('secret-project', { role: 'viewer', email: 'owner@example.com', projectIds: ['laserlift'] }),
+        {
+            id: 'secret-project',
+            $or: [
+                { id: { $in: ['laserlift'] } },
+                { ownerEmail: 'owner@example.com' },
+            ],
+        }
     );
 });
 
 test('buildGetProjectQuery allows a viewer to request an assigned project', () => {
     assert.deepEqual(
-        __internal.buildGetProjectQuery('laserlift', { role: 'viewer', projectIds: ['laserlift'] }),
-        { id: 'laserlift' }
+        __internal.buildGetProjectQuery('laserlift', { role: 'viewer', email: 'owner@example.com', projectIds: ['laserlift'] }),
+        {
+            id: 'laserlift',
+            $or: [
+                { id: { $in: ['laserlift'] } },
+                { ownerEmail: 'owner@example.com' },
+            ],
+        }
     );
+});
+
+test('normalizeSearchConsoleSiteUrl accepts domain properties', async () => {
+    const property = await __internal.normalizeSearchConsoleSiteUrl('sc-domain:Example.com', 'https://example.com/');
+    assert.equal(property, 'sc-domain:example.com');
 });

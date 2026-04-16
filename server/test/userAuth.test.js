@@ -131,6 +131,13 @@ test('normalizeFeatures only keeps supported premium flags', () => {
     assert.deepEqual(__internal.normalizeFeatures(null), []);
 });
 
+test('self-service registration defaults include dashboard and audit access', () => {
+    assert.deepEqual(
+        __internal.normalizeAccess(__internal.DEFAULT_SELF_SERVICE_ACCESS),
+        ['keywords', 'dashboard', 'audit'],
+    );
+});
+
 
 test('resolveLoginRole keeps real viewers as viewers even with local dev bypass', () => {
     assert.equal(

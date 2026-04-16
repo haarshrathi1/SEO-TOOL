@@ -110,7 +110,7 @@ export default function Dashboard({ user }: DashboardProps) {
     const canViewDashboard = canAccessDashboard(user);
     const canViewAudit = canAccessAudit(user);
     const canViewKeywords = canAccessKeywords(user);
-    const canRunDashboardActions = user.role === 'admin';
+    const canRunDashboardActions = canViewDashboard;
     const canRequestIndexing = user.role === 'admin';
     const [projects, setProjects] = useState<Project[]>([]);
     const [selectedProjectId, setSelectedProjectId] = useState<string>('');
@@ -411,7 +411,7 @@ export default function Dashboard({ user }: DashboardProps) {
         ? sortedProjectHistory.length > 0
             ? 'Choose a saved report from history or run a fresh analysis to refresh this project.'
             : 'This project does not have a saved dashboard snapshot yet. Run the first analysis to populate it.'
-        : 'This project does not have a saved dashboard snapshot yet. Ask an admin to run the first analysis.';
+        : 'This project does not have a saved dashboard snapshot yet. Connect Google on the Projects page, then run the first analysis.';
 
     const handleRequestIndexing = async (url: string) => {
         if (!canRequestIndexing) {
@@ -535,7 +535,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
             {activeTab === 'audit' && selectedProjectId && (
                 <main className="max-w-7xl mx-auto mt-8 px-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                    <Audit key={selectedProjectId} projectId={selectedProjectId} canRunAudit={user.role === 'admin' && canViewAudit} canRequestIndexing={canRequestIndexing} />
+                    <Audit key={selectedProjectId} projectId={selectedProjectId} canRunAudit={canViewAudit} canRequestIndexing={canRequestIndexing} />
                 </main>
             )}
 
