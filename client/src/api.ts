@@ -30,7 +30,8 @@ export const getApiUrl = (endpoint: string) => `${API_BASE_URL}${endpoint}`;
 
 async function handleResponse<T>(res: Response): Promise<T> {
     if (res.status === 401) {
-        throw new Error('Unauthorized');
+        const json = await res.json().catch(() => ({} as Record<string, string>));
+        throw new Error(json.error || json.message || 'Unauthorized');
     }
 
     if (res.status === 403) {
@@ -110,8 +111,20 @@ export const api = {
 
     getGoogleConnectionStatus: () => request<GoogleConnectionStatus>('/api/google/connection'),
 
-    getGoogleResources: (projectId?: string | null) => request<GoogleResourcesResponse>(`/api/google/resources${createQuery({
-        projectId: projectId || undefined,
+    getGoogleResources: (options: {
+        projectId?: string | null;
+        name?: string | null;
+        domain?: string | null;
+        url?: string | null;
+        gscSiteUrl?: string | null;
+        ga4PropertyId?: string | null;
+    } = {}) => request<GoogleResourcesResponse>(`/api/google/resources${createQuery({
+        projectId: options.projectId || undefined,
+        name: options.name || undefined,
+        domain: options.domain || undefined,
+        url: options.url || undefined,
+        gscSiteUrl: options.gscSiteUrl || undefined,
+        ga4PropertyId: options.ga4PropertyId || undefined,
     })}`),
 
     loginGoogle: () => {

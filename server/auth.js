@@ -162,6 +162,79 @@ function sortByDisplayName(items, key = 'label') {
     return [...items].sort((left, right) => String(left[key] || '').localeCompare(String(right[key] || '')));
 }
 
+function normalizeComparisonText(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
+        .replace(/\s+/g, ' ');
+}
+
+function collapseComparisonText(value) {
+    return normalizeComparisonText(value).replace(/\s+/g, '');
+}
+
+function extractHostname(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) {
+        return '';
+    }
+
+    if (/^sc-domain:/i.test(raw)) {
+        return raw.replace(/^sc-domain:/i, '').trim().toLowerCase();
+    }
+
+    const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+    try {
+        return new URL(withProtocol).hostname.toLowerCase();
+    } catch {
+        return '';
+    }
+}
+
+function buildProjectRecommendationContext(input = {}, project = null) {
+    const name = typeof input.name === 'string' && input.name.trim()
+        ? input.name.trim()
+        : (project?.name || '');
+    const url = typeof input.url === 'string' && input.url.trim()
+        ? input.url.trim()
+        : (project?.url || '');
+    const gscSiteUrl = typeof input.gscSiteUrl === 'string' && input.gscSiteUrl.trim()
+        ? input.gscSiteUrl.trim()
+        : (project?.gscSiteUrl || '');
+    const ga4PropertyId = typeof input.ga4PropertyId === 'string' && input.ga4PropertyId.trim()
+        ? input.ga4PropertyId.trim()
+        : (project?.ga4PropertyId || '');
+    const explicitDomain = typeof input.domain === 'string' && input.domain.trim()
+        ? input.domain.trim().toLowerCase()
+        : '';
+    const urlHostname = extractHostname(url);
+    const gscHostname = extractHostname(gscSiteUrl);
+    const domain = explicitDomain || project?.domain || urlHostname || gscHostname || '';
+    const primaryHostname = urlHostname || gscHostname || domain;
+    const hostnameSegments = primaryHostname
+        .split('.')
+        .map((segment) => segment.trim().toLowerCase())
+        .filter(Boolean);
+    const primaryHostLabel = hostnameSegments[0] || '';
+    const rootDomainLabel = hostnameSegments.length >= 2 ? hostnameSegments[hostnameSegments.length - 2] : (hostnameSegments[0] || '');
+
+    return {
+        ...(project || {}),
+        name,
+        url,
+        domain,
+        gscSiteUrl,
+        ga4PropertyId,
+        primaryHostLabel,
+        rootDomainLabel,
+        nameKey: collapseComparisonText(name),
+        domainKey: collapseComparisonText(domain),
+        urlHostKey: collapseComparisonText(urlHostname),
+        gscHostKey: collapseComparisonText(gscHostname),
+    };
+}
+
 function suggestSearchConsoleSite(sites = [], project = null) {
     if (!project) {
         return '';
@@ -179,12 +252,37 @@ function suggestSearchConsoleSite(sites = [], project = null) {
 }
 
 function suggestGa4Property(properties = [], project = null) {
-    if (!project?.ga4PropertyId) {
+    if (!project) {
         return '';
     }
 
-    const target = String(project.ga4PropertyId).trim();
-    return properties.find((property) => property.propertyId === target)?.propertyId || '';
+    const target = String(project.ga4PropertyId || '').trim();
+    if (target) {
+        return properties.find((property) => property.propertyId === target)?.propertyId || '';
+    }
+
+    const scored = properties
+        .map((property) => {
+            const propertyKey = collapseComparisonText([
+                property.displayName,
+                property.account,
+                property.label,
+            ].filter(Boolean).join(' '));
+
+            let score = 0;
+            if (project.nameKey && propertyKey.includes(project.nameKey)) score += 60;
+            if (project.domainKey && propertyKey.includes(project.domainKey)) score += 55;
+            if (project.urlHostKey && propertyKey.includes(project.urlHostKey)) score += 45;
+            if (project.gscHostKey && propertyKey.includes(project.gscHostKey)) score += 45;
+            if (project.primaryHostLabel && propertyKey.includes(project.primaryHostLabel)) score += 35;
+            if (project.rootDomainLabel && propertyKey.includes(project.rootDomainLabel)) score += 8;
+
+            return { propertyId: property.propertyId, score };
+        })
+        .filter((entry) => entry.score >= 25)
+        .sort((left, right) => right.score - left.score || left.propertyId.localeCompare(right.propertyId));
+
+    return scored[0]?.propertyId || '';
 }
 
 async function initializeAuth() {
@@ -567,6 +665,14 @@ userRouter.get('/resources', async (req, res) => {
             return res.status(404).json({ error: 'Project not found' });
         }
 
+        const recommendationProject = buildProjectRecommendationContext({
+            name: req.query.name,
+            domain: req.query.domain,
+            url: req.query.url,
+            gscSiteUrl: req.query.gscSiteUrl,
+            ga4PropertyId: req.query.ga4PropertyId,
+        }, project);
+
         const [sites, properties, connectionStatus] = await Promise.all([
             listSearchConsoleSites(authClient),
             listGa4Properties(authClient),
@@ -578,8 +684,8 @@ userRouter.get('/resources', async (req, res) => {
             sites,
             properties,
             recommendations: {
-                gscSiteUrl: suggestSearchConsoleSite(sites, project),
-                ga4PropertyId: suggestGa4Property(properties, project),
+                gscSiteUrl: suggestSearchConsoleSite(sites, recommendationProject),
+                ga4PropertyId: suggestGa4Property(properties, recommendationProject),
             },
         });
     } catch (error) {
@@ -610,6 +716,12 @@ module.exports = {
         normalizeEmail,
         normalizePath,
         normalizeComparableSiteUrl,
+        normalizeComparisonText,
+        collapseComparisonText,
+        extractHostname,
+        buildProjectRecommendationContext,
         resolveProjectAuthSource,
+        suggestSearchConsoleSite,
+        suggestGa4Property,
     },
 };

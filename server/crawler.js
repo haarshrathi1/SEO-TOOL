@@ -8,6 +8,13 @@ const { summarizeStructuredData } = require('./structuredData');
 const { fetchSitemapUrls } = require('./sitemaps');
 
 const MAX_INTERNAL_LINK_TARGETS = 100;
+const CRAWL_BATCH_SIZE = Math.max(1, Number(process.env.CRAWL_BATCH_SIZE || 2));
+const CRAWL_NAVIGATION_TIMEOUT_MS = Math.max(10000, Number(process.env.CRAWL_NAVIGATION_TIMEOUT_MS || 45000));
+const CRAWL_CONTENT_WAIT_TIMEOUT_MS = Math.max(2000, Number(process.env.CRAWL_CONTENT_WAIT_TIMEOUT_MS || 6000));
+const CRAWL_SETTLE_DELAY_MS = Math.max(0, Number(process.env.CRAWL_SETTLE_DELAY_MS || 1200));
+const CRAWL_SPA_RETRY_ATTEMPTS = Math.max(1, Number(process.env.CRAWL_SPA_RETRY_ATTEMPTS || 4));
+const CRAWL_SPA_RETRY_INTERVAL_MS = Math.max(250, Number(process.env.CRAWL_SPA_RETRY_INTERVAL_MS || 1000));
+const CONTENT_READY_SELECTOR = 'body, title, h1, meta[name="description"], main, article';
 
 function normalizeComparableUrl(value) {
     if (typeof value !== 'string' || !value.trim()) {
@@ -223,6 +230,127 @@ function getCrawlOptions(options) {
     };
 }
 
+function isNavigationTimeoutError(error) {
+    const message = error?.message || '';
+    return message.includes('Navigation timeout') || message.includes('TimeoutError');
+}
+
+async function waitForAuditContent(page, options = {}) {
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs || CRAWL_CONTENT_WAIT_TIMEOUT_MS));
+    const settleDelayMs = Math.max(0, Number(options.settleDelayMs ?? CRAWL_SETTLE_DELAY_MS));
+    const bodyTimeout = Math.max(1500, Math.min(timeoutMs, 4000));
+
+    await page.waitForSelector('body', { timeout: bodyTimeout }).catch(() => {});
+    await page.waitForSelector(CONTENT_READY_SELECTOR, { timeout: timeoutMs }).catch(() => {});
+
+    if (settleDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, settleDelayMs));
+    }
+}
+
+async function navigatePageForAudit(page, url, options = {}) {
+    const logger = options.logger || console;
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs || CRAWL_NAVIGATION_TIMEOUT_MS));
+    const contentTimeoutMs = Math.max(1000, Number(options.contentTimeoutMs || CRAWL_CONTENT_WAIT_TIMEOUT_MS));
+    const settleDelayMs = Math.max(0, Number(options.settleDelayMs ?? CRAWL_SETTLE_DELAY_MS));
+
+    try {
+        const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+        await waitForAuditContent(page, { timeoutMs: contentTimeoutMs, settleDelayMs });
+        return response;
+    } catch (error) {
+        if (!isNavigationTimeoutError(error)) {
+            throw error;
+        }
+
+        const currentUrl = typeof page.url === 'function' ? page.url() : '';
+        if (!currentUrl || currentUrl === 'about:blank') {
+            throw error;
+        }
+
+        if (typeof logger.warn === 'function') {
+            logger.warn(`Navigation timed out for ${url}. Continuing with the partially loaded document.`);
+        }
+
+        await waitForAuditContent(page, {
+            timeoutMs: Math.min(contentTimeoutMs, 3000),
+            settleDelayMs,
+        });
+        return null;
+    }
+}
+
+async function extractAuditPageSnapshot(page) {
+    return page.evaluate(() => {
+        const title = document.title;
+        const description = document.querySelector('meta[name="description"]')?.content || '';
+        const h1s = Array.from(document.querySelectorAll('h1')).map((el) => el.textContent?.trim() || '').filter(Boolean);
+        const bodyText = document.body.innerText || '';
+        const wordCount = bodyText.split(/\s+/).filter(Boolean).length;
+        const links = Array.from(document.querySelectorAll('a'))
+            .map((anchor) => anchor.href)
+            .filter((href) => href.startsWith('http'));
+        const canonicals = Array.from(document.querySelectorAll('link[rel="canonical"]'))
+            .map((element) => element.getAttribute('href') || '')
+            .map((href) => (href ? new URL(href, document.baseURI).href : ''))
+            .filter(Boolean);
+        const jsonLdBlocks = Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
+            .map((element) => element.textContent || '')
+            .filter((text) => text.trim().length > 0);
+        const microdataTypes = Array.from(document.querySelectorAll('[itemscope][itemtype]'))
+            .map((element) => element.getAttribute('itemtype') || '')
+            .filter(Boolean);
+
+        return {
+            title,
+            description,
+            h1s,
+            bodyText,
+            wordCount,
+            links,
+            canonicals,
+            structuredData: { jsonLdBlocks, microdataTypes },
+        };
+    });
+}
+
+function shouldRetrySeoExtraction(snapshot = {}) {
+    const bodyText = typeof snapshot.bodyText === 'string' ? snapshot.bodyText : '';
+    const wordCount = Number(snapshot.wordCount || 0);
+    const hasLoadingShellText = /\bloading(?:\.{0,3})?\b/i.test(bodyText);
+    const h1Count = Array.isArray(snapshot.h1s) ? snapshot.h1s.length : 0;
+    const canonicalCount = Array.isArray(snapshot.canonicals) ? snapshot.canonicals.length : 0;
+    const title = typeof snapshot.title === 'string' ? snapshot.title.trim() : '';
+    const description = typeof snapshot.description === 'string' ? snapshot.description.trim() : '';
+    const hasNoSeoSignals = !title && !description && h1Count === 0 && canonicalCount === 0;
+    const thinShellContent = wordCount > 0 && wordCount < 120 && h1Count === 0 && (canonicalCount === 0 || hasLoadingShellText);
+
+    return hasLoadingShellText || hasNoSeoSignals || thinShellContent;
+}
+
+async function extractAuditPageData(page, options = {}) {
+    const attempts = Math.max(1, Number(options.attempts || CRAWL_SPA_RETRY_ATTEMPTS));
+    const retryIntervalMs = Math.max(0, Number(options.retryIntervalMs || CRAWL_SPA_RETRY_INTERVAL_MS));
+
+    let snapshot = await extractAuditPageSnapshot(page);
+    for (let attempt = 1; attempt < attempts && shouldRetrySeoExtraction(snapshot); attempt += 1) {
+        if (retryIntervalMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, retryIntervalMs));
+        }
+        snapshot = await extractAuditPageSnapshot(page);
+    }
+
+    return {
+        title: snapshot.title,
+        description: snapshot.description,
+        h1s: snapshot.h1s,
+        wordCount: snapshot.wordCount,
+        links: snapshot.links,
+        canonicals: snapshot.canonicals,
+        structuredData: snapshot.structuredData,
+    };
+}
+
 async function reportProgress(onProgress, payload) {
     if (!onProgress) {
         return;
@@ -336,7 +464,7 @@ const crawlSite = async (startUrl, options = {}) => {
     const siteOrigin = new URL(startUrl).origin;
 
     try {
-        const batchSize = 3;
+        const batchSize = CRAWL_BATCH_SIZE;
         for (let i = 0; i < urlsToAudit.length; i += batchSize) {
             const batch = urlsToAudit.slice(i, i + batchSize);
             console.log(`Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(urlsToAudit.length / batchSize)} (${batch.length} URLs)...`);
@@ -373,39 +501,10 @@ const crawlSite = async (startUrl, options = {}) => {
                             else req.continue();
                         });
 
-                        const response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
-                        await page.waitForSelector('title, h1, meta[name="description"]', { timeout: 4000 }).catch(() => {});
+                        const response = await navigatePageForAudit(page, url);
                         const finalUrl = page.url();
                         const redirectCount = response?.request()?.redirectChain()?.length || 0;
-                        const extracted = await page.evaluate(() => {
-                            const title = document.title;
-                            const description = document.querySelector('meta[name="description"]')?.content || '';
-                            const h1s = Array.from(document.querySelectorAll('h1')).map((el) => el.textContent?.trim() || '').filter(Boolean);
-                            const bodyText = document.body.innerText || '';
-                            const wordCount = bodyText.split(/\s+/).filter(Boolean).length;
-                            const links = Array.from(document.querySelectorAll('a'))
-                                .map((anchor) => anchor.href)
-                                .filter((href) => href.startsWith('http'));
-                            const canonicals = Array.from(document.querySelectorAll('link[rel=\"canonical\"]'))
-                                .map((element) => element.getAttribute('href') || '')
-                                .map((href) => (href ? new URL(href, document.baseURI).href : ''))
-                                .filter(Boolean);
-                            const jsonLdBlocks = Array.from(document.querySelectorAll('script[type=\"application/ld+json\"]'))
-                                .map((element) => element.textContent || '')
-                                .filter((text) => text.trim().length > 0);
-                            const microdataTypes = Array.from(document.querySelectorAll('[itemscope][itemtype]'))
-                                .map((element) => element.getAttribute('itemtype') || '')
-                                .filter(Boolean);
-                            return {
-                                title,
-                                description,
-                                h1s,
-                                wordCount,
-                                links,
-                                canonicals,
-                                structuredData: { jsonLdBlocks, microdataTypes },
-                            };
-                        });
+                        const extracted = await extractAuditPageData(page);
                         pageData = {
                             ...extracted,
                             finalUrl,
@@ -635,11 +734,17 @@ module.exports = {
     crawlSite,
     __internal: {
         annotateCanonicalSignals,
+        extractAuditPageData,
+        extractAuditPageSnapshot,
         findCycleNodes,
+        isNavigationTimeoutError,
+        navigatePageForAudit,
         normalizeComparableUrl,
         normalizeTrafficPathKey,
         isInternalUrl,
         sameOrigin,
+        shouldRetrySeoExtraction,
         uniqueNormalizedLinks,
+        waitForAuditContent,
     },
 };

@@ -3,6 +3,7 @@ import {
     Activity,
     AlertCircle,
     Download,
+    FolderCog,
     Globe,
     History,
     Layout,
@@ -14,6 +15,7 @@ import { motion } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import Audit from './Audit';
+import { isProjectReady } from './projectSetup';
 import type { AnalysisData, Project, HistoryItem, AuditResult, AuthUser } from './types';
 import { api } from './api';
 import { canAccessAudit, canAccessDashboard, canAccessKeywords } from './appNav';
@@ -114,6 +116,7 @@ export default function Dashboard({ user }: DashboardProps) {
     const canRequestIndexing = user.role === 'admin';
     const [projects, setProjects] = useState<Project[]>([]);
     const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+    const [viewerGoogleConnected, setViewerGoogleConnected] = useState<boolean>(user.role === 'admin');
 
     const [data, setData] = useState<AnalysisData | null>(null);
     const [loading, setLoading] = useState(false);
@@ -149,17 +152,27 @@ export default function Dashboard({ user }: DashboardProps) {
             setProjectsError('');
 
             try {
-                const nextProjects = await api.getProjects();
+                const [nextProjects, nextConnection] = await Promise.all([
+                    api.getProjects(),
+                    user.role === 'viewer' ? api.getGoogleConnectionStatus().catch(() => ({ connected: false })) : Promise.resolve({ connected: true }),
+                ]);
                 if (cancelled) {
                     return;
                 }
 
+                const googleConnected = Boolean(nextConnection?.connected);
+                const nextReadyProjects = nextProjects.filter((project) => isProjectReady(project, {
+                    requiresGoogleConnection: user.role === 'viewer',
+                    googleConnected,
+                }));
+
                 setProjects(nextProjects);
+                setViewerGoogleConnected(googleConnected);
                 setSelectedProjectId((current) => {
-                    if (current && nextProjects.some((project) => project.id === current)) {
+                    if (current && nextReadyProjects.some((project) => project.id === current)) {
                         return current;
                     }
-                    return nextProjects[0]?.id || '';
+                    return nextReadyProjects[0]?.id || '';
                 });
             } catch (e) {
                 if (cancelled) {
@@ -168,6 +181,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
                 console.error('Initialization failed', e);
                 setProjects([]);
+                setViewerGoogleConnected(user.role === 'admin');
                 setSelectedProjectId('');
                 setHistory([]);
                 setHistoryHasMore(false);
@@ -189,7 +203,7 @@ export default function Dashboard({ user }: DashboardProps) {
         return () => {
             cancelled = true;
         };
-    }, [projectsRetryKey]);
+    }, [projectsRetryKey, user.role]);
 
     useEffect(() => {
         if (!selectedProjectId) {
@@ -198,6 +212,7 @@ export default function Dashboard({ user }: DashboardProps) {
             setHistoryNextBefore(null);
             setAuditHistory([]);
             setData(null);
+            setError('');
             setSelectedHistoryId('live');
             setLiveHistoryId('');
             setProjectDataError('');
@@ -372,13 +387,32 @@ export default function Dashboard({ user }: DashboardProps) {
 
     const projectAuditHistory = auditHistory;
     const latestAudit = projectAuditHistory[0] || null;
-    const selectedProject = projects.find((project) => project.id === selectedProjectId) || null;
+    const readyProjects = useMemo(
+        () => projects.filter((project) => isProjectReady(project, {
+            requiresGoogleConnection: user.role === 'viewer',
+            googleConnected: viewerGoogleConnected,
+        })),
+        [projects, user.role, viewerGoogleConnected]
+    );
+    const incompleteProjects = useMemo(
+        () => projects.filter((project) => !isProjectReady(project, {
+            requiresGoogleConnection: user.role === 'viewer',
+            googleConnected: viewerGoogleConnected,
+        })),
+        [projects, user.role, viewerGoogleConnected]
+    );
+    const selectedProject = readyProjects.find((project) => project.id === selectedProjectId) || null;
     const showDashboardBootstrapLoading = activeTab === 'dashboard' && projectsLoading;
     const showDashboardProjectsError = activeTab === 'dashboard' && !projectsLoading && Boolean(projectsError);
-    const showDashboardNoProject = activeTab === 'dashboard' && !projectsLoading && !projectsError && !selectedProject;
+    const showDashboardNoProject = activeTab === 'dashboard' && !projectsLoading && !projectsError && !selectedProject && incompleteProjects.length === 0;
+    const showDashboardSetupRequired = activeTab === 'dashboard' && !projectsLoading && !projectsError && !selectedProject && incompleteProjects.length > 0;
     const showDashboardProjectLoading = activeTab === 'dashboard' && !projectsLoading && projectDataLoading && Boolean(selectedProject) && !data;
     const showDashboardProjectError = activeTab === 'dashboard' && !projectsLoading && !projectDataLoading && Boolean(selectedProject) && Boolean(projectDataError);
     const showDashboardEmpty = activeTab === 'dashboard' && !projectsLoading && !projectDataLoading && !projectsError && !projectDataError && Boolean(selectedProject) && !data;
+    const showAuditBootstrapLoading = activeTab === 'audit' && projectsLoading;
+    const showAuditProjectsError = activeTab === 'audit' && !projectsLoading && Boolean(projectsError);
+    const showAuditNoProject = activeTab === 'audit' && !projectsLoading && !projectsError && !selectedProject && incompleteProjects.length === 0;
+    const showAuditSetupRequired = activeTab === 'audit' && !projectsLoading && !projectsError && !selectedProject && incompleteProjects.length > 0;
 
     const comparisonMetrics = useMemo(
         () => (data && previousSnapshot ? buildComparison(data, previousSnapshot.data) : []),
@@ -505,7 +539,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
                     <div className="flex items-center gap-3 w-full md:w-auto">
                         {/* Project Selector */}
-                        {projects.length > 0 && (
+                        {readyProjects.length > 0 && (
                             <div className="relative group">
                                 <select
                                     value={selectedProjectId}
@@ -522,7 +556,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                     disabled={projectsLoading || projectDataLoading}
                                     className="operator-control appearance-none cursor-pointer py-2 pl-4 pr-10 text-sm font-bold uppercase"
                                 >
-                                    {projects.map(p => (
+                                    {readyProjects.map(p => (
                                         <option key={p.id} value={p.id}>{p.name}</option>
                                     ))}
                                 </select>
@@ -532,6 +566,65 @@ export default function Dashboard({ user }: DashboardProps) {
                     </div>
                 </div>
             </header>
+
+            {showAuditBootstrapLoading && (
+                <div className="max-w-7xl mx-auto mt-8 px-6">
+                    <OperatorStatePanel
+                        icon={Loader2}
+                        iconClassName="animate-spin"
+                        title="Loading projects..."
+                        titleAs="p"
+                        description="Preparing your audit workspace."
+                    />
+                </div>
+            )}
+
+            {showAuditProjectsError && (
+                <div className="max-w-7xl mx-auto mt-8 px-6">
+                    <OperatorStatePanel
+                        icon={AlertCircle}
+                        title="Could not load projects"
+                        description={projectsError}
+                        variant="warm"
+                        action={(
+                            <button
+                                onClick={() => setProjectsRetryKey((current) => current + 1)}
+                                className="operator-button-primary px-4 py-2"
+                            >
+                                <RefreshCw className="h-4 w-4" /> Retry
+                            </button>
+                        )}
+                    />
+                </div>
+            )}
+
+            {showAuditNoProject && (
+                <div className="max-w-7xl mx-auto mt-8 px-6">
+                    <OperatorStatePanel
+                        icon={History}
+                        title="No projects available"
+                        description="Add a project first to start running audit jobs."
+                    />
+                </div>
+            )}
+
+            {showAuditSetupRequired && (
+                <div className="max-w-7xl mx-auto mt-8 px-6">
+                    <OperatorStatePanel
+                        icon={FolderCog}
+                        title="Finish project setup first"
+                        description={`You have ${incompleteProjects.length} project${incompleteProjects.length === 1 ? '' : 's'} saved, but they still need Google setup before audit can run.`}
+                        action={(
+                            <button
+                                onClick={() => navigate('/projects')}
+                                className="operator-button-primary px-4 py-2"
+                            >
+                                <FolderCog className="h-4 w-4" /> Open Projects
+                            </button>
+                        )}
+                    />
+                </div>
+            )}
 
             {activeTab === 'audit' && selectedProjectId && (
                 <main className="max-w-7xl mx-auto mt-8 px-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -589,6 +682,24 @@ export default function Dashboard({ user }: DashboardProps) {
                 </div>
             )}
 
+            {showDashboardSetupRequired && (
+                <div className="max-w-7xl mx-auto mt-8 px-6">
+                    <OperatorStatePanel
+                        icon={FolderCog}
+                        title="Finish project setup first"
+                        description={`You have ${incompleteProjects.length} project${incompleteProjects.length === 1 ? '' : 's'} saved, but they still need Google setup before dashboard analysis can run.`}
+                        action={(
+                            <button
+                                onClick={() => navigate('/projects')}
+                                className="operator-button-primary px-4 py-2"
+                            >
+                                <FolderCog className="h-4 w-4" /> Open Projects
+                            </button>
+                        )}
+                    />
+                </div>
+            )}
+
             {showDashboardProjectLoading && (
                 <div className="max-w-7xl mx-auto mt-8 px-6">
                     <OperatorStatePanel
@@ -621,7 +732,7 @@ export default function Dashboard({ user }: DashboardProps) {
             )}
 
             {/* SEO COMMANDER BANNER */}
-            {activeTab === 'dashboard' && !showDashboardBootstrapLoading && !showDashboardProjectsError && !showDashboardNoProject && (
+            {activeTab === 'dashboard' && !showDashboardBootstrapLoading && !showDashboardProjectsError && !showDashboardNoProject && !showDashboardSetupRequired && (
                 <div className="max-w-7xl mx-auto mt-8 px-6">
                     <OperatorPageHero
                         icon={Activity}

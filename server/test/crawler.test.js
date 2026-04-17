@@ -95,3 +95,89 @@ test('crawler marks missing, multiple, and cross-domain canonicals', () => {
     assert.deepEqual(results[0].canonicalIssues, ['missing-canonical']);
     assert.deepEqual(results[1].canonicalIssues.sort(), ['canonical-mismatch', 'cross-domain-canonical', 'multiple-canonicals']);
 });
+
+test('crawler treats navigation timeout messages as retriable', () => {
+    assert.equal(
+        crawler.__internal.isNavigationTimeoutError(new Error('Navigation timeout of 30000 ms exceeded')),
+        true
+    );
+
+    assert.equal(
+        crawler.__internal.isNavigationTimeoutError(new Error('net::ERR_CONNECTION_RESET')),
+        false
+    );
+});
+
+test('crawler falls back to the partially loaded document after navigation timeout', async () => {
+    const warnings = [];
+    const waitCalls = [];
+    const page = {
+        goto: async () => {
+            throw new Error('Navigation timeout of 30000 ms exceeded');
+        },
+        url: () => 'https://example.com/about',
+        waitForSelector: async (selector, options) => {
+            waitCalls.push({ selector, timeout: options.timeout });
+        },
+    };
+
+    const response = await crawler.__internal.navigatePageForAudit(page, 'https://example.com/about', {
+        logger: { warn: (message) => warnings.push(message) },
+        timeoutMs: 1000,
+        contentTimeoutMs: 1000,
+        settleDelayMs: 0,
+    });
+
+    assert.equal(response, null);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /Continuing with the partially loaded document/);
+    assert.deepEqual(waitCalls, [
+        { selector: 'body', timeout: 1500 },
+        { selector: 'body, title, h1, meta[name="description"], main, article', timeout: 1000 },
+    ]);
+});
+
+test('crawler rethrows navigation timeout when no document has loaded yet', async () => {
+    const page = {
+        goto: async () => {
+            throw new Error('Navigation timeout of 30000 ms exceeded');
+        },
+        url: () => 'about:blank',
+        waitForSelector: async () => {},
+    };
+
+    await assert.rejects(
+        crawler.__internal.navigatePageForAudit(page, 'https://example.com/about', {
+            timeoutMs: 1000,
+            contentTimeoutMs: 1000,
+            settleDelayMs: 0,
+        }),
+        /Navigation timeout/
+    );
+});
+
+test('crawler retries extraction when the page still looks like a loading shell', () => {
+    assert.equal(
+        crawler.__internal.shouldRetrySeoExtraction({
+            title: 'Blog | FleetFlow',
+            description: 'FleetFlow Blog',
+            h1s: [],
+            canonicals: ['https://fleetflow.hyvikk.com/blog/10-must-have-features-taxi-management-system'],
+            wordCount: 83,
+            bodyText: 'Solutions Features Pricing Loading...',
+        }),
+        true
+    );
+
+    assert.equal(
+        crawler.__internal.shouldRetrySeoExtraction({
+            title: '10 Essential Admin Panel Features for Taxi Management (2026)',
+            description: 'Stop paying for bloated software.',
+            h1s: ['10 Must-Have Admin Features for Taxi Management Systems'],
+            canonicals: ['https://fleetflow.hyvikk.com/blog/10-must-have-features-taxi-management-system'],
+            wordCount: 1249,
+            bodyText: 'Back to Blog 10 Must-Have Admin Features for Taxi Management Systems',
+        }),
+        false
+    );
+});

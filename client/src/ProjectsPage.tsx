@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { api } from './api';
 import Modal from './components/common/Modal';
+import { getProjectSetupIssues, isProjectReady } from './projectSetup';
 import { useRouter } from './router';
 import { useToast } from './toast';
 import type { AuthUser, GoogleConnectionStatus, GoogleResourcesResponse, Project, ViewerRecord } from './types';
@@ -71,7 +72,7 @@ function createProjectForm(user: AuthUser, connectionEmail = ''): ProjectFormSta
         domain: '',
         url: '',
         ownerEmail: user.role === 'admin' ? '' : user.email,
-        googleConnectionEmail: connectionEmail || user.email,
+        googleConnectionEmail: connectionEmail || '',
         gscSiteUrl: '',
         ga4PropertyId: '',
         spreadsheetId: '',
@@ -94,10 +95,6 @@ function toProjectForm(project: Project): ProjectFormState {
         sheetGid: String(project.sheetGid ?? 0),
         auditMaxPages: String(project.auditMaxPages ?? 200),
     };
-}
-
-function isProjectReady(project: Project) {
-    return Boolean(project.googleConnectionEmail && project.gscSiteUrl && project.ga4PropertyId);
 }
 
 function canManageProject(project: Project, user: AuthUser) {
@@ -162,7 +159,6 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
     const [viewerForm, setViewerForm] = useState<ViewerFormState>(EMPTY_VIEWER_FORM);
 
     const activeProjects = useMemo(() => projects.filter((project) => project.isActive !== false), [projects]);
-    const readyProjectCount = useMemo(() => activeProjects.filter(isProjectReady).length, [activeProjects]);
 
     const fetchData = useCallback(async () => {
         setLoading(true);
@@ -184,7 +180,7 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
             setViewers((viewerData as ViewerRecord[]) || []);
             setProjectForm((current) => {
                 if (editingProjectId) return current;
-                return createProjectForm(user, nextConnection.googleEmail || user.email);
+                return createProjectForm(user, nextConnection.connected ? (nextConnection.googleEmail || user.email) : '');
             });
         } catch (error) {
             push({ tone: 'error', title: 'Failed to load setup data', description: error instanceof Error ? error.message : 'Unknown error' });
@@ -225,7 +221,7 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
     const resetProjectForm = () => {
         setEditingProjectId(null);
         setResources(null);
-        setProjectForm(createProjectForm(user, connection.googleEmail || user.email));
+        setProjectForm(createProjectForm(user, connection.connected ? (connection.googleEmail || user.email) : ''));
     };
 
     const startEditProject = (project: Project) => {
@@ -246,7 +242,14 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
 
         setGoogleLoading(true);
         try {
-            const data = await api.getGoogleResources(editingProjectId || null);
+            const data = await api.getGoogleResources({
+                projectId: editingProjectId || null,
+                name: projectForm.name,
+                domain: projectForm.domain,
+                url: projectForm.url,
+                gscSiteUrl: projectForm.gscSiteUrl,
+                ga4PropertyId: projectForm.ga4PropertyId,
+            });
             setResources(data);
             setProjectForm((current) => ({
                 ...current,
@@ -254,7 +257,13 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                 gscSiteUrl: current.gscSiteUrl || data.recommendations.gscSiteUrl || '',
                 ga4PropertyId: current.ga4PropertyId || data.recommendations.ga4PropertyId || '',
             }));
-            push({ tone: 'success', title: 'Google properties loaded', description: 'Pick the recommended Search Console and GA4 properties, then save the project.' });
+            push({
+                tone: 'success',
+                title: 'Google properties loaded',
+                description: data.recommendations.gscSiteUrl && data.recommendations.ga4PropertyId
+                    ? 'We matched both properties. Review them, then save the project.'
+                    : 'We loaded the available properties. If something is not preselected, choose the matching property manually before saving.',
+            });
         } catch (error) {
             push({ tone: 'error', title: 'Could not load Google properties', description: error instanceof Error ? error.message : 'Unknown error' });
         } finally {
@@ -270,10 +279,18 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
             const payload = {
                 ...projectForm,
                 ownerEmail: user.role === 'admin' ? projectForm.ownerEmail : user.email,
-                googleConnectionEmail: projectForm.googleConnectionEmail || connection.googleEmail || user.email,
+                googleConnectionEmail: projectForm.googleConnectionEmail || (connection.connected ? (connection.googleEmail || user.email) : ''),
                 sheetGid: Number(projectForm.sheetGid || 0),
                 auditMaxPages: Number(projectForm.auditMaxPages || 200),
             };
+            const nextSetupIssues = getProjectSetupIssues({
+                googleConnectionEmail: payload.googleConnectionEmail,
+                gscSiteUrl: payload.gscSiteUrl,
+                ga4PropertyId: payload.ga4PropertyId,
+            }, {
+                requiresGoogleConnection: user.role === 'viewer',
+                googleConnected: connection.connected,
+            });
 
             if (editingProjectId) {
                 await api.updateProject(editingProjectId, payload);
@@ -284,7 +301,9 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
             push({
                 tone: 'success',
                 title: editingProjectId ? 'Project updated' : 'Project created',
-                description: user.role === 'admin' ? 'Project settings saved.' : 'Setup saved. You can move to Dashboard when you are ready.',
+                description: nextSetupIssues.length === 0
+                    ? (user.role === 'admin' ? 'Project settings saved.' : 'Setup is complete. You can move to Dashboard or Audit now.')
+                    : `Draft saved. Next: ${nextSetupIssues.join(', ')}.`,
             });
 
             await fetchData();
@@ -370,9 +389,20 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
         }
     };
 
+    const projectSetupOptions = {
+        requiresGoogleConnection: user.role === 'viewer',
+        googleConnected: connection.connected,
+    };
+    const draftProjectSetupIssues = getProjectSetupIssues({
+        googleConnectionEmail: projectForm.googleConnectionEmail,
+        gscSiteUrl: projectForm.gscSiteUrl,
+        ga4PropertyId: projectForm.ga4PropertyId,
+    }, projectSetupOptions);
+    const readyProjectCount = activeProjects.filter((project) => isProjectReady(project, projectSetupOptions)).length;
+
     const projectStepState = {
         google: connection.connected,
-        properties: Boolean(resources || projectForm.gscSiteUrl || projectForm.ga4PropertyId),
+        properties: Boolean(projectForm.gscSiteUrl && projectForm.ga4PropertyId),
         details: Boolean(projectForm.name && projectForm.url),
     };
 
@@ -496,7 +526,7 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                             <div className="md:col-span-2 flex flex-wrap items-center gap-3">
                                 <button type="submit" disabled={savingProject} className="premium-button bg-indigo-600 text-white hover:bg-indigo-700">
                                     {savingProject ? <Loader2 className="h-4 w-4 animate-spin" /> : editingProjectId ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-                                    {editingProjectId ? 'Save project changes' : 'Create project'}
+                                    {editingProjectId ? (draftProjectSetupIssues.length === 0 ? 'Save ready project' : 'Save draft changes') : (draftProjectSetupIssues.length === 0 ? 'Create ready project' : 'Save project draft')}
                                 </button>
                                 <button type="button" onClick={resetProjectForm} className="premium-button border border-slate-200 bg-white text-slate-700 hover:bg-slate-50">
                                     Clear form
@@ -508,6 +538,11 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                     </button>
                                 )}
                             </div>
+                            <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                                {draftProjectSetupIssues.length === 0
+                                    ? 'This project is fully configured for dashboard analysis and audit jobs.'
+                                    : `This will save as a draft until you finish: ${draftProjectSetupIssues.join(', ')}.`}
+                            </div>
                         </form>
 
                         <div className="space-y-3">
@@ -517,7 +552,8 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                             </div>
 
                             {activeProjects.map((project) => {
-                                const ready = isProjectReady(project);
+                                const ready = isProjectReady(project, projectSetupOptions);
+                                const setupIssues = getProjectSetupIssues(project, projectSetupOptions);
                                 const canManage = canManageProject(project, user);
 
                                 return (
@@ -533,6 +569,9 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                                 </div>
                                                 <p className="mt-1 text-sm text-slate-500">{project.url}</p>
                                                 <p className="mt-2 text-xs text-slate-500">Owner: {project.ownerEmail || 'shared'} - GSC: {project.gscSiteUrl || 'Not set'} - GA4: {project.ga4PropertyId || 'Not set'}</p>
+                                                {!ready && (
+                                                    <p className="mt-2 text-xs font-medium text-amber-700">Next: {setupIssues.join(', ')}</p>
+                                                )}
                                             </div>
 
                                             {canManage && (
