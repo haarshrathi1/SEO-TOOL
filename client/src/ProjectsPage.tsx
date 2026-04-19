@@ -8,11 +8,13 @@ import {
     Grid3X3,
     Link2,
     Loader2,
+    Mail,
     Pencil,
     Play,
     Plus,
     RefreshCw,
     Save,
+    Search,
     Shield,
     Trash2,
     Users,
@@ -514,8 +516,94 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
 
             <div className="max-w-7xl mx-auto px-6 pt-8 space-y-8">
 
-                {/* ── Welcome / Onboarding Guide ── */}
-                {showWelcomeGuide && (
+                {/* ── Viewer Setup Banner ── */}
+                {!loading && user.role !== 'admin' && readyProjectCount === 0 && (
+                    <div className="border-2 border-black bg-white" style={{ boxShadow: '8px 8px 0 0 #000' }}>
+                        {/* Header */}
+                        <div className="border-b-2 border-black bg-black px-6 py-5 flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-3">
+                                <Zap className="w-5 h-5 text-yellow-300" />
+                                <span className="text-sm font-black uppercase tracking-widest text-white">
+                                    Welcome to Your SEO Workspace
+                                </span>
+                            </div>
+                            <span className="border border-yellow-300 text-yellow-300 px-2 py-0.5 text-[10px] font-black uppercase">
+                                New Account
+                            </span>
+                        </div>
+
+                        {/* Two-column info */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 divide-y-2 md:divide-y-0 md:divide-x-2 divide-black">
+                            {/* Project Setup — Contact Admin */}
+                            <div className="p-6 space-y-4">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 border-2 border-black bg-blue-200 flex items-center justify-center">
+                                        <FolderCog className="w-5 h-5 text-black" />
+                                    </div>
+                                    <h3 className="font-black text-black uppercase text-sm">Project Setup (GSC &amp; GA4)</h3>
+                                </div>
+                                <p className="text-sm text-slate-700 font-medium leading-relaxed">
+                                    To connect your Google Search Console and GA4 properties, you need to be added as a test user by the admin. This is a one-time setup.
+                                </p>
+                                <div className="border-2 border-black bg-amber-50 p-4">
+                                    <p className="text-[11px] font-black uppercase tracking-wide text-amber-800 mb-2">Contact the Admin</p>
+                                    <a
+                                        href="mailto:hii@harshrathi.com?subject=SEO%20Tool%20-%20Project%20Setup%20Request&body=Hi%2C%20I%20would%20like%20to%20set%20up%20my%20project%20with%20GSC%20%26%20GA4.%20My%20email%20is%20..."
+                                        className="inline-flex items-center gap-2 border-2 border-black bg-black text-white px-5 py-3 text-xs font-black uppercase hover:bg-yellow-300 hover:text-black transition-all"
+                                        style={{ boxShadow: '4px 4px 0 0 #000' }}
+                                    >
+                                        <Mail className="w-4 h-4" />
+                                        hii@harshrathi.com
+                                    </a>
+                                    <p className="mt-3 text-xs text-slate-600 font-medium">
+                                        The admin will add your Google account as a test user and help you connect your properties.
+                                    </p>
+                                </div>
+                            </div>
+
+                            {/* Keyword Research — Free Access */}
+                            <div className="p-6 space-y-4 bg-emerald-50/40">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 border-2 border-black bg-emerald-200 flex items-center justify-center">
+                                        <Search className="w-5 h-5 text-black" />
+                                    </div>
+                                    <h3 className="font-black text-black uppercase text-sm">Keyword Research — Free</h3>
+                                </div>
+                                <p className="text-sm text-slate-700 font-medium leading-relaxed">
+                                    You can start using the Keyword Research tool right away — no project setup required. Run deep keyword analysis with our 5-layer research engine.
+                                </p>
+                                <div className="border-2 border-black bg-white p-4 space-y-3">
+                                    <p className="text-[11px] font-black uppercase tracking-wide text-emerald-800">Usage Limits</p>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div className="border border-black p-2.5 bg-emerald-100">
+                                            <p className="text-[10px] font-black uppercase text-slate-500">Daily Limit</p>
+                                            <p className="text-lg font-black text-black">5 <span className="text-xs font-bold text-slate-500">/ day</span></p>
+                                        </div>
+                                        <div className="border border-black p-2.5 bg-emerald-100">
+                                            <p className="text-[10px] font-black uppercase text-slate-500">Weekly Limit</p>
+                                            <p className="text-lg font-black text-black">20 <span className="text-xs font-bold text-slate-500">/ week</span></p>
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-slate-500 font-medium">
+                                        Google Ads metrics enrichment may be limited based on daily quota. Core keyword research is always available.
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => navigate('/keywords')}
+                                    className="w-full inline-flex items-center justify-center gap-2 border-2 border-black bg-black text-white px-5 py-3 text-xs font-black uppercase hover:bg-emerald-400 hover:text-black transition-all"
+                                    style={{ boxShadow: '4px 4px 0 0 #000' }}
+                                >
+                                    <Search className="w-4 h-4" />
+                                    Start Keyword Research — It&apos;s Free
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* ── Welcome / Onboarding Guide (Admin) ── */}
+                {showWelcomeGuide && user.role === 'admin' && (
                     <div className="border-2 border-black bg-white" style={{ boxShadow: '8px 8px 0 0 #000' }}>
                         {/* Banner */}
                         <div className="border-b-2 border-black bg-black px-6 py-4 flex items-center justify-between gap-4">
