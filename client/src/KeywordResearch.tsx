@@ -65,6 +65,12 @@ const SAMPLE_SEEDS = [
     'best payroll software',
 ];
 
+const volColors: Record<string, string> = {
+    High: 'text-emerald-700',
+    Medium: 'text-amber-600',
+    Low: 'text-slate-500',
+};
+
 function pickNextMessageIndex(messages: string[], previousIndex: number) {
     if (messages.length <= 1) return 0;
     let nextIndex = previousIndex;
