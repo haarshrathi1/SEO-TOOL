@@ -115,11 +115,10 @@ function Toggle({ checked, label, onClick }: { checked: boolean; label: string; 
         <button
             type="button"
             onClick={onClick}
-            className={`border-2 border-black px-3 py-2 text-xs font-black uppercase tracking-wide transition-all duration-150 ${
-                checked
+            className={`border-2 border-black px-3 py-2 text-xs font-black uppercase tracking-wide transition-all duration-150 ${checked
                     ? 'bg-black text-white shadow-none translate-x-[2px] translate-y-[2px]'
                     : 'bg-white text-black shadow-[3px_3px_0px_0px_#000] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[2px_2px_0px_0px_#000]'
-            }`}
+                }`}
         >
             {checked && <span className="mr-1">✓</span>}{label}
         </button>
@@ -567,10 +566,10 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                     <div className="w-10 h-10 border-2 border-black bg-emerald-200 flex items-center justify-center">
                                         <Search className="w-5 h-5 text-black" />
                                     </div>
-                                    <h3 className="font-black text-black uppercase text-sm">Keyword Research — Free</h3>
+                                    <h3 className="font-black text-black uppercase text-sm">Keyword Research Free</h3>
                                 </div>
                                 <p className="text-sm text-slate-700 font-medium leading-relaxed">
-                                    You can start using the Keyword Research tool right away — no project setup required. Run deep keyword analysis with our 5-layer research engine.
+                                    You can start using the Keyword Research tool right away no project setup required. Run deep keyword analysis with our 5-layer research engine.
                                 </p>
                                 <div className="border-2 border-black bg-white p-4 space-y-3">
                                     <p className="text-[11px] font-black uppercase tracking-wide text-emerald-800">Usage Limits</p>
@@ -595,7 +594,7 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                     style={{ boxShadow: '4px 4px 0 0 #000' }}
                                 >
                                     <Search className="w-4 h-4" />
-                                    Start Keyword Research — It&apos;s Free
+                                    Start Keyword Research It&apos;s Free
                                 </button>
                             </div>
                         </div>
@@ -610,7 +609,7 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                             <div className="flex items-center gap-3">
                                 <Zap className="w-5 h-5 text-yellow-300" />
                                 <span className="text-sm font-black uppercase tracking-widest text-white">
-                                    Welcome — Let&apos;s Get You Set Up
+                                    Welcome Let&apos;s Get You Set Up
                                 </span>
                             </div>
                             <span className="border border-yellow-300 text-yellow-300 px-2 py-0.5 text-[10px] font-black uppercase">
@@ -869,7 +868,7 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                                 max="500"
                                             />
                                         </Field>
-                                        <Field label="Spreadsheet ID" hint="Optional — for Google Sheets exports.">
+                                        <Field label="Spreadsheet ID" hint="Optional for Google Sheets exports.">
                                             <input
                                                 value={projectForm.spreadsheetId}
                                                 onChange={(e) => handleProjectField('spreadsheetId', e.target.value)}
@@ -893,7 +892,7 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                             <div className={`w-2 h-2 mt-1.5 border border-black shrink-0 ${draftProjectSetupIssues.length === 0 ? 'bg-emerald-400' : 'bg-yellow-400'}`} />
                                             <p className="text-xs font-bold text-black">
                                                 {draftProjectSetupIssues.length === 0
-                                                    ? 'This project is fully configured — ready for dashboard analysis and audit jobs.'
+                                                    ? 'This project is fully configured ready for dashboard analysis and audit jobs.'
                                                     : `Will save as draft. Still needed: ${draftProjectSetupIssues.join(' · ')}.`}
                                             </p>
                                         </div>
@@ -1071,11 +1070,10 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                         <button
                                             key={tab.id}
                                             onClick={() => setAdminTab(tab.id)}
-                                            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3.5 text-xs font-black uppercase tracking-wide border-r-2 border-black last:border-r-0 transition-all ${
-                                                adminTab === tab.id
+                                            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3.5 text-xs font-black uppercase tracking-wide border-r-2 border-black last:border-r-0 transition-all ${adminTab === tab.id
                                                     ? 'bg-black text-white'
                                                     : 'bg-white text-black hover:bg-slate-50'
-                                            }`}
+                                                }`}
                                         >
                                             <tab.icon className="h-4 w-4" />
                                             {tab.label}
@@ -1318,13 +1316,12 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                                                                 disabled={saving}
                                                                                 onClick={() => void handleMatrixToggle(viewer, project.id)}
                                                                                 title={hasAccess ? `Revoke ${viewer.email} from ${project.name}` : `Grant ${viewer.email} access to ${project.name}`}
-                                                                                className={`w-8 h-8 border-2 border-black flex items-center justify-center mx-auto transition-all ${
-                                                                                    saving
+                                                                                className={`w-8 h-8 border-2 border-black flex items-center justify-center mx-auto transition-all ${saving
                                                                                         ? 'bg-slate-200 cursor-wait'
                                                                                         : hasAccess
                                                                                             ? 'bg-emerald-300 hover:bg-red-200'
                                                                                             : 'bg-white hover:bg-emerald-100'
-                                                                                }`}
+                                                                                    }`}
                                                                             >
                                                                                 {saving
                                                                                     ? <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-600" />
