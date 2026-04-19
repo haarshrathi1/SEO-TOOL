@@ -106,10 +106,7 @@ function canManageProject(project: Project, user: AuthUser) {
     return user.role === 'admin' || project.ownerEmail === user.email;
 }
 
-function _formatDate(value: string | null | undefined) {
-    if (!value) return 'Not available';
-    return new Date(value).toLocaleString();
-}
+
 
 function Toggle({ checked, label, onClick }: { checked: boolean; label: string; onClick: () => void }) {
     return (
