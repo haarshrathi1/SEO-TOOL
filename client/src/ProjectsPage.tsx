@@ -543,12 +543,12 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                     <h3 className="font-black text-black uppercase text-sm">Project Setup (GSC &amp; GA4)</h3>
                                 </div>
                                 <p className="text-sm text-slate-700 font-medium leading-relaxed">
-                                    To connect your Google Search Console and GA4 properties, you need to be added as a test user by the admin. This is a one-time setup.
+                                    Dashboard analytics with Google Search Console and GA4 integration is a <strong className="font-black">premium feature</strong>. Contact the admin to get access and connect your properties.
                                 </p>
                                 <div className="border-2 border-black bg-amber-50 p-4">
-                                    <p className="text-[11px] font-black uppercase tracking-wide text-amber-800 mb-2">Contact the Admin</p>
+                                    <p className="text-[11px] font-black uppercase tracking-wide text-amber-800 mb-2">Get Premium Access</p>
                                     <a
-                                        href="mailto:hii@harshrathi.com?subject=SEO%20Tool%20-%20Project%20Setup%20Request&body=Hi%2C%20I%20would%20like%20to%20set%20up%20my%20project%20with%20GSC%20%26%20GA4.%20My%20email%20is%20..."
+                                        href="mailto:hii@harshrathi.com?subject=SEO%20Tool%20-%20Premium%20Access%20Request&body=Hi%2C%20I%20would%20like%20to%20get%20premium%20access%20for%20GSC%20%26%20GA4%20dashboard.%20My%20email%20is%20..."
                                         className="inline-flex items-center gap-2 border-2 border-black bg-black text-white px-5 py-3 text-xs font-black uppercase hover:bg-yellow-300 hover:text-black transition-all"
                                         style={{ boxShadow: '4px 4px 0 0 #000' }}
                                     >
@@ -556,7 +556,7 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                         hii@harshrathi.com
                                     </a>
                                     <p className="mt-3 text-xs text-slate-600 font-medium">
-                                        The admin will add your Google account as a test user and help you connect your properties.
+                                        The admin will set up your project and unlock dashboard analytics for your domain.
                                     </p>
                                 </div>
                             </div>
