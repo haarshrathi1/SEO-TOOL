@@ -577,15 +577,15 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                     <div className="grid grid-cols-2 gap-2">
                                         <div className="border border-black p-2.5 bg-emerald-100">
                                             <p className="text-[10px] font-black uppercase text-slate-500">Daily Limit</p>
-                                            <p className="text-lg font-black text-black">5 <span className="text-xs font-bold text-slate-500">/ day</span></p>
+                                            <p className="text-lg font-black text-black">3 <span className="text-xs font-bold text-slate-500">/ day</span></p>
                                         </div>
                                         <div className="border border-black p-2.5 bg-emerald-100">
                                             <p className="text-[10px] font-black uppercase text-slate-500">Weekly Limit</p>
-                                            <p className="text-lg font-black text-black">20 <span className="text-xs font-bold text-slate-500">/ week</span></p>
+                                            <p className="text-lg font-black text-black">10 <span className="text-xs font-bold text-slate-500">/ week</span></p>
                                         </div>
                                     </div>
                                     <p className="text-xs text-slate-500 font-medium">
-                                        Google Ads metrics enrichment may be limited based on daily quota. Core keyword research is always available.
+                                        Weekly quota resets every Saturday at 10:00 AM IST. Google Ads enrichment may be limited based on quota.
                                     </p>
                                 </div>
                                 <button
