@@ -26,7 +26,7 @@ import PerformanceSummary from './components/dashboard/PerformanceSummary';
 import { downloadCsv } from './csv';
 import { useRouter } from './router';
 import { useToast } from './toast';
-import { OperatorPageHero, OperatorStatePanel } from './components/common/OperatorUi';
+import { OperatorStatePanel } from './components/common/OperatorUi';
 import { OperatorComparisonCard, OperatorMetricTile } from './components/common/OperatorStats';
 
 function cn(...inputs: ClassValue[]) {
@@ -486,61 +486,39 @@ export default function Dashboard({ user }: DashboardProps) {
     return (
         <div className="operator-shell text-slate-900 font-sans selection:bg-black selection:text-white pb-20">
             {/* Brutalist Header */}
-            <header className="sticky top-0 z-50 border-b-2 border-black bg-white/90 backdrop-blur-md">
-                <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row items-center justify-between gap-4">
-                    <div className="w-full md:w-auto flex items-center gap-6">
-                        {/* Logo / Title Area */}
-                        <div className="flex flex-col">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-black rounded-none border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,0.5)]">
-                                    <Activity className="w-6 h-6 text-white" />
-                                </div>
-                                <h1 className="text-2xl font-black tracking-tight text-black flex items-center gap-2 uppercase">
-                                    {data?.project || 'SEO Intel'}
-                                    {selectedHistoryId !== 'live' && (
-                                        <span className="text-[10px] uppercase tracking-wider bg-yellow-300 text-black px-2 py-0.5 border border-black font-bold">Historical</span>
-                                    )}
-                                </h1>
+            <header className="sticky top-0 z-50 border-b-2 border-black bg-white">
+                {/* Top bar: brand + project selector */}
+                <div className="border-b-2 border-black/10">
+                    <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
+                        {/* Brand mark */}
+                        <div className="flex items-center gap-3 min-w-0">
+                            <div className="p-2 bg-black border-2 border-black shrink-0">
+                                <Activity className="w-5 h-5 text-white" />
                             </div>
-                            <p className="text-xs font-bold text-slate-500 mt-1 pl-[52px] font-mono uppercase">
-                                {data?.domain || selectedProject?.domain || 'Select a project'}
-                                {data?.week && <span className="ml-2 bg-black text-white px-1">WEEK {data.week}</span>}
-                            </p>
+                            <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-base font-black uppercase tracking-tight text-black truncate">
+                                        {data?.project || selectedProject?.name || 'SEO Intel'}
+                                    </span>
+                                    {selectedHistoryId !== 'live' && (
+                                        <span className="border border-black bg-yellow-300 px-2 py-0.5 text-[9px] font-black uppercase shrink-0">
+                                            Historical
+                                        </span>
+                                    )}
+                                    {(projectDataLoading || projectsLoading) && (
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400 shrink-0" />
+                                    )}
+                                </div>
+                                <p className="text-[10px] font-mono font-bold text-slate-400 uppercase truncate">
+                                    {data?.domain || selectedProject?.domain || 'no project selected'}
+                                    {data?.week && <span className="ml-2 bg-black text-white px-1">W{data.week}</span>}
+                                </p>
+                            </div>
                         </div>
 
-                        {/* Divider */}
-                        <div className="hidden md:block h-10 w-0.5 bg-black" />
-
-                        {/* Navigation Tabs */}
-                        <nav className="flex items-center gap-2">
-                            {surfaceTabs.map((tab) => (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => {
-                                        if (tab.id === 'keywords') {
-                                            navigate('/keywords');
-                                            return;
-                                        }
-                                        setActiveTab(tab.id as 'dashboard' | 'audit');
-                                    }}
-                                    className={cn(
-                                        "px-4 py-2 text-sm font-bold border-2 border-black transition-all duration-150 flex items-center gap-2 uppercase",
-                                        activeTab === tab.id
-                                            ? "bg-black text-white shadow-[4px_4px_0px_0px_#888]"
-                                            : "bg-white text-black hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[2px_2px_0px_0px_#000]"
-                                    )}
-                                >
-                                    <tab.icon className="w-4 h-4" />
-                                    {tab.label}
-                                </button>
-                            ))}
-                        </nav>
-                    </div>
-
-                    <div className="flex items-center gap-3 w-full md:w-auto">
-                        {/* Project Selector */}
+                        {/* Project switcher */}
                         {readyProjects.length > 0 && (
-                            <div className="relative group">
+                            <div className="relative shrink-0">
                                 <select
                                     value={selectedProjectId}
                                     onChange={(e) => {
@@ -554,16 +532,43 @@ export default function Dashboard({ user }: DashboardProps) {
                                         setData(null);
                                     }}
                                     disabled={projectsLoading || projectDataLoading}
-                                    className="operator-control appearance-none cursor-pointer py-2 pl-4 pr-10 text-sm font-bold uppercase"
+                                    className="operator-control appearance-none cursor-pointer py-2 pl-3 pr-9 text-xs font-black uppercase max-w-[14rem]"
                                 >
                                     {readyProjects.map(p => (
                                         <option key={p.id} value={p.id}>{p.name}</option>
                                     ))}
                                 </select>
-                                <Globe className="w-4 h-4 text-black absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                <Globe className="w-3.5 h-3.5 text-black absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                             </div>
                         )}
                     </div>
+                </div>
+
+                {/* Bottom bar: nav tabs */}
+                <div className="max-w-7xl mx-auto px-6">
+                    <nav className="flex items-center gap-0">
+                        {surfaceTabs.map((tab) => (
+                            <button
+                                key={tab.id}
+                                onClick={() => {
+                                    if (tab.id === 'keywords') {
+                                        navigate('/keywords');
+                                        return;
+                                    }
+                                    setActiveTab(tab.id as 'dashboard' | 'audit');
+                                }}
+                                className={cn(
+                                    "flex items-center gap-2 px-5 py-3 text-xs font-black uppercase tracking-wide border-r-2 border-black transition-all duration-150",
+                                    activeTab === tab.id
+                                        ? "bg-black text-white"
+                                        : "bg-white text-slate-500 hover:text-black hover:bg-slate-50"
+                                )}
+                            >
+                                <tab.icon className="w-3.5 h-3.5" />
+                                {tab.label}
+                            </button>
+                        ))}
+                    </nav>
                 </div>
             </header>
 
@@ -634,9 +639,11 @@ export default function Dashboard({ user }: DashboardProps) {
 
             {activeTab === 'dashboard' && error && (
                 <div className="max-w-7xl mx-auto mt-8 px-6">
-                    <div className="p-4 bg-red-50/80 backdrop-blur-sm text-red-600 rounded-2xl border border-red-100 flex items-center gap-3 shadow-sm">
-                        <AlertCircle className="w-5 h-5 flex-shrink-0 animate-bounce" />
-                        <span className="font-medium">{error}</span>
+                    <div className="p-4 bg-red-100 border-2 border-black flex items-center gap-3" style={{ boxShadow: '4px 4px 0 0 #000' }}>
+                        <div className="p-1 bg-black text-white shrink-0">
+                            <AlertCircle className="w-4 h-4" />
+                        </div>
+                        <span className="font-black uppercase text-sm text-black">{error}</span>
                     </div>
                 </div>
             )}
@@ -731,80 +738,69 @@ export default function Dashboard({ user }: DashboardProps) {
                 </div>
             )}
 
-            {/* SEO COMMANDER BANNER */}
+            {/* Action toolbar — shown when dashboard tab is active and not in a terminal error/empty state */}
             {activeTab === 'dashboard' && !showDashboardBootstrapLoading && !showDashboardProjectsError && !showDashboardNoProject && !showDashboardSetupRequired && (
-                <div className="max-w-7xl mx-auto mt-8 px-6">
-                    <OperatorPageHero
-                        icon={Activity}
-                        title="SEO COMMANDER"
-                        supportingContent={(
-                            <span className="inline-block border border-black bg-yellow-300 px-3 py-1 text-xs font-bold uppercase tracking-wider text-black shadow-[2px_2px_0px_0px_#000]">
-                                Unified Intelligence & Audit System
+                <div className="border-b-2 border-black bg-white">
+                    <div className="max-w-7xl mx-auto px-6 py-3 flex flex-wrap items-center gap-3">
+                        {/* Snapshot label */}
+                        <div className="flex items-center gap-2 mr-auto min-w-0">
+                            <div className={cn('w-2 h-2 border border-black shrink-0', selectedHistoryId === 'live' ? 'bg-emerald-400' : 'bg-yellow-400')} />
+                            <span className="text-[11px] font-black uppercase text-slate-500 truncate">
+                                {selectedHistoryId === 'live'
+                                    ? (data ? 'Live data loaded' : 'Awaiting analysis')
+                                    : selectedHistory
+                                        ? `Snapshot · ${formatDate(selectedHistory.timestamp)}`
+                                        : 'Saved snapshot'}
                             </span>
-                        )}
-                        actions={(
-                            <>
-                                <div className="relative flex-1 md:w-64">
-                                    <div className="operator-control relative flex h-12 items-center px-4 group">
-                                        <Zap className="mr-2 w-4 h-4 pointer-events-none z-10 text-orange-500" />
-                                        <select
-                                            value={selectedHistoryId}
-                                            onChange={(e) => handleHistorySelect(e.target.value)}
-                                            disabled={projectDataLoading || !selectedProjectId}
-                                            className="absolute inset-0 z-20 h-full w-full cursor-pointer opacity-0 disabled:cursor-wait"
-                                        >
-                                            <option value="live">{liveOptionLabel}</option>
-                                            <optgroup label="Previous Reports">
-                                                {sortedProjectHistory.map((h) => (
-                                                    <option key={h.id} value={h.id}>
-                                                        {formatDate(h.timestamp)}
-                                                    </option>
-                                                ))}
-                                            </optgroup>
-                                        </select>
-                                        <span className="pointer-events-none z-10 select-none truncate pr-6 text-sm font-bold uppercase">
-                                            {selectedHistoryId === 'live'
-                                                ? liveOptionLabel
-                                                : selectedHistory
-                                                    ? formatDate(selectedHistory.timestamp)
-                                                    : 'Select Report'
-                                            }
-                                        </span>
-                                        <div className="ml-auto pointer-events-none z-10">
-                                            <History className="w-4 h-4 text-slate-400" />
-                                        </div>
-                                    </div>
-                                </div>
-                                {historyHasMore && (
-                                    <button
-                                        onClick={() => void loadMoreDashboardHistory()}
-                                        disabled={projectDataLoading || !selectedProjectId}
-                                        className="operator-button-secondary h-12 whitespace-nowrap px-5"
-                                    >
-                                        <RefreshCw className="w-4 h-4" />
-                                        Load More Reports
-                                    </button>
-                                )}
-                                {data && (
-                                    <button
-                                        onClick={exportSummary}
-                                        className="operator-button-secondary h-12 whitespace-nowrap px-5"
-                                    >
-                                        <Download className="w-4 h-4" />
-                                        Export CSV
-                                    </button>
-                                )}
-                                <button
-                                    onClick={runAnalysis}
-                                    disabled={loading || !selectedProjectId || projectDataLoading}
-                                    className="operator-button-primary h-12 whitespace-nowrap px-8"
+                        </div>
+
+                        {/* History selector */}
+                        {sortedProjectHistory.length > 0 && (
+                            <div className="relative">
+                                <select
+                                    value={selectedHistoryId}
+                                    onChange={(e) => handleHistorySelect(e.target.value)}
+                                    disabled={projectDataLoading || !selectedProjectId}
+                                    className="operator-control appearance-none cursor-pointer py-2 pl-3 pr-9 text-xs font-black uppercase max-w-[13rem] disabled:cursor-wait"
                                 >
-                                    {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="w-4 h-4" />}
-                                    {loading ? 'Running...' : 'UPDATE TRAFFIC'}
-                                </button>
-                            </>
+                                    <option value="live">{liveOptionLabel}</option>
+                                    <optgroup label="Previous Reports">
+                                        {sortedProjectHistory.map((h) => (
+                                            <option key={h.id} value={h.id}>{formatDate(h.timestamp)}</option>
+                                        ))}
+                                    </optgroup>
+                                </select>
+                                <History className="w-3.5 h-3.5 text-black absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            </div>
                         )}
-                    />
+
+                        {historyHasMore && (
+                            <button
+                                onClick={() => void loadMoreDashboardHistory()}
+                                disabled={projectDataLoading || !selectedProjectId}
+                                className="operator-button-secondary px-4 py-2"
+                            >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                                More
+                            </button>
+                        )}
+
+                        {data && (
+                            <button onClick={exportSummary} className="operator-button-secondary px-4 py-2">
+                                <Download className="w-3.5 h-3.5" />
+                                Export CSV
+                            </button>
+                        )}
+
+                        <button
+                            onClick={runAnalysis}
+                            disabled={loading || !selectedProjectId || projectDataLoading}
+                            className="operator-button-primary px-6 py-2"
+                        >
+                            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+                            {loading ? 'Running...' : 'Update Traffic'}
+                        </button>
+                    </div>
                 </div>
             )}
 
@@ -897,7 +893,7 @@ export default function Dashboard({ user }: DashboardProps) {
                         </motion.div>
                     )}
 
-                                        {comparisonMetrics.length > 0 && (
+                    {comparisonMetrics.length > 0 && (
                         <div className="grid gap-4 md:grid-cols-3">
                             {comparisonMetrics.map((item) => (
                                 <OperatorComparisonCard
@@ -939,7 +935,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                     { label: 'Engagement', value: data.metrics.engagementRate, sub: 'Active', color: 'bg-rose-200' },
                                     { label: 'Visibility', value: data.metrics.visibility, sub: 'Index', color: 'bg-sky-200' }
                                 ].map((m, i) => (
-                                                                        <OperatorMetricTile
+                                    <OperatorMetricTile
                                         key={i}
                                         label={m.label}
                                         value={m.value}
@@ -1160,10 +1156,6 @@ export default function Dashboard({ user }: DashboardProps) {
         </div>
     );
 }
-
-
-
-
 
 
 

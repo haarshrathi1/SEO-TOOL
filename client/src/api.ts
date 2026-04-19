@@ -1,5 +1,4 @@
 ﻿import type {
-    AIAnalysisResult,
     AnalysisData,
     AuditJob,
     AuditResult,
@@ -184,7 +183,7 @@ export const api = {
 
     getAuditJobResult: (jobId: string) => request<AuditJob>(`/api/audit/jobs/${encodeURIComponent(jobId)}/result`),
 
-    requestIndexing: (url: string) => request<AIAnalysisResult>('/api/indexing/publish', {
+    requestIndexing: (url: string) => request<{ url: string; notifyTime?: string }>('/api/indexing/publish', {
         method: 'POST',
         body: JSON.stringify({ url }),
     }),

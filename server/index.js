@@ -2,8 +2,13 @@
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const helmet = require('helmet');
 const fs = require('fs');
 const path = require('path');
+
+function safeErrMsg(e) {
+    return (e != null && typeof e.message === 'string') ? e.message : String(e ?? 'Unknown error');
+}
 const auth = require('./auth');
 const userAuth = require('./userAuth');
 const { connectMongo, __internal: dbInternal } = require('./db');
@@ -24,6 +29,54 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.set('trust proxy', 1);
+
+// Security headers
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: [
+                "'self'",
+                // Google Identity Services (Sign-In button)
+                'https://accounts.google.com',
+                // Vite dev HMR inline script hash (prod build inlines a tiny loader)
+                "'unsafe-inline'",
+            ],
+            styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+            fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+            imgSrc: ["'self'", 'data:', 'https:', 'blob:'],
+            connectSrc: [
+                "'self'",
+                'https://accounts.google.com',
+                'https://seotool.harshrathi.com',
+                process.env.FRONTEND_URL || '',
+            ].filter(Boolean),
+            frameSrc: ['https://accounts.google.com'],
+            frameAncestors: ["'none'"],
+            objectSrc: ["'none'"],
+            baseUri: ["'self'"],
+            upgradeInsecureRequests: [],
+        },
+    },
+    // Enforce HTTPS via HSTS (1 year, including subdomains)
+    hsts: {
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: true,
+    },
+    // Prevent MIME-type sniffing
+    noSniff: true,
+    // Deny framing
+    frameguard: { action: 'deny' },
+    // Remove X-Powered-By
+    hidePoweredBy: true,
+    // Referrer policy
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    // Permissions policy
+    permittedCrossDomainPolicies: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: 'same-origin' },
+}));
 
 const ENABLE_CANONICAL_REDIRECT = process.env.ENABLE_CANONICAL_REDIRECT === 'true';
 const CANONICAL_HOST = (() => {
@@ -125,7 +178,7 @@ app.get('/api/keywords/ads-access', userAuth.requireAuth, userAuth.requireAccess
         res.set('Expires', '0');
         res.json(await keywordAdsAccess.getKeywordAdsUsageStatus(req.user));
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -133,7 +186,7 @@ app.get('/api/keywords/jobs', userAuth.requireAuth, userAuth.requireAccess('keyw
     try {
         res.json(await keywordJobs.listKeywordJobs(req.user, { projectId: req.query.projectId }));
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -149,7 +202,7 @@ app.post('/api/keywords/jobs', userAuth.requireAuth, userAuth.requireAccess('key
         });
         return res.status(202).json(job);
     } catch (e) {
-        return res.status(400).json({ error: e.message });
+        return res.status(400).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -162,7 +215,7 @@ app.get('/api/keywords/jobs/:jobId', userAuth.requireAuth, userAuth.requireAcces
 
         return res.json(job);
     } catch (e) {
-        return res.status(500).json({ error: e.message });
+        return res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -182,7 +235,7 @@ app.get('/api/keywords/jobs/:jobId/result', userAuth.requireAuth, userAuth.requi
 
         return res.json(job);
     } catch (e) {
-        return res.status(500).json({ error: e.message });
+        return res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -194,7 +247,7 @@ app.get('/api/keywords/history', userAuth.requireAuth, userAuth.requireAccess('k
             before: req.query.before,
         }));
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -203,7 +256,7 @@ app.post('/api/keywords/save', userAuth.requireAuth, userAuth.requireAccess('key
         const result = await keywordHistory.saveResearch(req.user, req.body, { projectId: req.body.projectId });
         res.json(result);
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -212,7 +265,7 @@ app.get('/api/projects', userAuth.requireAuth, async (req, res) => {
         const includeInactive = req.query.includeInactive === 'true';
         res.json(await projects.listProjects(req.user, { includeInactive }));
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -222,7 +275,7 @@ app.post('/api/projects', userAuth.requireAuth, async (req, res) => {
         res.status(201).json(project);
     } catch (e) {
         const status = e.message === 'Project access denied' ? 403 : 400;
-        res.status(status).json({ error: e.message });
+        res.status(status).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -232,7 +285,7 @@ app.put('/api/projects/:projectId', userAuth.requireAuth, async (req, res) => {
         res.json(project);
     } catch (e) {
         const status = e.message === 'Project not found' ? 404 : e.message === 'Project access denied' ? 403 : 400;
-        res.status(status).json({ error: e.message });
+        res.status(status).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -245,7 +298,7 @@ app.delete('/api/projects/:projectId', userAuth.requireAuth, async (req, res) =>
         res.json(project);
     } catch (e) {
         const status = e.message === 'Project not found' ? 404 : e.message === 'Project access denied' ? 403 : 400;
-        res.status(status).json({ error: e.message });
+        res.status(status).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -262,7 +315,7 @@ app.get('/api/history', userAuth.requireAuth, userAuth.requireAccess('dashboard'
         });
         res.json(historyData);
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -280,7 +333,7 @@ app.post('/api/indexing/publish', userAuth.requireAuth, userAuth.requireAdmin, a
 
         return res.json(result);
     } catch (e) {
-        return res.status(500).json({ error: e.message });
+        return res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -298,7 +351,7 @@ app.post('/api/indexing/remove', userAuth.requireAuth, userAuth.requireAdmin, as
 
         return res.json(result);
     } catch (e) {
-        return res.status(500).json({ error: e.message });
+        return res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -311,7 +364,7 @@ app.get('/api/audit/history', userAuth.requireAuth, userAuth.requireAccess('audi
         });
         res.json(auditData);
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -319,7 +372,7 @@ app.get('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAccess('audit')
     try {
         res.json(await auditJobs.listAuditJobs(req.user, { projectId: req.query.projectId }));
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -342,7 +395,7 @@ app.post('/api/audit/jobs', userAuth.requireAuth, userAuth.requireAccess('audit'
         return res.status(202).json(job);
     } catch (e) {
         const status = e.message === 'Project not found' ? 404 : e.message === 'Project access denied' ? 403 : 400;
-        return res.status(status).json({ error: e.message });
+        return res.status(status).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -355,7 +408,7 @@ app.get('/api/audit/jobs/:jobId', userAuth.requireAuth, userAuth.requireAccess('
 
         return res.json(job);
     } catch (e) {
-        return res.status(500).json({ error: e.message });
+        return res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -372,7 +425,7 @@ app.get('/api/audit/jobs/:jobId/result', userAuth.requireAuth, userAuth.requireA
 
         return res.json(job);
     } catch (e) {
-        return res.status(500).json({ error: e.message });
+        return res.status(500).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -395,7 +448,7 @@ app.post('/api/audit', userAuth.requireAuth, userAuth.requireAccess('audit'), as
         return res.status(202).json(job);
     } catch (e) {
         const status = e.message === 'Project not found' ? 404 : e.message === 'Project access denied' ? 403 : 400;
-        return res.status(status).json({ error: e.message });
+        return res.status(status).json({ error: safeErrMsg(e) });
     }
 });
 
@@ -413,7 +466,7 @@ app.post('/api/ai/analyze', userAuth.requireAuth, userAuth.requireAdmin, async (
         if (error instanceof Error && /localhost|private|valid public http\(s\)|hostname could not be resolved/i.test(error.message)) {
             return res.status(400).json({ error: error.message });
         }
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: safeErrMsg(error) });
     }
 });
 
@@ -424,6 +477,13 @@ app.get('*', (req, res) => {
     } else {
         res.status(404).json({ error: 'Not found' });
     }
+});
+
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+    console.error('[Express Error]', err);
+    if (res.headersSent) return;
+    res.status(500).json({ error: safeErrMsg(err) });
 });
 
 const STARTUP_RETRY_DELAY_MS = Math.max(Number(process.env.STARTUP_RETRY_DELAY_MS || 5000), 1000);
@@ -477,6 +537,16 @@ async function startServer() {
         }
     }
 }
+
+process.on('uncaughtException', (error) => {
+    console.error('[Fatal] Uncaught exception:', error);
+    process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[Fatal] Unhandled rejection at:', promise, 'reason:', reason);
+    process.exit(1);
+});
 
 startServer();
 

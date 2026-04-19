@@ -1,6 +1,7 @@
 ﻿import { Suspense, lazy, useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import LoginPage from './components/app/LoginPage';
+import LandingPage from './LandingPage';
 import UserBar from './components/app/UserBar';
 import { canAccessDashboardSurface, canAccessRoute, getDefaultRouteForUser, getNavItemsForUser } from './appNav';
 import { api } from './api';
@@ -33,6 +34,7 @@ export default function App() {
     const { path, navigate } = useRouter();
     const [user, setUser] = useState<AuthUser | null>(null);
     const [loading, setLoading] = useState(true);
+    const [showLogin, setShowLogin] = useState(false);
 
     useEffect(() => {
         const checkAuth = async () => {
@@ -72,7 +74,10 @@ export default function App() {
     }
 
     if (!user) {
-        return <LoginPage onLogin={setUser} />;
+        if (showLogin) {
+            return <LoginPage onLogin={(u) => { setShowLogin(false); setUser(u); }} />;
+        }
+        return <LandingPage onLogin={() => setShowLogin(true)} />;
     }
 
     const route = normalizeAppRoute(path, user);

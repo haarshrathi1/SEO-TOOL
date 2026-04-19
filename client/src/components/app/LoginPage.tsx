@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Brain, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
+import Logo from './Logo';
 import { api } from '../../api';
 import type { AuthUser } from '../../types';
 
@@ -144,10 +145,9 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
         <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 via-white to-indigo-50/40 p-6">
             <div className="w-full max-w-md">
                 <div className="mb-8 text-center">
-                    <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-200">
-                        <Brain className="h-8 w-8 text-white" />
+                    <div className="mb-5 flex justify-center">
+                        <Logo variant="dark" height={48} />
                     </div>
-                    <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">SEO Intelligence</h1>
                     <p className="mt-1 text-sm text-slate-500">Choose how you want to use Google access in the app</p>
                 </div>
 

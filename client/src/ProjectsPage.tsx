@@ -1,17 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     AlertCircle,
+    ArrowRight,
     CheckCircle2,
     FolderCog,
+    Globe,
+    Grid3X3,
     Link2,
     Loader2,
     Pencil,
+    Play,
     Plus,
     RefreshCw,
     Save,
     Shield,
     Trash2,
     Users,
+    Zap,
 } from 'lucide-react';
 import { api } from './api';
 import Modal from './components/common/Modal';
@@ -111,10 +116,23 @@ function Toggle({ checked, label, onClick }: { checked: boolean; label: string; 
         <button
             type="button"
             onClick={onClick}
-            className={`rounded-xl border px-3 py-2 text-sm font-medium transition ${checked ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'}`}
+            className={`border-2 border-black px-3 py-2 text-xs font-black uppercase tracking-wide transition-all duration-150 ${
+                checked
+                    ? 'bg-black text-white shadow-none translate-x-[2px] translate-y-[2px]'
+                    : 'bg-white text-black shadow-[3px_3px_0px_0px_#000] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[2px_2px_0px_0px_#000]'
+            }`}
         >
-            {label}
+            {checked && <span className="mr-1">✓</span>}{label}
         </button>
+    );
+}
+
+function FieldLabel({ label, hint }: { label: string; hint?: string }) {
+    return (
+        <div className="mb-1.5">
+            <span className="text-[11px] font-black uppercase tracking-[0.15em] text-slate-500">{label}</span>
+            {hint && <span className="block text-[10px] text-slate-400 mt-0.5 font-medium">{hint}</span>}
+        </div>
     );
 }
 
@@ -130,11 +148,10 @@ function Field({
     fullWidth?: boolean;
 }) {
     return (
-        <label className={`space-y-2 text-sm font-medium text-slate-700 ${fullWidth ? 'md:col-span-2' : ''}`}>
-            <span>{label}</span>
+        <div className={`space-y-1 ${fullWidth ? 'md:col-span-2' : ''}`}>
+            <FieldLabel label={label} hint={hint} />
             {children}
-            {hint && <span className="block text-xs leading-relaxed text-slate-400">{hint}</span>}
-        </label>
+        </div>
     );
 }
 
@@ -157,6 +174,8 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
     const [viewerPendingDelete, setViewerPendingDelete] = useState<ViewerRecord | null>(null);
     const [projectForm, setProjectForm] = useState<ProjectFormState>(() => createProjectForm(user));
     const [viewerForm, setViewerForm] = useState<ViewerFormState>(EMPTY_VIEWER_FORM);
+    const [adminTab, setAdminTab] = useState<'viewers' | 'matrix'>('viewers');
+    const [matrixSaving, setMatrixSaving] = useState<string>('');
 
     const activeProjects = useMemo(() => projects.filter((project) => project.isActive !== false), [projects]);
 
@@ -187,7 +206,7 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
         } finally {
             setLoading(false);
         }
-    }, [editingProjectId, push, user, user.role]);
+    }, [editingProjectId, push, user]);
 
     useEffect(() => {
         void fetchData();
@@ -376,6 +395,24 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
         }
     };
 
+    const handleMatrixToggle = async (viewer: ViewerRecord, projectId: string) => {
+        const key = `${viewer.email}::${projectId}`;
+        setMatrixSaving(key);
+        const nextProjectIds = viewer.projectIds.includes(projectId)
+            ? viewer.projectIds.filter((id) => id !== projectId)
+            : [...viewer.projectIds, projectId];
+        try {
+            await api.updateViewer(viewer.email, viewer.access, nextProjectIds, viewer.features || []);
+            setViewers((current) =>
+                current.map((v) => v.email === viewer.email ? { ...v, projectIds: nextProjectIds } : v)
+            );
+        } catch (error) {
+            push({ tone: 'error', title: 'Could not update access', description: error instanceof Error ? error.message : 'Unknown error' });
+        } finally {
+            setMatrixSaving('');
+        }
+    };
+
     const deleteViewer = async () => {
         if (!viewerPendingDelete) return;
 
@@ -400,272 +437,846 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
     }, projectSetupOptions);
     const readyProjectCount = activeProjects.filter((project) => isProjectReady(project, projectSetupOptions)).length;
 
-    const projectStepState = {
-        google: connection.connected,
-        properties: Boolean(projectForm.gscSiteUrl && projectForm.ga4PropertyId),
-        details: Boolean(projectForm.name && projectForm.url),
-    };
+    const propertiesReady = Boolean(projectForm.gscSiteUrl && projectForm.ga4PropertyId) ||
+        activeProjects.some((p) => p.gscSiteUrl && p.ga4PropertyId);
+
+    const onboardingSteps = [
+        {
+            num: '01',
+            title: 'Connect Google',
+            desc: 'Link the Google account that owns your Search Console & GA4 properties.',
+            done: connection.connected,
+            color: 'bg-blue-200',
+        },
+        {
+            num: '02',
+            title: 'Load Properties',
+            desc: 'Let us auto-detect your GSC site and GA4 property ID for this project.',
+            done: propertiesReady,
+            color: 'bg-purple-200',
+        },
+        {
+            num: '03',
+            title: 'Save Project',
+            desc: 'Name your project, confirm the domain, and save to activate it.',
+            done: activeProjects.length > 0,
+            color: 'bg-amber-200',
+        },
+        {
+            num: '04',
+            title: 'Go Live',
+            desc: 'Run your first dashboard analysis or deep audit to see your SEO data.',
+            done: readyProjectCount > 0,
+            color: 'bg-emerald-200',
+        },
+    ];
+
+    const showWelcomeGuide = !loading && readyProjectCount === 0;
 
     return (
-        <div className="min-h-screen bg-slate-50 pb-16 text-slate-900">
-            <div className="mx-auto max-w-7xl space-y-8 px-6 pt-24">
-                <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-                    <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-                        <div>
-                            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-indigo-500">{user.role === 'admin' ? 'Admin workspace' : 'Client workspace'}</p>
-                            <h1 className="mt-2 text-4xl font-black tracking-tight text-slate-900">{user.role === 'admin' ? 'Projects and Access' : 'Project Setup'}</h1>
-                            <p className="mt-3 max-w-3xl text-sm text-slate-500">Connect Google, load the correct properties, save the project, and then run dashboard analysis or a deep audit without manual help.</p>
+        <div className="operator-shell text-slate-900 font-sans selection:bg-black selection:text-white pb-20">
+            {/* Brutalist Header */}
+            <header className="sticky top-0 z-50 border-b-2 border-black bg-white/90 backdrop-blur-md">
+                <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4 flex-wrap">
+                    <div className="flex items-center gap-4">
+                        <div className="p-2 bg-black border-2 border-black" style={{ boxShadow: '2px 2px 0 0 rgba(0,0,0,0.3)' }}>
+                            <FolderCog className="w-6 h-6 text-white" />
                         </div>
-                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
-                            {readyProjectCount} ready projects - {activeProjects.length} active
+                        <div>
+                            <h1 className="text-xl font-black uppercase tracking-tight text-black">
+                                {user.role === 'admin' ? 'Projects & Access' : 'Project Setup'}
+                            </h1>
+                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">
+                                {user.role === 'admin' ? 'Admin Workspace' : 'Client Workspace'} · {user.email}
+                            </p>
+                        </div>
+                        <div className="hidden md:block h-10 w-0.5 bg-black" />
+                        <div className="hidden md:flex items-center gap-2">
+                            <span className="border-2 border-black bg-yellow-300 px-3 py-1 text-[11px] font-black uppercase">
+                                {readyProjectCount} Ready
+                            </span>
+                            <span className="border-2 border-black bg-white px-3 py-1 text-[11px] font-black uppercase">
+                                {activeProjects.length} Active
+                            </span>
                         </div>
                     </div>
-                </div>
-
-                <div className={`grid gap-8 ${user.role === 'admin' ? 'xl:grid-cols-[1.12fr_0.88fr]' : ''}`}>
-                    <section className="space-y-6 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-                        <div className="flex items-center gap-3">
-                            <div className="rounded-2xl bg-indigo-50 p-3 text-indigo-600"><FolderCog className="h-5 w-5" /></div>
-                            <div>
-                                <h2 className="text-lg font-bold text-slate-900">{user.role === 'admin' ? 'Project workflow' : 'Self-serve workflow'}</h2>
-                                <p className="text-sm text-slate-500">A cleaner setup sequence for real users opening their own projects.</p>
+                    <div className="flex items-center gap-3">
+                        {readyProjectCount > 0 && (
+                            <button onClick={() => navigate('/dashboard')} className="operator-button-primary px-5 py-2.5">
+                                <Play className="w-4 h-4" /> Go to Dashboard
+                            </button>
+                        )}
+                        {loading && (
+                            <div className="flex items-center gap-2 text-xs font-black uppercase text-slate-500">
+                                <Loader2 className="w-4 h-4 animate-spin" /> Loading...
                             </div>
+                        )}
+                    </div>
+                </div>
+            </header>
+
+            <div className="max-w-7xl mx-auto px-6 pt-8 space-y-8">
+
+                {/* ── Welcome / Onboarding Guide ── */}
+                {showWelcomeGuide && (
+                    <div className="border-2 border-black bg-white" style={{ boxShadow: '8px 8px 0 0 #000' }}>
+                        {/* Banner */}
+                        <div className="border-b-2 border-black bg-black px-6 py-4 flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-3">
+                                <Zap className="w-5 h-5 text-yellow-300" />
+                                <span className="text-sm font-black uppercase tracking-widest text-white">
+                                    Welcome — Let&apos;s Get You Set Up
+                                </span>
+                            </div>
+                            <span className="border border-yellow-300 text-yellow-300 px-2 py-0.5 text-[10px] font-black uppercase">
+                                {onboardingSteps.filter((s) => s.done).length}/{onboardingSteps.length} complete
+                            </span>
                         </div>
 
-                        <div className="grid gap-3 md:grid-cols-3">
-                            {[
-                                { title: '1. Connect Google', done: projectStepState.google },
-                                { title: '2. Load properties', done: projectStepState.properties },
-                                { title: '3. Save project', done: projectStepState.details },
-                            ].map((step) => (
-                                <div key={step.title} className={`rounded-2xl border p-4 ${step.done ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
-                                    <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                                        {step.done ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <AlertCircle className="h-4 w-4 text-slate-400" />}
-                                        {step.title}
+                        {/* Steps grid */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y-2 sm:divide-y-0 sm:divide-x-2 divide-black">
+                            {onboardingSteps.map((step, i) => (
+                                <div key={step.num} className={`p-6 ${step.done ? 'bg-emerald-50' : i === onboardingSteps.filter((s) => s.done).length ? 'bg-yellow-50' : 'bg-white'}`}>
+                                    <div className="flex items-start justify-between gap-2 mb-3">
+                                        <div className={`w-10 h-10 border-2 border-black flex items-center justify-center font-black text-sm ${step.done ? 'bg-emerald-200' : step.color}`}>
+                                            {step.done ? <CheckCircle2 className="w-5 h-5 text-black" /> : step.num}
+                                        </div>
+                                        {step.done && (
+                                            <span className="border border-black bg-emerald-200 px-2 py-0.5 text-[10px] font-black uppercase">Done</span>
+                                        )}
+                                        {!step.done && i === onboardingSteps.filter((s) => s.done).length && (
+                                            <span className="border border-black bg-yellow-300 px-2 py-0.5 text-[10px] font-black uppercase animate-pulse">Next</span>
+                                        )}
                                     </div>
+                                    <h3 className="font-black text-black uppercase text-sm mb-1">{step.title}</h3>
+                                    <p className="text-xs text-slate-600 font-medium leading-relaxed">{step.desc}</p>
                                 </div>
                             ))}
                         </div>
 
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-                            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                                <div>
-                                    <p className="text-sm font-semibold text-slate-900">{connection.connected ? `Connected as ${connection.googleEmail || connection.ownerEmail}` : 'Google not connected yet'}</p>
-                                    <p className="mt-1 text-sm text-slate-500">Use the same Google account that already has access to your Search Console and GA4 properties.</p>
-                                    <p className="mt-2 text-xs text-slate-400">Last updated: {formatDate(connection.updatedAt)}</p>
+                        {/* CTA bar */}
+                        <div className="border-t-2 border-black bg-slate-50 px-6 py-4 flex items-center justify-between gap-4 flex-wrap">
+                            <p className="text-xs font-bold text-slate-600 uppercase tracking-wide">
+                                {!connection.connected
+                                    ? 'Start by connecting your Google account below →'
+                                    : !propertiesReady
+                                        ? 'Google connected! Now click "Load Properties" to auto-detect your GSC & GA4 →'
+                                        : 'Properties loaded! Fill in your project details and click Save →'}
+                            </p>
+                            <ArrowRight className="w-5 h-5 text-black animate-bounce" />
+                        </div>
+                    </div>
+                )}
+
+                {/* ── Main Content Grid ── */}
+                <div className={`grid gap-8 ${user.role === 'admin' ? 'xl:grid-cols-[1.15fr_0.85fr]' : ''}`}>
+
+                    {/* ── LEFT: Project setup + list ── */}
+                    <section className="space-y-6">
+
+                        {/* Google Connection */}
+                        <div className="border-2 border-black bg-white" style={{ boxShadow: '6px 6px 0 0 #000' }}>
+                            {/* Section header */}
+                            <div className="flex items-center gap-3 border-b-2 border-black px-5 py-4 bg-slate-50">
+                                <div className="p-2 bg-black border-2 border-black">
+                                    <Link2 className="h-4 w-4 text-white" />
                                 </div>
-                                <div className="flex flex-wrap gap-2">
-                                    {connection.connected && (
-                                        <button type="button" onClick={() => void loadResources()} disabled={googleLoading} className="premium-button border border-slate-200 bg-white text-slate-700 hover:bg-slate-100">
-                                            {googleLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                                            Load properties
-                                        </button>
-                                    )}
-                                    <button type="button" onClick={handleConnectGoogle} className="premium-button bg-slate-900 text-white hover:bg-slate-800">
-                                        <Link2 className="h-4 w-4" />
-                                        {connection.connected ? 'Reconnect Google' : 'Connect Google'}
-                                    </button>
+                                <div>
+                                    <h2 className="text-sm font-black uppercase tracking-wide text-black">
+                                        {user.role === 'admin' ? 'Project Workflow' : 'Self-Serve Workflow'}
+                                    </h2>
+                                    <p className="text-xs font-bold text-slate-500">Connect Google → load properties → save project</p>
                                 </div>
                             </div>
 
-                            {resources && (
-                                <div className="mt-5 grid gap-4 md:grid-cols-2">
-                                    <Field label="Recommended Search Console property">
-                                        <select value={projectForm.gscSiteUrl} onChange={(event) => handleProjectField('gscSiteUrl', event.target.value)} className="premium-input py-3">
-                                            <option value="">Choose Search Console property</option>
-                                            {resources.sites.map((site) => <option key={site.siteUrl} value={site.siteUrl}>{site.label}</option>)}
-                                        </select>
-                                    </Field>
-                                    <Field label="Recommended GA4 property">
-                                        <select value={projectForm.ga4PropertyId} onChange={(event) => handleProjectField('ga4PropertyId', event.target.value)} className="premium-input py-3">
-                                            <option value="">Choose GA4 property</option>
-                                            {resources.properties.map((property) => <option key={property.propertyId} value={property.propertyId}>{property.label}</option>)}
-                                        </select>
-                                    </Field>
+                            <div className="p-5 space-y-5">
+                                {/* Step progress */}
+                                <div className="grid gap-2 sm:grid-cols-3">
+                                    {[
+                                        { title: '1. Connect Google', done: connection.connected, color: 'bg-blue-200' },
+                                        { title: '2. Load properties', done: Boolean(projectForm.gscSiteUrl && projectForm.ga4PropertyId), color: 'bg-purple-200' },
+                                        { title: '3. Save project', done: Boolean(projectForm.name && projectForm.url), color: 'bg-amber-200' },
+                                    ].map((step) => (
+                                        <div
+                                            key={step.title}
+                                            className={`flex items-center gap-2 border-2 border-black p-3 ${step.done ? 'bg-emerald-200' : step.color + '/30 bg-white'}`}
+                                        >
+                                            {step.done
+                                                ? <CheckCircle2 className="h-4 w-4 text-black shrink-0" />
+                                                : <AlertCircle className="h-4 w-4 text-slate-400 shrink-0" />}
+                                            <span className="text-xs font-black uppercase">{step.title}</span>
+                                        </div>
+                                    ))}
                                 </div>
-                            )}
+
+                                {/* Google account card */}
+                                <div className={`border-2 border-black ${connection.connected ? 'bg-emerald-50' : 'bg-yellow-50'}`}>
+                                    {/* Status row */}
+                                    <div className="flex items-center gap-3 px-4 py-3 border-b-2 border-black/10">
+                                        <div className={`w-3 h-3 border-2 border-black shrink-0 ${connection.connected ? 'bg-emerald-400' : 'bg-red-400'}`} />
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-xs font-black uppercase text-black">
+                                                {connection.connected ? 'Google Connected' : 'Google Not Connected'}
+                                            </p>
+                                            {connection.connected && (
+                                                <p className="text-[11px] font-mono font-bold text-slate-600 truncate">
+                                                    {connection.googleEmail || connection.ownerEmail}
+                                                </p>
+                                            )}
+                                        </div>
+                                        {connection.updatedAt && (
+                                            <span className="text-[9px] font-bold text-slate-400 uppercase shrink-0 hidden sm:block">
+                                                Updated {new Date(connection.updatedAt).toLocaleDateString()}
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    {/* Help text */}
+                                    <p className="px-4 py-3 text-xs font-bold text-slate-600 border-b-2 border-black/10">
+                                        {connection.connected
+                                            ? 'Click "Load Properties" to auto-detect your Search Console and GA4 properties for this project.'
+                                            : 'Connect the Google account that owns your Search Console and GA4 properties.'}
+                                    </p>
+
+                                    {/* Action buttons row */}
+                                    <div className="flex flex-wrap gap-0 border-t-0">
+                                        {connection.connected && (
+                                            <button
+                                                type="button"
+                                                onClick={() => void loadResources()}
+                                                disabled={googleLoading}
+                                                className="operator-button-secondary flex-1 px-4 py-3 border-r-2 border-black justify-center"
+                                            >
+                                                {googleLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                                                {googleLoading ? 'Loading...' : 'Load Properties'}
+                                            </button>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={handleConnectGoogle}
+                                            className={`operator-button-primary flex-1 px-4 py-3 justify-center ${connection.connected ? '' : 'w-full'}`}
+                                        >
+                                            <Link2 className="h-4 w-4" />
+                                            {connection.connected ? 'Reconnect' : 'Connect Google'}
+                                        </button>
+                                    </div>
+
+                                    {/* Property selectors (after load) */}
+                                    {resources && (
+                                        <div className="grid gap-4 md:grid-cols-2 border-t-2 border-black/10 p-4">
+                                            <Field label="Search Console Property">
+                                                <select
+                                                    value={projectForm.gscSiteUrl}
+                                                    onChange={(e) => handleProjectField('gscSiteUrl', e.target.value)}
+                                                    className="operator-control w-full py-3 pl-3 pr-10 text-sm font-bold appearance-none cursor-pointer"
+                                                >
+                                                    <option value="">Choose Search Console property</option>
+                                                    {resources.sites.map((site) => (
+                                                        <option key={site.siteUrl} value={site.siteUrl}>{site.label}</option>
+                                                    ))}
+                                                </select>
+                                            </Field>
+                                            <Field label="GA4 Property">
+                                                <select
+                                                    value={projectForm.ga4PropertyId}
+                                                    onChange={(e) => handleProjectField('ga4PropertyId', e.target.value)}
+                                                    className="operator-control w-full py-3 pl-3 pr-10 text-sm font-bold appearance-none cursor-pointer"
+                                                >
+                                                    <option value="">Choose GA4 property</option>
+                                                    {resources.properties.map((property) => (
+                                                        <option key={property.propertyId} value={property.propertyId}>{property.label}</option>
+                                                    ))}
+                                                </select>
+                                            </Field>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Project Form */}
+                                <form onSubmit={saveProject} className="space-y-5">
+                                    <div className="flex items-center gap-3 border-b-2 border-black/10 pb-3">
+                                        <div className="p-1.5 bg-black border-2 border-black">
+                                            <FolderCog className="h-4 w-4 text-white" />
+                                        </div>
+                                        <h3 className="text-sm font-black uppercase tracking-wide text-black">
+                                            {editingProjectId ? 'Edit Project' : 'New Project'}
+                                        </h3>
+                                        {editingProjectId && (
+                                            <span className="border-2 border-black bg-yellow-300 px-2 py-0.5 text-[10px] font-black uppercase">Editing</span>
+                                        )}
+                                    </div>
+
+                                    <div className="grid gap-4 md:grid-cols-2">
+                                        <Field label="Project Name">
+                                            <input
+                                                value={projectForm.name}
+                                                onChange={(e) => handleProjectField('name', e.target.value)}
+                                                className="operator-control w-full py-3 px-4 text-sm font-bold"
+                                                placeholder="Example Inc"
+                                            />
+                                        </Field>
+                                        <Field label="Project ID" hint="Used in history and jobs. Cannot change after creation.">
+                                            <input
+                                                value={projectForm.id}
+                                                onChange={(e) => handleProjectField('id', e.target.value)}
+                                                className="operator-control w-full py-3 px-4 text-sm font-bold font-mono"
+                                                placeholder="example-inc"
+                                                disabled={Boolean(editingProjectId)}
+                                            />
+                                        </Field>
+                                        <Field label="Primary URL">
+                                            <input
+                                                value={projectForm.url}
+                                                onChange={(e) => handleProjectField('url', e.target.value)}
+                                                className="operator-control w-full py-3 px-4 text-sm font-bold"
+                                                placeholder="https://example.com/"
+                                            />
+                                        </Field>
+                                        <Field label="Domain" hint="Optional override derived from URL.">
+                                            <input
+                                                value={projectForm.domain}
+                                                onChange={(e) => handleProjectField('domain', e.target.value)}
+                                                className="operator-control w-full py-3 px-4 text-sm font-bold"
+                                                placeholder="example.com"
+                                            />
+                                        </Field>
+                                        {user.role === 'admin' && (
+                                            <Field label="Owner Email">
+                                                <input
+                                                    value={projectForm.ownerEmail}
+                                                    onChange={(e) => handleProjectField('ownerEmail', e.target.value)}
+                                                    className="operator-control w-full py-3 px-4 text-sm font-bold"
+                                                    placeholder="client@gmail.com"
+                                                />
+                                            </Field>
+                                        )}
+                                        <Field label="Google Connection Email" hint="The Google account connected above.">
+                                            <input
+                                                value={projectForm.googleConnectionEmail}
+                                                onChange={(e) => handleProjectField('googleConnectionEmail', e.target.value)}
+                                                className="operator-control w-full py-3 px-4 text-sm font-bold"
+                                                placeholder="google-account@gmail.com"
+                                            />
+                                        </Field>
+                                        <Field label="Search Console Property" hint="URL-prefix or sc-domain format.">
+                                            <input
+                                                value={projectForm.gscSiteUrl}
+                                                onChange={(e) => handleProjectField('gscSiteUrl', e.target.value)}
+                                                className="operator-control w-full py-3 px-4 text-sm font-bold"
+                                                placeholder="https://example.com/"
+                                            />
+                                        </Field>
+                                        <Field label="GA4 Property ID">
+                                            <input
+                                                value={projectForm.ga4PropertyId}
+                                                onChange={(e) => handleProjectField('ga4PropertyId', e.target.value)}
+                                                className="operator-control w-full py-3 px-4 text-sm font-bold"
+                                                placeholder="123456789"
+                                            />
+                                        </Field>
+                                        <Field label="Audit Max Pages">
+                                            <input
+                                                value={projectForm.auditMaxPages}
+                                                onChange={(e) => handleProjectField('auditMaxPages', e.target.value)}
+                                                className="operator-control w-full py-3 px-4 text-sm font-bold"
+                                                type="number"
+                                                min="1"
+                                                max="500"
+                                            />
+                                        </Field>
+                                        <Field label="Spreadsheet ID" hint="Optional — for Google Sheets exports.">
+                                            <input
+                                                value={projectForm.spreadsheetId}
+                                                onChange={(e) => handleProjectField('spreadsheetId', e.target.value)}
+                                                className="operator-control w-full py-3 px-4 text-sm font-bold"
+                                                placeholder="Google Sheet ID"
+                                            />
+                                        </Field>
+                                        <Field label="Sheet GID">
+                                            <input
+                                                value={projectForm.sheetGid}
+                                                onChange={(e) => handleProjectField('sheetGid', e.target.value)}
+                                                className="operator-control w-full py-3 px-4 text-sm font-bold"
+                                                type="number"
+                                            />
+                                        </Field>
+                                    </div>
+
+                                    {/* Status bar + actions */}
+                                    <div className={`border-2 border-black p-4 ${draftProjectSetupIssues.length === 0 ? 'bg-emerald-100' : 'bg-yellow-50'}`}>
+                                        <div className="flex items-start gap-3">
+                                            <div className={`w-2 h-2 mt-1.5 border border-black shrink-0 ${draftProjectSetupIssues.length === 0 ? 'bg-emerald-400' : 'bg-yellow-400'}`} />
+                                            <p className="text-xs font-bold text-black">
+                                                {draftProjectSetupIssues.length === 0
+                                                    ? 'This project is fully configured — ready for dashboard analysis and audit jobs.'
+                                                    : `Will save as draft. Still needed: ${draftProjectSetupIssues.join(' · ')}.`}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-3">
+                                        <button
+                                            type="submit"
+                                            disabled={savingProject}
+                                            className="operator-button-primary px-8 py-3"
+                                        >
+                                            {savingProject ? <Loader2 className="h-4 w-4 animate-spin" /> : editingProjectId ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+                                            {editingProjectId
+                                                ? (draftProjectSetupIssues.length === 0 ? 'Save Ready Project' : 'Save Draft Changes')
+                                                : (draftProjectSetupIssues.length === 0 ? 'Create Ready Project' : 'Save Project Draft')}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={resetProjectForm}
+                                            className="operator-button-secondary px-5 py-3"
+                                        >
+                                            Clear Form
+                                        </button>
+                                        {readyProjectCount > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => navigate('/dashboard')}
+                                                className="operator-button-secondary px-5 py-3 border-emerald-600"
+                                            >
+                                                <CheckCircle2 className="h-4 w-4" /> Go to Dashboard
+                                            </button>
+                                        )}
+                                    </div>
+                                </form>
+                            </div>
                         </div>
 
-                        <form onSubmit={saveProject} className="grid gap-4 md:grid-cols-2">
-                            <Field label="Project name">
-                                <input value={projectForm.name} onChange={(event) => handleProjectField('name', event.target.value)} className="premium-input py-3" placeholder="Example Inc" />
-                            </Field>
-                            <Field label="Project ID" hint="Used internally in saved history and jobs.">
-                                <input value={projectForm.id} onChange={(event) => handleProjectField('id', event.target.value)} className="premium-input py-3" placeholder="example-inc" disabled={Boolean(editingProjectId)} />
-                            </Field>
-                            <Field label="Primary URL">
-                                <input value={projectForm.url} onChange={(event) => handleProjectField('url', event.target.value)} className="premium-input py-3" placeholder="https://example.com/" />
-                            </Field>
-                            <Field label="Domain" hint="Optional if you want to override the domain derived from the URL.">
-                                <input value={projectForm.domain} onChange={(event) => handleProjectField('domain', event.target.value)} className="premium-input py-3" placeholder="example.com" />
-                            </Field>
-                            {user.role === 'admin' && (
-                                <Field label="Owner email">
-                                    <input value={projectForm.ownerEmail} onChange={(event) => handleProjectField('ownerEmail', event.target.value)} className="premium-input py-3" placeholder="client@gmail.com" />
-                                </Field>
-                            )}
-                            <Field label="Google connection email" hint="Usually the Google account you just connected.">
-                                <input value={projectForm.googleConnectionEmail} onChange={(event) => handleProjectField('googleConnectionEmail', event.target.value)} className="premium-input py-3" placeholder="google-account@gmail.com" />
-                            </Field>
-                            <Field label="Search Console property" hint="Supports URL-prefix or sc-domain properties.">
-                                <input value={projectForm.gscSiteUrl} onChange={(event) => handleProjectField('gscSiteUrl', event.target.value)} className="premium-input py-3" placeholder="https://example.com/ or sc-domain:example.com" />
-                            </Field>
-                            <Field label="GA4 property ID">
-                                <input value={projectForm.ga4PropertyId} onChange={(event) => handleProjectField('ga4PropertyId', event.target.value)} className="premium-input py-3" placeholder="123456789" />
-                            </Field>
-                            <Field label="Audit max pages">
-                                <input value={projectForm.auditMaxPages} onChange={(event) => handleProjectField('auditMaxPages', event.target.value)} className="premium-input py-3" type="number" min="1" max="500" />
-                            </Field>
-                            <Field label="Spreadsheet ID" hint="Optional - only needed if you want dashboard exports pushed to Google Sheets.">
-                                <input value={projectForm.spreadsheetId} onChange={(event) => handleProjectField('spreadsheetId', event.target.value)} className="premium-input py-3" placeholder="Google Sheet ID" />
-                            </Field>
-                            <Field label="Sheet GID">
-                                <input value={projectForm.sheetGid} onChange={(event) => handleProjectField('sheetGid', event.target.value)} className="premium-input py-3" type="number" />
-                            </Field>
+                        {/* ── Projects List ── */}
+                        <div className="border-2 border-black bg-white" style={{ boxShadow: '6px 6px 0 0 #000' }}>
+                            <div className="flex items-center justify-between gap-4 border-b-2 border-black px-5 py-4 bg-slate-50">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-black border-2 border-black">
+                                        <Globe className="h-4 w-4 text-white" />
+                                    </div>
+                                    <h2 className="text-sm font-black uppercase tracking-wide text-black">
+                                        {user.role === 'admin' ? 'All Projects' : 'Your Projects'}
+                                    </h2>
+                                </div>
+                                <span className="border-2 border-black bg-yellow-300 px-3 py-1 text-[11px] font-black uppercase">
+                                    {activeProjects.length} Active
+                                </span>
+                            </div>
 
-                            <div className="md:col-span-2 flex flex-wrap items-center gap-3">
-                                <button type="submit" disabled={savingProject} className="premium-button bg-indigo-600 text-white hover:bg-indigo-700">
-                                    {savingProject ? <Loader2 className="h-4 w-4 animate-spin" /> : editingProjectId ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-                                    {editingProjectId ? (draftProjectSetupIssues.length === 0 ? 'Save ready project' : 'Save draft changes') : (draftProjectSetupIssues.length === 0 ? 'Create ready project' : 'Save project draft')}
-                                </button>
-                                <button type="button" onClick={resetProjectForm} className="premium-button border border-slate-200 bg-white text-slate-700 hover:bg-slate-50">
-                                    Clear form
-                                </button>
-                                {readyProjectCount > 0 && (
-                                    <button type="button" onClick={() => navigate('/dashboard')} className="premium-button border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100">
-                                        <CheckCircle2 className="h-4 w-4" />
-                                        Go to dashboard
-                                    </button>
+                            <div className="p-5 space-y-3">
+                                {activeProjects.map((project) => {
+                                    const ready = isProjectReady(project, projectSetupOptions);
+                                    const setupIssues = getProjectSetupIssues(project, projectSetupOptions);
+                                    const canManage = canManageProject(project, user);
+                                    const isEditing = editingProjectId === project.id;
+
+                                    return (
+                                        <div
+                                            key={project.id}
+                                            className={`border-2 border-black p-4 transition-all ${isEditing ? 'bg-yellow-50' : ready ? 'bg-white hover:bg-emerald-50/30' : 'bg-white hover:bg-amber-50/30'}`}
+                                            style={isEditing ? { boxShadow: '4px 4px 0 0 #000' } : undefined}
+                                        >
+                                            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                                                        <span className="text-sm font-black uppercase text-black">{project.name}</span>
+                                                        <span className="border border-black bg-slate-100 px-2 py-0.5 text-[10px] font-black font-mono">
+                                                            {project.id}
+                                                        </span>
+                                                        <span className={`border border-black px-2 py-0.5 text-[10px] font-black uppercase ${ready ? 'bg-emerald-200' : 'bg-yellow-300'}`}>
+                                                            {ready ? 'Ready' : 'Needs Setup'}
+                                                        </span>
+                                                        {isEditing && (
+                                                            <span className="border-2 border-black bg-black text-white px-2 py-0.5 text-[10px] font-black uppercase">Editing</span>
+                                                        )}
+                                                    </div>
+                                                    <p className="text-xs font-bold text-slate-600 font-mono truncate">{project.url}</p>
+                                                    <div className="mt-2 flex flex-wrap gap-3 text-[10px] font-bold text-slate-500 uppercase">
+                                                        <span>Owner: {project.ownerEmail || 'shared'}</span>
+                                                        <span className="text-slate-300">·</span>
+                                                        <span className={project.gscSiteUrl ? 'text-emerald-700' : 'text-red-600'}>
+                                                            GSC: {project.gscSiteUrl ? 'Set' : 'Missing'}
+                                                        </span>
+                                                        <span className="text-slate-300">·</span>
+                                                        <span className={project.ga4PropertyId ? 'text-emerald-700' : 'text-red-600'}>
+                                                            GA4: {project.ga4PropertyId ? 'Set' : 'Missing'}
+                                                        </span>
+                                                    </div>
+                                                    {!ready && setupIssues.length > 0 && (
+                                                        <div className="mt-2 flex items-center gap-2">
+                                                            <AlertCircle className="w-3 h-3 text-amber-600 shrink-0" />
+                                                            <p className="text-[10px] font-black uppercase text-amber-700">
+                                                                Next: {setupIssues.join(' · ')}
+                                                            </p>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {canManage && (
+                                                    <div className="flex flex-wrap gap-2 shrink-0">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => isEditing ? resetProjectForm() : startEditProject(project)}
+                                                            className="operator-button-secondary px-4 py-2"
+                                                        >
+                                                            <Pencil className="h-3.5 w-3.5" />
+                                                            {isEditing ? 'Cancel' : (ready ? 'Edit' : 'Continue Setup')}
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setProjectPendingDelete(project)}
+                                                            className="border-2 border-black bg-red-100 text-black px-4 py-2 text-xs font-black uppercase hover:bg-red-200 transition-all inline-flex items-center gap-2"
+                                                        >
+                                                            <Trash2 className="h-3.5 w-3.5" /> Delete
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+
+                                {!loading && activeProjects.length === 0 && (
+                                    <div className="border-2 border-dashed border-slate-300 p-8 text-center">
+                                        <FolderCog className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                                        <p className="text-sm font-black uppercase text-slate-400">No projects yet</p>
+                                        <p className="text-xs font-bold text-slate-400 mt-1">Connect Google, load your properties, and create the first one above.</p>
+                                    </div>
+                                )}
+
+                                {loading && (
+                                    <div className="flex items-center justify-center py-8 gap-3 text-slate-500">
+                                        <Loader2 className="w-5 h-5 animate-spin" />
+                                        <span className="text-sm font-black uppercase">Loading projects...</span>
+                                    </div>
                                 )}
                             </div>
-                            <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                                {draftProjectSetupIssues.length === 0
-                                    ? 'This project is fully configured for dashboard analysis and audit jobs.'
-                                    : `This will save as a draft until you finish: ${draftProjectSetupIssues.join(', ')}.`}
+                        </div>
+                    </section>
+
+                    {/* ── RIGHT: Admin Control Panel ── */}
+                    {user.role === 'admin' && (
+                        <section className="space-y-6">
+
+                            {/* Admin Stats Strip */}
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-0 border-2 border-black" style={{ boxShadow: '6px 6px 0 0 #000' }}>
+                                {[
+                                    { label: 'Projects', value: activeProjects.length, color: 'bg-blue-200' },
+                                    { label: 'Ready', value: readyProjectCount, color: 'bg-emerald-200' },
+                                    { label: 'Viewers', value: viewers.length, color: 'bg-purple-200' },
+                                    { label: 'Incomplete', value: activeProjects.length - readyProjectCount, color: 'bg-yellow-300' },
+                                ].map((stat, i) => (
+                                    <div
+                                        key={stat.label}
+                                        className={`${stat.color} border-black p-4 ${i < 3 ? 'border-r-2' : ''} flex flex-col justify-between`}
+                                    >
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-black/60">{stat.label}</p>
+                                        <p className="text-3xl font-black text-black mt-1">{stat.value}</p>
+                                    </div>
+                                ))}
                             </div>
-                        </form>
 
-                        <div className="space-y-3">
-                            <div className="flex items-center justify-between gap-3">
-                                <h3 className="text-base font-bold text-slate-900">{user.role === 'admin' ? 'Projects' : 'Your projects'}</h3>
-                                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">{activeProjects.length} active</span>
-                            </div>
+                            {/* Tabbed panel */}
+                            <div className="border-2 border-black bg-white" style={{ boxShadow: '6px 6px 0 0 #000' }}>
+                                {/* Tab bar */}
+                                <div className="flex border-b-2 border-black">
+                                    {[
+                                        { id: 'viewers' as const, label: 'Viewer Accounts', icon: Users },
+                                        { id: 'matrix' as const, label: 'Access Matrix', icon: Grid3X3 },
+                                    ].map((tab) => (
+                                        <button
+                                            key={tab.id}
+                                            onClick={() => setAdminTab(tab.id)}
+                                            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3.5 text-xs font-black uppercase tracking-wide border-r-2 border-black last:border-r-0 transition-all ${
+                                                adminTab === tab.id
+                                                    ? 'bg-black text-white'
+                                                    : 'bg-white text-black hover:bg-slate-50'
+                                            }`}
+                                        >
+                                            <tab.icon className="h-4 w-4" />
+                                            {tab.label}
+                                        </button>
+                                    ))}
+                                </div>
 
-                            {activeProjects.map((project) => {
-                                const ready = isProjectReady(project, projectSetupOptions);
-                                const setupIssues = getProjectSetupIssues(project, projectSetupOptions);
-                                const canManage = canManageProject(project, user);
-
-                                return (
-                                    <div key={project.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                                            <div>
-                                                <div className="flex flex-wrap items-center gap-2">
-                                                    <span className="text-base font-bold text-slate-900">{project.name}</span>
-                                                    <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-slate-500">{project.id}</span>
-                                                    <span className={`rounded-full px-2 py-1 text-xs font-semibold ${ready ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'}`}>
-                                                        {ready ? 'Ready' : 'Needs setup'}
+                                {/* ── Viewer Accounts Tab ── */}
+                                {adminTab === 'viewers' && (
+                                    <div className="p-5 space-y-5">
+                                        {/* Add/Edit form */}
+                                        <form onSubmit={saveViewer} className="border-2 border-black p-5 space-y-4 bg-slate-50">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="p-1.5 bg-black border-2 border-black">
+                                                        <Shield className="w-3.5 h-3.5 text-white" />
+                                                    </div>
+                                                    <span className="text-xs font-black uppercase text-black">
+                                                        {editingViewerEmail ? `Editing: ${editingViewerEmail}` : 'Add New Viewer'}
                                                     </span>
                                                 </div>
-                                                <p className="mt-1 text-sm text-slate-500">{project.url}</p>
-                                                <p className="mt-2 text-xs text-slate-500">Owner: {project.ownerEmail || 'shared'} - GSC: {project.gscSiteUrl || 'Not set'} - GA4: {project.ga4PropertyId || 'Not set'}</p>
-                                                {!ready && (
-                                                    <p className="mt-2 text-xs font-medium text-amber-700">Next: {setupIssues.join(', ')}</p>
+                                                {editingViewerEmail && (
+                                                    <span className="border-2 border-black bg-yellow-300 px-2 py-0.5 text-[10px] font-black uppercase">Editing</span>
                                                 )}
                                             </div>
 
-                                            {canManage && (
+                                            <Field label="Google Email">
+                                                <input
+                                                    value={viewerForm.email}
+                                                    onChange={(e) => setViewerForm((current) => ({ ...current, email: e.target.value }))}
+                                                    className="operator-control w-full py-3 px-4 text-sm font-bold"
+                                                    placeholder="viewer@gmail.com"
+                                                    disabled={Boolean(editingViewerEmail)}
+                                                />
+                                            </Field>
+
+                                            <div className="space-y-2">
+                                                <FieldLabel label="Product Access" />
                                                 <div className="flex flex-wrap gap-2">
-                                                    <button type="button" onClick={() => startEditProject(project)} className="premium-button border border-slate-200 bg-white text-slate-700 hover:bg-slate-100">
-                                                        <Pencil className="h-4 w-4" />
-                                                        {ready ? 'Edit' : 'Continue setup'}
-                                                    </button>
-                                                    <button type="button" onClick={() => setProjectPendingDelete(project)} className="premium-button border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100">
-                                                        <Trash2 className="h-4 w-4" />
-                                                        Delete
-                                                    </button>
+                                                    {ACCESS_OPTIONS.map((option) => (
+                                                        <Toggle
+                                                            key={option.id}
+                                                            checked={viewerForm.access.includes(option.id)}
+                                                            label={option.label}
+                                                            onClick={() => handleViewerToggle('access', option.id)}
+                                                        />
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <FieldLabel label="Project Scope" hint="Projects this viewer can access." />
+                                                <div className="flex flex-wrap gap-2">
+                                                    {activeProjects.length === 0 ? (
+                                                        <span className="text-xs font-bold text-slate-400 uppercase">No projects yet</span>
+                                                    ) : activeProjects.map((project) => (
+                                                        <Toggle
+                                                            key={project.id}
+                                                            checked={viewerForm.projectIds.includes(project.id)}
+                                                            label={project.name}
+                                                            onClick={() => handleViewerToggle('projectIds', project.id)}
+                                                        />
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            <div className="flex flex-wrap items-center gap-3 pt-2 border-t-2 border-black/10">
+                                                <button type="submit" disabled={savingViewer} className="operator-button-primary px-6 py-2.5">
+                                                    {savingViewer ? <Loader2 className="h-4 w-4 animate-spin" /> : <Shield className="h-4 w-4" />}
+                                                    {editingViewerEmail ? 'Save Changes' : 'Add Viewer'}
+                                                </button>
+                                                <button type="button" onClick={resetViewerForm} className="operator-button-secondary px-4 py-2.5">
+                                                    Clear
+                                                </button>
+                                            </div>
+                                        </form>
+
+                                        {/* Viewer cards */}
+                                        <div className="space-y-3">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">
+                                                    {viewers.length} Viewer{viewers.length !== 1 ? 's' : ''} registered
+                                                </span>
+                                            </div>
+
+                                            {viewers.map((viewer) => {
+                                                const isEditingViewer = editingViewerEmail === viewer.email;
+                                                const initials = (viewer.name || viewer.email).slice(0, 2).toUpperCase();
+                                                const assignedProjects = activeProjects.filter((p) => viewer.projectIds.includes(p.id));
+
+                                                return (
+                                                    <div
+                                                        key={viewer.email}
+                                                        className={`border-2 border-black p-4 transition-colors ${isEditingViewer ? 'bg-yellow-50' : 'bg-white hover:bg-slate-50'}`}
+                                                    >
+                                                        <div className="flex items-start gap-3">
+                                                            {/* Avatar */}
+                                                            <div className="border-2 border-black flex-shrink-0 w-10 h-10 flex items-center justify-center font-black text-sm bg-slate-100">
+                                                                {viewer.picture
+                                                                    ? <img src={viewer.picture} className="w-full h-full object-cover" alt="" />
+                                                                    : initials
+                                                                }
+                                                            </div>
+
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="flex flex-wrap items-center gap-2 mb-1">
+                                                                    <p className="text-sm font-black text-black truncate">{viewer.email}</p>
+                                                                    {viewer.registrationSource === 'self-serve' && (
+                                                                        <span className="border border-black bg-blue-100 px-1.5 py-0.5 text-[9px] font-black uppercase">Self-serve</span>
+                                                                    )}
+                                                                    {viewer.status === 'pending' && (
+                                                                        <span className="border border-black bg-yellow-300 px-1.5 py-0.5 text-[9px] font-black uppercase">Pending</span>
+                                                                    )}
+                                                                </div>
+
+                                                                {/* Access badges */}
+                                                                <div className="flex flex-wrap gap-1.5 mb-2">
+                                                                    {viewer.access.length === 0
+                                                                        ? <span className="border border-black bg-red-100 px-2 py-0.5 text-[9px] font-black uppercase">No access</span>
+                                                                        : viewer.access.map((a) => (
+                                                                            <span key={a} className="border border-black bg-blue-100 px-2 py-0.5 text-[9px] font-black uppercase">{a}</span>
+                                                                        ))
+                                                                    }
+                                                                </div>
+
+                                                                {/* Projects assigned */}
+                                                                <div className="text-[10px] font-bold text-slate-500 uppercase">
+                                                                    {assignedProjects.length === 0
+                                                                        ? <span className="text-red-500">No projects assigned</span>
+                                                                        : <span className="text-emerald-700">{assignedProjects.map((p) => p.name).join(' · ')}</span>
+                                                                    }
+                                                                </div>
+
+                                                                {/* Dates */}
+                                                                <div className="mt-1.5 flex flex-wrap gap-3 text-[9px] font-bold text-slate-400 uppercase">
+                                                                    {viewer.registeredAt && <span>Joined {new Date(viewer.registeredAt).toLocaleDateString()}</span>}
+                                                                    {viewer.lastLoginAt && <span>Last login {new Date(viewer.lastLoginAt).toLocaleDateString()}</span>}
+                                                                </div>
+                                                            </div>
+
+                                                            {/* Actions */}
+                                                            <div className="flex gap-1.5 shrink-0">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => isEditingViewer ? resetViewerForm() : startEditViewer(viewer)}
+                                                                    className="operator-button-secondary px-2.5 py-2"
+                                                                    title={isEditingViewer ? 'Cancel' : 'Edit viewer'}
+                                                                >
+                                                                    <Pencil className="h-3.5 w-3.5" />
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setViewerPendingDelete(viewer)}
+                                                                    className="border-2 border-black bg-red-100 text-black px-2.5 py-2 hover:bg-red-200 transition-all inline-flex items-center"
+                                                                    title="Remove viewer"
+                                                                >
+                                                                    <Trash2 className="h-3.5 w-3.5" />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+
+                                            {!loading && viewers.length === 0 && (
+                                                <div className="border-2 border-dashed border-slate-300 p-8 text-center">
+                                                    <Users className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                                                    <p className="text-xs font-black uppercase text-slate-400">No viewer accounts yet</p>
+                                                    <p className="text-[10px] font-bold text-slate-400 mt-1">Add a client or team member using the form above.</p>
                                                 </div>
                                             )}
                                         </div>
                                     </div>
-                                );
-                            })}
+                                )}
 
-                            {!loading && activeProjects.length === 0 && (
-                                <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">No projects yet. Connect Google, load your properties, and create the first one here.</div>
-                            )}
-                        </div>
-                    </section>
+                                {/* ── Access Matrix Tab ── */}
+                                {adminTab === 'matrix' && (
+                                    <div className="p-5 space-y-4">
+                                        <div>
+                                            <p className="text-xs font-black uppercase tracking-wide text-black mb-1">Project × Viewer Access Matrix</p>
+                                            <p className="text-[10px] font-bold text-slate-500">Click a cell to grant or revoke a viewer's access to a project instantly.</p>
+                                        </div>
 
-                    {user.role === 'admin' && (
-                        <section className="space-y-5 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-                            <div className="flex items-center gap-3">
-                                <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-600"><Users className="h-5 w-5" /></div>
-                                <div>
-                                    <h2 className="text-lg font-bold text-slate-900">Viewer access</h2>
-                                    <p className="text-sm text-slate-500">Keep invite-only access for teammates or clients who should not self-manage projects.</p>
-                                </div>
-                            </div>
-
-                            <form onSubmit={saveViewer} className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                <Field label="Google email" fullWidth>
-                                    <input value={viewerForm.email} onChange={(event) => setViewerForm((current) => ({ ...current, email: event.target.value }))} className="premium-input py-3" placeholder="viewer@gmail.com" disabled={Boolean(editingViewerEmail)} />
-                                </Field>
-
-                                <div className="space-y-2">
-                                    <p className="text-sm font-medium text-slate-700">Product access</p>
-                                    <div className="flex flex-wrap gap-2">
-                                        {ACCESS_OPTIONS.map((option) => (
-                                            <Toggle key={option.id} checked={viewerForm.access.includes(option.id)} label={option.label} onClick={() => handleViewerToggle('access', option.id)} />
-                                        ))}
-                                    </div>
-                                </div>
-
-                                <div className="space-y-2">
-                                    <p className="text-sm font-medium text-slate-700">Project scope</p>
-                                    <div className="flex flex-wrap gap-2">
-                                        {activeProjects.map((project) => (
-                                            <Toggle key={project.id} checked={viewerForm.projectIds.includes(project.id)} label={project.name} onClick={() => handleViewerToggle('projectIds', project.id)} />
-                                        ))}
-                                    </div>
-                                </div>
-
-                                <div className="flex flex-wrap items-center gap-3">
-                                    <button type="submit" disabled={savingViewer} className="premium-button bg-emerald-600 text-white hover:bg-emerald-700">
-                                        {savingViewer ? <Loader2 className="h-4 w-4 animate-spin" /> : <Shield className="h-4 w-4" />}
-                                        {editingViewerEmail ? 'Save viewer' : 'Add viewer'}
-                                    </button>
-                                    <button type="button" onClick={resetViewerForm} className="premium-button border border-slate-200 bg-white text-slate-700 hover:bg-slate-50">
-                                        Clear
-                                    </button>
-                                </div>
-                            </form>
-
-                            <div className="space-y-3">
-                                {viewers.map((viewer) => (
-                                    <div key={viewer.email} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                                            <div>
-                                                <p className="font-semibold text-slate-900">{viewer.email}</p>
-                                                <p className="mt-1 text-sm text-slate-500">Access: {viewer.access.join(', ') || 'No access'}</p>
-                                                <p className="mt-1 text-sm text-slate-500">Projects: {viewer.projectIds.length ? viewer.projectIds.join(', ') : 'No projects assigned'}</p>
+                                        {viewers.length === 0 || activeProjects.length === 0 ? (
+                                            <div className="border-2 border-dashed border-slate-300 p-8 text-center">
+                                                <Grid3X3 className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                                                <p className="text-xs font-black uppercase text-slate-400">
+                                                    {viewers.length === 0 ? 'Add viewers first' : 'Add projects first'}
+                                                </p>
+                                                <p className="text-[10px] font-bold text-slate-400 mt-1">
+                                                    The matrix appears once you have both projects and viewers.
+                                                </p>
                                             </div>
-                                            <div className="flex gap-2">
-                                                <button type="button" onClick={() => startEditViewer(viewer)} className="premium-button border border-slate-200 bg-white text-slate-700 hover:bg-slate-100">
-                                                    <Pencil className="h-4 w-4" />
-                                                    Edit
-                                                </button>
-                                                <button type="button" onClick={() => setViewerPendingDelete(viewer)} className="premium-button border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100">
-                                                    <Trash2 className="h-4 w-4" />
-                                                    Remove
-                                                </button>
+                                        ) : (
+                                            <div className="overflow-x-auto border-2 border-black">
+                                                <table className="w-full text-xs border-collapse">
+                                                    <thead>
+                                                        <tr>
+                                                            <th className="border-r-2 border-b-2 border-black bg-black text-white px-3 py-3 text-left font-black uppercase whitespace-nowrap">
+                                                                Project
+                                                            </th>
+                                                            {viewers.map((viewer) => (
+                                                                <th
+                                                                    key={viewer.email}
+                                                                    className="border-r-2 border-b-2 border-black bg-black text-white px-3 py-3 font-black uppercase last:border-r-0"
+                                                                    title={viewer.email}
+                                                                >
+                                                                    <div className="flex flex-col items-center gap-1">
+                                                                        <div className="w-6 h-6 bg-white border border-white/30 flex items-center justify-center text-black text-[10px] font-black">
+                                                                            {(viewer.name || viewer.email).slice(0, 2).toUpperCase()}
+                                                                        </div>
+                                                                        <span className="text-[9px] max-w-[5rem] truncate block">
+                                                                            {viewer.email.split('@')[0]}
+                                                                        </span>
+                                                                    </div>
+                                                                </th>
+                                                            ))}
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {activeProjects.map((project, rowIdx) => (
+                                                            <tr key={project.id} className={rowIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                                                                <td className="border-r-2 border-b-2 border-black px-3 py-3 font-black uppercase whitespace-nowrap last-of-type:border-b-0">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <div className={`w-1.5 h-1.5 border border-black ${isProjectReady(project, projectSetupOptions) ? 'bg-emerald-400' : 'bg-yellow-400'}`} />
+                                                                        <span className="text-black">{project.name}</span>
+                                                                    </div>
+                                                                </td>
+                                                                {viewers.map((viewer) => {
+                                                                    const hasAccess = viewer.projectIds.includes(project.id);
+                                                                    const cellKey = `${viewer.email}::${project.id}`;
+                                                                    const saving = matrixSaving === cellKey;
+                                                                    return (
+                                                                        <td
+                                                                            key={viewer.email}
+                                                                            className="border-r-2 border-b-2 border-black px-3 py-3 text-center last:border-r-0"
+                                                                        >
+                                                                            <button
+                                                                                type="button"
+                                                                                disabled={saving}
+                                                                                onClick={() => void handleMatrixToggle(viewer, project.id)}
+                                                                                title={hasAccess ? `Revoke ${viewer.email} from ${project.name}` : `Grant ${viewer.email} access to ${project.name}`}
+                                                                                className={`w-8 h-8 border-2 border-black flex items-center justify-center mx-auto transition-all ${
+                                                                                    saving
+                                                                                        ? 'bg-slate-200 cursor-wait'
+                                                                                        : hasAccess
+                                                                                            ? 'bg-emerald-300 hover:bg-red-200'
+                                                                                            : 'bg-white hover:bg-emerald-100'
+                                                                                }`}
+                                                                            >
+                                                                                {saving
+                                                                                    ? <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-600" />
+                                                                                    : hasAccess
+                                                                                        ? <CheckCircle2 className="w-4 h-4 text-black" />
+                                                                                        : <span className="text-slate-300 text-lg leading-none">–</span>
+                                                                                }
+                                                                            </button>
+                                                                        </td>
+                                                                    );
+                                                                })}
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        )}
+
+                                        {/* Legend */}
+                                        <div className="flex items-center gap-4 pt-1">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-5 h-5 border-2 border-black bg-emerald-300 flex items-center justify-center">
+                                                    <CheckCircle2 className="w-3 h-3 text-black" />
+                                                </div>
+                                                <span className="text-[10px] font-black uppercase text-slate-500">Has access</span>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-5 h-5 border-2 border-black bg-white flex items-center justify-center">
+                                                    <span className="text-slate-300 text-sm leading-none">–</span>
+                                                </div>
+                                                <span className="text-[10px] font-black uppercase text-slate-500">No access</span>
+                                            </div>
+                                            <div className="ml-auto text-[10px] font-bold text-slate-400 uppercase">
+                                                Click any cell to toggle
                                             </div>
                                         </div>
                                     </div>
-                                ))}
-
-                                {!loading && viewers.length === 0 && (
-                                    <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">No viewer accounts yet.</div>
                                 )}
                             </div>
                         </section>
@@ -673,13 +1284,32 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                 </div>
             </div>
 
+            {/* ── Delete Modals ── */}
             {projectPendingDelete && (
                 <Modal title="Delete project" onClose={() => setProjectPendingDelete(null)}>
-                    <div className="space-y-4">
-                        <p className="text-sm text-slate-600">Delete <strong>{projectPendingDelete.name}</strong>? This permanently removes the project and clears its project-specific history and jobs.</p>
+                    <div className="space-y-5">
+                        <div className="border-2 border-black bg-red-50 p-4">
+                            <p className="text-sm font-bold text-black">
+                                Delete <strong className="font-black">{projectPendingDelete.name}</strong>?
+                            </p>
+                            <p className="text-xs font-bold text-slate-600 mt-1">
+                                This permanently removes the project and clears all its history and jobs. This cannot be undone.
+                            </p>
+                        </div>
                         <div className="flex justify-end gap-3">
-                            <button onClick={() => setProjectPendingDelete(null)} className="premium-button border border-slate-200 bg-white text-slate-700 hover:bg-slate-50">Cancel</button>
-                            <button onClick={() => void deleteProject()} className="premium-button bg-rose-600 text-white hover:bg-rose-700">Delete project</button>
+                            <button
+                                onClick={() => setProjectPendingDelete(null)}
+                                className="operator-button-secondary px-5 py-2.5"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => void deleteProject()}
+                                className="border-2 border-black bg-red-500 text-white px-5 py-2.5 text-xs font-black uppercase hover:bg-red-600 transition-all inline-flex items-center gap-2"
+                                style={{ boxShadow: '4px 4px 0 0 #000' }}
+                            >
+                                <Trash2 className="w-4 h-4" /> Delete Project
+                            </button>
                         </div>
                     </div>
                 </Modal>
@@ -687,11 +1317,27 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
 
             {viewerPendingDelete && (
                 <Modal title="Remove viewer" onClose={() => setViewerPendingDelete(null)}>
-                    <div className="space-y-4">
-                        <p className="text-sm text-slate-600">Remove access for <strong>{viewerPendingDelete.email}</strong>?</p>
+                    <div className="space-y-5">
+                        <div className="border-2 border-black bg-red-50 p-4">
+                            <p className="text-sm font-bold text-black">
+                                Remove access for <strong className="font-black">{viewerPendingDelete.email}</strong>?
+                            </p>
+                            <p className="text-xs font-bold text-slate-600 mt-1">They will no longer be able to sign in to this workspace.</p>
+                        </div>
                         <div className="flex justify-end gap-3">
-                            <button onClick={() => setViewerPendingDelete(null)} className="premium-button border border-slate-200 bg-white text-slate-700 hover:bg-slate-50">Cancel</button>
-                            <button onClick={() => void deleteViewer()} className="premium-button bg-rose-600 text-white hover:bg-rose-700">Remove viewer</button>
+                            <button
+                                onClick={() => setViewerPendingDelete(null)}
+                                className="operator-button-secondary px-5 py-2.5"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => void deleteViewer()}
+                                className="border-2 border-black bg-red-500 text-white px-5 py-2.5 text-xs font-black uppercase hover:bg-red-600 transition-all inline-flex items-center gap-2"
+                                style={{ boxShadow: '4px 4px 0 0 #000' }}
+                            >
+                                <Trash2 className="w-4 h-4" /> Remove Viewer
+                            </button>
                         </div>
                     </div>
                 </Modal>

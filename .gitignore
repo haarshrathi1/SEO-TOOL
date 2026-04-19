@@ -1,7 +1,45 @@
+# ── Dependencies ──────────────────────────────────────────────
+node_modules/
 client/node_modules/
-client/dist/
 server/node_modules/
+
+# ── AI workspace ──────────────────────────────────────────────
+.claude/
+
+# ── Build output ──────────────────────────────────────────────
+client/dist/
+client/dist-ssr/
+
+# ── Environment / secrets ─────────────────────────────────────
 server/.env
+.env
+.env.*
+!.env.example
+*.local
+
+# ── Runtime data ─────────────────────────────────────────────
 server/data/
 server/keyword_history.json
+
+# ── Logs ──────────────────────────────────────────────────────
 *.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Editor / OS artefacts ─────────────────────────────────────
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+Thumbs.db
+
+# ── Test coverage ─────────────────────────────────────────────
+coverage/
