@@ -33,22 +33,16 @@ export function canAccessDashboardSurface(user: AuthUser) {
     return canAccessDashboard(user) || canAccessAudit(user);
 }
 
-export function canAccessRoute(user: AuthUser, path: string) {
-    const normalized = path.replace(/\/+$/, '') || '/dashboard';
+export function canAccessRoute(user: AuthUser, path: string): boolean {
+    const normalized = path.replace(/\/+$/, '') || '/';
 
-    if (normalized === '/dashboard') {
-        return canAccessDashboardSurface(user);
+    switch (normalized) {
+        case '/dashboard': return canAccessDashboardSurface(user);
+        case '/keywords':  return canAccessKeywords(user);
+        case '/projects':  return true;
+        // Root and any unknown path are not protected app routes.
+        default:           return false;
     }
-
-    if (normalized === '/keywords') {
-        return canAccessKeywords(user);
-    }
-
-    if (normalized === '/projects') {
-        return true;
-    }
-
-    return false;
 }
 
 export function getDefaultRouteForUser(user: AuthUser) {

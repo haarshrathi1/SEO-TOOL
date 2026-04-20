@@ -32,7 +32,7 @@ export default function UserBar({
                 </div>
 
                 {/* Nav */}
-                <nav className="flex items-center gap-1.5">
+                <nav className="flex items-center border-2 border-black divide-x-2 divide-black">
                     {navItems.map((item) => {
                         const active = path === item.path;
                         const Icon = item.icon;
@@ -40,10 +40,10 @@ export default function UserBar({
                             <button
                                 key={item.path}
                                 onClick={() => onNavigate(item.path)}
-                                className={`inline-flex items-center gap-2 border-2 border-black px-4 py-2 text-xs font-black uppercase tracking-wide transition-all duration-150 ${
+                                className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-black uppercase tracking-wide transition-colors duration-150 ${
                                     active
-                                        ? 'bg-black text-white shadow-none translate-x-[2px] translate-y-[2px]'
-                                        : 'bg-white text-black shadow-[3px_3px_0px_0px_#000] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[2px_2px_0px_0px_#000]'
+                                        ? 'bg-black text-white'
+                                        : 'bg-white text-black hover:bg-slate-50'
                                 }`}
                             >
                                 <Icon className="h-3.5 w-3.5" />

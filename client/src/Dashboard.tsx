@@ -4,6 +4,7 @@ import {
     AlertCircle,
     Download,
     FolderCog,
+    ChevronDown,
     Globe,
     History,
     Layout,
@@ -488,7 +489,7 @@ export default function Dashboard({ user }: DashboardProps) {
             {/* Brutalist Header */}
             <header className="sticky top-0 z-50 border-b-2 border-black bg-white">
                 {/* Top bar: brand + project selector */}
-                <div className="border-b-2 border-black/10">
+                <div className="border-b-2 border-black/20">
                     <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
                         {/* Brand mark */}
                         <div className="flex items-center gap-3 min-w-0">
@@ -538,7 +539,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                         <option key={p.id} value={p.id}>{p.name}</option>
                                     ))}
                                 </select>
-                                <Globe className="w-3.5 h-3.5 text-black absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                <ChevronDown className="w-3.5 h-3.5 text-black absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                             </div>
                         )}
                     </div>
@@ -546,7 +547,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
                 {/* Bottom bar: nav tabs */}
                 <div className="max-w-7xl mx-auto px-6">
-                    <nav className="flex items-center gap-0">
+                    <nav className="flex items-center border-l-2 border-black">
                         {surfaceTabs.map((tab) => (
                             <button
                                 key={tab.id}
@@ -560,8 +561,8 @@ export default function Dashboard({ user }: DashboardProps) {
                                 className={cn(
                                     "flex items-center gap-2 px-5 py-3 text-xs font-black uppercase tracking-wide border-r-2 border-black transition-all duration-150",
                                     activeTab === tab.id
-                                        ? "bg-black text-white"
-                                        : "bg-white text-slate-500 hover:text-black hover:bg-slate-50"
+                                        ? "bg-black text-white border-t-2 border-t-yellow-400"
+                                        : "bg-white text-slate-500 border-t-2 border-t-transparent hover:text-black hover:bg-slate-50"
                                 )}
                             >
                                 <tab.icon className="w-3.5 h-3.5" />
