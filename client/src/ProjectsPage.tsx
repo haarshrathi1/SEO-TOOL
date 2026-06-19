@@ -268,6 +268,25 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
         setShowProjectModal(true);
     };
 
+    // Opens a fresh "New Project" modal while carrying over any GSC/GA4 already
+    // selected in the Properties panel (and prefilling Primary URL from the GSC
+    // property when it's an https:// site), so the selection is never discarded.
+    const openNewProjectModal = () => {
+        setEditingProjectId(null);
+        setProjectForm((current) => {
+            const base = createProjectForm(user, connection.connected ? (connection.googleEmail || user.email) : '');
+            const gscSiteUrl = current.gscSiteUrl;
+            const ga4PropertyId = current.ga4PropertyId;
+            return {
+                ...base,
+                gscSiteUrl,
+                ga4PropertyId,
+                url: base.url || (/^https:\/\//i.test(gscSiteUrl) ? gscSiteUrl : ''),
+            };
+        });
+        setShowProjectModal(true);
+    };
+
     const handleConnectGoogle = () => {
         api.connectProjectGoogle(editingProjectId || null);
     };
@@ -731,6 +750,22 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                                 </select>
                                             </Field>
                                         </div>
+                                        <div className="flex flex-col gap-1.5 pt-1">
+                                            <button
+                                                type="button"
+                                                onClick={openNewProjectModal}
+                                                disabled={!(projectForm.gscSiteUrl && projectForm.ga4PropertyId)}
+                                                className="operator-button-primary px-4 py-3 justify-center disabled:opacity-40 disabled:cursor-not-allowed"
+                                            >
+                                                <Plus className="h-3.5 w-3.5" /> Create Project with these properties
+                                                <ArrowRight className="h-3.5 w-3.5" />
+                                            </button>
+                                            {!(projectForm.gscSiteUrl && projectForm.ga4PropertyId) && (
+                                                <p className="text-[10px] font-bold text-slate-400 uppercase">
+                                                    Choose both a Search Console property and a GA4 property to continue.
+                                                </p>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -754,11 +789,7 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                 </div>
                                 <button
                                     type="button"
-                                    onClick={() => {
-                                        setEditingProjectId(null);
-                                        setProjectForm(createProjectForm(user, connection.connected ? (connection.googleEmail || user.email) : ''));
-                                        setShowProjectModal(true);
-                                    }}
+                                    onClick={openNewProjectModal}
                                     className="operator-button-primary px-4 py-2"
                                 >
                                     <Plus className="h-3.5 w-3.5" /> New Project
@@ -841,7 +872,7 @@ export default function ProjectsPage({ user }: { user: AuthUser }) {
                                         </p>
                                         <button
                                             type="button"
-                                            onClick={() => setShowProjectModal(true)}
+                                            onClick={openNewProjectModal}
                                             className="operator-button-primary px-5 py-2.5"
                                         >
                                             <Plus className="h-4 w-4" /> Create First Project
