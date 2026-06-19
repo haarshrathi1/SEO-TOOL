@@ -9,11 +9,16 @@ function buildAuditHistoryQuery(user, options = {}) {
     const projectId = normalizeProjectId(options.projectId);
     const query = {};
 
+    if (user?.workspaceId) {
+        query.workspaceId = user.workspaceId;
+    }
+
     if (projectId) {
         query.projectId = projectId;
     }
 
-    if (user?.role === 'viewer') {
+    const effectiveRole = user?.workspaceRole || user?.role;
+    if (effectiveRole === 'viewer') {
         if (!Array.isArray(user.projectIds) || user.projectIds.length === 0) {
             return null;
         }
@@ -30,9 +35,10 @@ function buildAuditHistoryQuery(user, options = {}) {
     return query;
 }
 
-const addAudit = async (results, projectId) => {
+const addAudit = async (results, projectId, workspaceId = null) => {
     try {
         const doc = await AuditHistory.create({
+            workspaceId,
             projectId,
             results,
             timestamp: new Date(),

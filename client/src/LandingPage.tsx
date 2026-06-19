@@ -5,12 +5,17 @@ import {
     Layout, Link2, Search, Shield, Sparkles, Target,
     TrendingUp, Zap, AlertTriangle, FileSearch, GitBranch,
     Eye, ArrowRight, X, Menu, CheckCircle2, XCircle,
-    LogOut, Star, Plus, Globe, DollarSign, BarChart2, Users,
+    LogOut, Plus, Globe, DollarSign, BarChart2, Users,
     Loader2,
 } from 'lucide-react';
 import Logo from './components/app/Logo';
 
-interface LandingPageProps { onLogin: () => void; serverReady?: boolean; }
+interface LandingPageProps {
+    onLogin: () => void;
+    onCreateWorkspace: () => void;
+    onOpenDemo: () => void;
+    serverReady?: boolean;
+}
 type Currency = 'INR' | 'USD';
 
 /* ─── SCROLL Y ─── */
@@ -38,7 +43,7 @@ function useCountUp(target: number, duration = 1400, trigger: boolean) {
         };
         requestAnimationFrame(step);
     }, [target, duration, trigger]);
-    return val;
+    return trigger ? val : target;
 }
 
 /* ─── ANIMATION PRIMITIVES ─── */
@@ -522,7 +527,15 @@ function WarmupToast({ serverReady }: { serverReady: boolean }) {
     );
 }
 
-function NavBar({ onLogin }: { onLogin: () => void }) {
+function NavBar({
+    onLogin,
+    onCreateWorkspace,
+    onOpenDemo,
+}: {
+    onLogin: () => void;
+    onCreateWorkspace: () => void;
+    onOpenDemo: () => void;
+}) {
     const scrollY = useScrollY();
     const [menuOpen, setMenuOpen] = useState(false);
     const solid = scrollY > 20;
@@ -535,11 +548,11 @@ function NavBar({ onLogin }: { onLogin: () => void }) {
             className={`fixed top-0 inset-x-0 z-50 transition-all duration-300 ${solid ? 'bg-white border-b-2 border-black shadow-[0_2px_0_0_#000]' : 'bg-transparent'}`}
         >
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-                <a href="https://seotool.harshrathi.com/" rel="home">
+                <a href="/" rel="home">
                     <Logo variant="dark" height={36} />
                 </a>
                 <div className="hidden md:flex items-center gap-1">
-                    {[['Features', '#features'], ['Why ClimbSEO', '#why'], ['Pricing', '#pricing'], ['FAQ', '#faq']].map(([label, href]) => (
+                    {[['Demo', '/demo'], ['Features', '#features'], ['Why ClimbSEO', '#why'], ['Pricing', '#pricing'], ['FAQ', '#faq']].map(([label, href]) => (
                         <a key={label} href={href}
                             className="border-2 border-transparent hover:border-black px-3 py-1.5 text-xs font-black uppercase tracking-wide text-black transition-all hover:shadow-[2px_2px_0px_0px_#000]">
                             {label}
@@ -548,8 +561,9 @@ function NavBar({ onLogin }: { onLogin: () => void }) {
                 </div>
                 <div className="hidden md:flex items-center gap-2">
                     <button onClick={onLogin} className="border-2 border-black bg-white px-4 py-2 text-xs font-black uppercase tracking-wide shadow-[3px_3px_0px_0px_#000] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[2px_2px_0px_0px_#000] transition-all">Sign In</button>
-                    <button onClick={onLogin} className="relative overflow-hidden border-2 border-black bg-black px-4 py-2 text-xs font-black uppercase tracking-wide text-white shadow-[3px_3px_0px_0px_#000] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[2px_2px_0px_0px_#000] transition-all">
-                        <span className="relative z-10">Free Trial</span>
+                    <button onClick={onOpenDemo} className="border-2 border-black bg-white px-4 py-2 text-xs font-black uppercase tracking-wide shadow-[3px_3px_0px_0px_#000] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[2px_2px_0px_0px_#000] transition-all">Open Demo</button>
+                    <button onClick={onCreateWorkspace} className="relative overflow-hidden border-2 border-black bg-black px-4 py-2 text-xs font-black uppercase tracking-wide text-white shadow-[3px_3px_0px_0px_#000] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[2px_2px_0px_0px_#000] transition-all">
+                        <span className="relative z-10">Create Workspace</span>
                         <span className="animate-shimmer-sweep absolute inset-0 w-1/3 bg-white/20 blur-sm" />
                     </button>
                 </div>
@@ -564,13 +578,14 @@ function NavBar({ onLogin }: { onLogin: () => void }) {
                     transition={{ duration: 0.2 }}
                     className="md:hidden bg-white border-t-2 border-black px-4 py-4 space-y-1"
                 >
-                    {[['Features', '#features'], ['Why ClimbSEO', '#why'], ['Pricing', '#pricing'], ['FAQ', '#faq']].map(([label, href]) => (
+                    {[['Demo', '/demo'], ['Features', '#features'], ['Why ClimbSEO', '#why'], ['Pricing', '#pricing'], ['FAQ', '#faq']].map(([label, href]) => (
                         <a key={label} href={href} onClick={() => setMenuOpen(false)}
                             className="block text-sm font-black uppercase tracking-wide text-black py-3 border-b-2 border-black/10">{label}</a>
                     ))}
                     <div className="pt-3 flex flex-col gap-2">
                         <button onClick={onLogin} className="w-full border-2 border-black bg-white text-black text-sm font-black uppercase py-3">Sign In</button>
-                        <button onClick={onLogin} className="w-full border-2 border-black bg-black text-white text-sm font-black uppercase py-3">Start Free Trial</button>
+                        <button onClick={onOpenDemo} className="w-full border-2 border-black bg-white text-black text-sm font-black uppercase py-3">Open Demo</button>
+                        <button onClick={onCreateWorkspace} className="w-full border-2 border-black bg-black text-white text-sm font-black uppercase py-3">Create Workspace</button>
                     </div>
                 </motion.div>
             )}
@@ -578,7 +593,13 @@ function NavBar({ onLogin }: { onLogin: () => void }) {
     );
 }
 
-function Hero({ onLogin }: { onLogin: () => void }) {
+function Hero({
+    onCreateWorkspace,
+    onOpenDemo,
+}: {
+    onCreateWorkspace: () => void;
+    onOpenDemo: () => void;
+}) {
     return (
         <section aria-labelledby="hero-heading" className="relative pt-24 pb-12 overflow-hidden"
             style={{
@@ -602,7 +623,7 @@ function Hero({ onLogin }: { onLogin: () => void }) {
                     >
                         <span className="animate-shimmer-sweep absolute inset-0 w-1/3 bg-white/30 blur-sm" />
                         <Sparkles className="w-3 h-3 relative z-10" />
-                        <span className="relative z-10">Full SEO Platform. From ₹499/mo or $6.99/mo.</span>
+                        <span className="relative z-10">Public demo included. Keyword research works before setup.</span>
                     </motion.div>
 
                     {/* Headline — line by line */}
@@ -638,7 +659,7 @@ function Hero({ onLogin }: { onLogin: () => void }) {
                         className="mt-6 text-base sm:text-lg text-slate-600 max-w-2xl mx-auto leading-relaxed font-medium"
                     >
                         Full site crawl. SERP DNA keyword research. Competitor keyword gaps. Indexation analysis.
-                        Change detection. AI insights. All connected to your live GSC and GA4 data.
+                        Change detection. AI insights. Start with the demo or keyword research, then connect your live GSC and GA4 data when you are ready.
                     </motion.p>
 
                     {/* CTAs */}
@@ -648,15 +669,15 @@ function Hero({ onLogin }: { onLogin: () => void }) {
                         transition={{ duration: 0.5, delay: 0.52, ease }}
                         className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3"
                     >
-                        <button onClick={onLogin}
+                        <button onClick={onCreateWorkspace}
                             className="animate-glow-pulse w-full sm:w-auto relative overflow-hidden border-2 border-black bg-black text-white font-black px-8 py-3.5 text-sm uppercase tracking-wide transition-all hover:translate-x-[2px] hover:translate-y-[2px] flex items-center justify-center gap-2">
                             <span className="animate-shimmer-sweep absolute inset-0 w-1/3 bg-white/10" />
-                            <span className="relative z-10 flex items-center gap-2">Start Free Trial <ArrowRight className="w-4 h-4" /></span>
+                            <span className="relative z-10 flex items-center gap-2">Create Workspace <ArrowRight className="w-4 h-4" /></span>
                         </button>
-                        <a href="#pricing"
+                        <button onClick={onOpenDemo}
                             className="w-full sm:w-auto border-2 border-black bg-white text-black font-black px-8 py-3.5 text-sm uppercase tracking-wide shadow-[5px_5px_0px_0px_#000] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[3px_3px_0px_0px_#000] transition-all flex items-center justify-center gap-2">
-                            See Pricing <ChevronDown className="w-4 h-4" />
-                        </a>
+                            Open Demo <Eye className="w-4 h-4" />
+                        </button>
                     </motion.div>
 
                     {/* Trust pills */}
@@ -666,7 +687,7 @@ function Hero({ onLogin }: { onLogin: () => void }) {
                         transition={{ duration: 0.5, delay: 0.68 }}
                         className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-slate-500 font-bold uppercase tracking-wide"
                     >
-                        {['No credit card', '2-minute setup', 'Cancel anytime', 'GSC + GA4 included'].map((t, i) => (
+                        {['Keyword tool works instantly', 'Public demo', 'Self-serve setup', 'GSC + GA4 when ready'].map((t, i) => (
                             <motion.span
                                 key={t}
                                 initial={{ opacity: 0, x: -8 }}
@@ -711,7 +732,7 @@ function StatsSection() {
         { icon: Users, display: `${c1.toLocaleString()}+`, label: 'Sites Audited', color: 'bg-yellow-300' },
         { icon: Search, display: `${c2.toLocaleString()}K+`, label: 'Keywords Analyzed', color: 'bg-cyan-300' },
         { icon: BarChart2, display: `${c3}%`, label: 'Avg Traffic Lift', color: 'bg-green-300' },
-        { icon: TrendingUp, display: '₹499', label: 'Starting Price / mo', color: 'bg-violet-300' },
+        { icon: TrendingUp, display: 'INR 499', label: 'Starting Price / mo', color: 'bg-violet-300' },
     ];
 
     return (
@@ -1029,37 +1050,68 @@ function FeatureGrid() {
     );
 }
 
-function Testimonials() {
-    const quotes = [
-        { text: 'We replaced Screaming Frog, SEMrush, and a separate GSC dashboard with ClimbSEO. The change detection feature alone saved us 6 hours a week of manual diffing.', author: 'Priya Mehta', role: 'Head of SEO, D2C Brand' },
-        { text: 'The SERP DNA analysis is genuinely different. It tells you what format Google wants and what intent angle to take, not just volume data. Our content hit page 1 in 3 weeks.', author: 'Rahul Sharma', role: 'Founder, Content Agency' },
-        { text: 'Running audits on 8 client sites. Template clustering caught a canonical error pattern across 300 pages in minutes. Paying ₹499 + ₹149 per extra project is incredibly fair for agencies.', author: 'Ankit Joshi', role: 'SEO Consultant, 8 Clients' },
+function ProofSection({
+    onCreateWorkspace,
+    onOpenDemo,
+}: {
+    onCreateWorkspace: () => void;
+    onOpenDemo: () => void;
+}) {
+    const proofs = [
+        {
+            icon: Eye,
+            title: 'Open the demo workspace',
+            text: 'See a real dashboard snapshot, audit summary, and keyword research output using bundled sample data before you connect Google.',
+            cta: 'Open Demo',
+            action: onOpenDemo,
+            accent: 'bg-blue-200',
+        },
+        {
+            icon: Search,
+            title: 'Start with keyword research',
+            text: 'Keyword research works without project setup. Sample seeds are built into the app so first-time buyers can get an immediate win.',
+            cta: 'Create Workspace',
+            action: onCreateWorkspace,
+            accent: 'bg-emerald-200',
+        },
+        {
+            icon: Shield,
+            title: 'Review trust pages first',
+            text: 'Privacy, terms, exports, and the current product stage are exposed publicly so buyers can inspect what is live before sign-in.',
+            cta: 'Read Terms',
+            action: () => { window.location.href = '/terms'; },
+            accent: 'bg-yellow-300',
+        },
     ];
     return (
         <section className="py-20 bg-white border-t-2 border-black">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <FadeUp className="text-center mb-10">
                     <div className="inline-flex items-center gap-1.5 border-2 border-black bg-yellow-300 px-3 py-1 text-[10px] font-black uppercase tracking-widest shadow-[3px_3px_0px_0px_#000] mb-4">
-                        <Star className="w-3 h-3" /> Trusted by SEO teams
+                        <CheckCircle className="w-3 h-3" /> Proof before setup
                     </div>
-                    <h2 className="text-3xl sm:text-4xl font-black text-black">What our users say</h2>
+                    <h2 className="text-3xl sm:text-4xl font-black text-black">What buyers can verify right now</h2>
                 </FadeUp>
                 <StaggerGrid className="grid md:grid-cols-3 gap-5">
-                    {quotes.map((q, i) => (
-                        <StaggerCard key={i}>
+                    {proofs.map((proof) => (
+                        <StaggerCard key={proof.title}>
                             <motion.blockquote
                                 whileHover={{ y: -6, boxShadow: '8px 8px 0px 0px #000' }}
                                 transition={{ duration: 0.2 }}
                                 className="bg-white border-2 border-black p-6 shadow-[5px_5px_0px_0px_#000] flex flex-col h-full"
                             >
-                                <div className="flex gap-0.5 mb-4">
-                                    {Array.from({ length: 5 }).map((_, si) => <Star key={si} className="w-3.5 h-3.5 fill-yellow-400 text-yellow-400" />)}
+                                <div className={`mb-4 inline-flex w-fit border-2 border-black ${proof.accent} p-2`}>
+                                    <proof.icon className="w-4 h-4 text-black" />
                                 </div>
-                                <p className="text-slate-700 text-sm leading-relaxed flex-1 font-medium">"{q.text}"</p>
-                                <footer className="mt-5 pt-4 border-t-2 border-black">
-                                    <div className="font-black text-black text-sm">{q.author}</div>
-                                    <div className="text-slate-500 text-xs font-medium">{q.role}</div>
-                                </footer>
+                                <p className="text-black text-sm font-black uppercase">{proof.title}</p>
+                                <p className="mt-3 text-slate-700 text-sm leading-relaxed flex-1 font-medium">{proof.text}</p>
+                                <button
+                                    type="button"
+                                    onClick={proof.action}
+                                    className="mt-5 inline-flex items-center justify-center gap-2 border-2 border-black bg-black px-4 py-3 text-xs font-black uppercase text-white hover:bg-yellow-300 hover:text-black"
+                                >
+                                    {proof.cta} <ArrowRight className="w-3.5 h-3.5" />
+                                </button>
                             </motion.blockquote>
                         </StaggerCard>
                     ))}
@@ -1069,7 +1121,7 @@ function Testimonials() {
     );
 }
 
-function FitSection({ onLogin }: { onLogin: () => void }) {
+function FitSection({ onCreateWorkspace }: { onCreateWorkspace: () => void }) {
     const notFor = [
         'You run a link-building agency and need a backlink index with millions of domains',
         'You need historical rank tracking across thousands of keywords going back years',
@@ -1126,11 +1178,11 @@ function FitSection({ onLogin }: { onLogin: () => void }) {
                                 ))}
                             </ul>
                             <motion.button
-                                onClick={onLogin}
+                                onClick={onCreateWorkspace}
                                 whileHover={{ x: 1, y: 1, boxShadow: '2px 2px 0px 0px rgba(0,0,0,0.25)' }}
                                 className="mt-6 w-full border-2 border-black bg-black text-white font-black py-3 text-xs uppercase tracking-wide shadow-[4px_4px_0px_0px_rgba(0,0,0,0.25)] transition-shadow flex items-center justify-center gap-2"
                             >
-                                That is me. Start Free Trial <ArrowRight className="w-3.5 h-3.5" />
+                                That is me. Create Workspace <ArrowRight className="w-3.5 h-3.5" />
                             </motion.button>
                         </div>
                     </FadeUp>
@@ -1140,7 +1192,7 @@ function FitSection({ onLogin }: { onLogin: () => void }) {
     );
 }
 
-function Pricing({ onLogin }: { onLogin: () => void }) {
+function Pricing({ onCreateWorkspace }: { onCreateWorkspace: () => void }) {
     const [currency, setCurrency] = useState<Currency>('INR');
     const inr = currency === 'INR';
     const plans = [
@@ -1151,7 +1203,7 @@ function Pricing({ onLogin }: { onLogin: () => void }) {
     const price = (p: typeof plans[0]) => inr ? p.priceINR : p.priceUSD;
     const perMonth = (p: typeof plans[0]) => inr ? p.perMonthINR : p.perMonthUSD;
     const addOnPrice = inr ? '₹149' : '$1.99';
-    const included = ['Unlimited site crawls', 'SERP DNA keyword research', 'Indexation gap analysis', 'Audit change detection', 'Competitor keyword scanning', 'Internal link intelligence', 'Template clustering', 'Structured data audit', 'AI-powered insights', 'GSC + GA4 live integration', 'Request indexing', 'CSV and Google Sheets export'];
+    const included = ['Unlimited site crawls', 'SERP DNA keyword research', 'Indexation gap analysis', 'Audit change detection', 'Competitor keyword scanning', 'Internal link intelligence', 'Template clustering', 'Structured data audit', 'AI-powered insights', 'GSC + GA4 live integration', 'Request indexing', 'Dashboard CSV export and optional Google Sheets sync'];
     const agencyExamples = [
         { sites: 1, monthly: inr ? '₹499' : '$6.99', label: 'Solo / Startup' },
         { sites: 3, monthly: inr ? '₹797' : '$10.97', label: 'Small Agency' },
@@ -1163,10 +1215,11 @@ function Pricing({ onLogin }: { onLogin: () => void }) {
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <FadeUp className="text-center mb-10">
                     <div className="inline-flex items-center gap-1.5 border-2 border-black bg-green-300 px-3 py-1 text-[10px] font-black uppercase tracking-widest shadow-[3px_3px_0px_0px_#000] mb-4">
-                        <TrendingUp className="w-3 h-3" /> Transparent pricing
+                        <TrendingUp className="w-3 h-3" /> Pricing model
                     </div>
-                    <h2 id="pricing-heading" className="text-3xl sm:text-4xl lg:text-5xl font-black text-black">Pay per project.<br />Keep every feature.</h2>
+                    <h2 id="pricing-heading" className="text-3xl sm:text-4xl lg:text-5xl font-black text-black">Simple pricing model.<br />Truthful product stage.</h2>
                     <p className="mt-3 text-slate-600 font-medium text-base max-w-lg mx-auto">Your base plan covers 1 project with full access to everything. Add more projects at {addOnPrice} per month each.</p>
+                    <p className="mt-3 text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Self-serve checkout is not live in the app yet. Create a workspace to explore the flow first.</p>
                     <div className="mt-6 inline-flex border-2 border-black bg-white shadow-[3px_3px_0px_0px_#000]">
                         <button onClick={() => setCurrency('INR')} className={`flex items-center gap-1.5 px-4 py-2 text-xs font-black uppercase tracking-wide transition-all ${currency === 'INR' ? 'bg-black text-white' : 'text-slate-500 hover:text-black'}`}><Globe className="w-3 h-3" /> INR</button>
                         <button onClick={() => setCurrency('USD')} className={`flex items-center gap-1.5 px-4 py-2 text-xs font-black uppercase tracking-wide transition-all border-l-2 border-black ${currency === 'USD' ? 'bg-black text-white' : 'text-slate-500 hover:text-black'}`}><DollarSign className="w-3 h-3" /> USD</button>
@@ -1187,9 +1240,9 @@ function Pricing({ onLogin }: { onLogin: () => void }) {
                                 {perMonth(p) && <div className="text-[10px] font-black text-green-700 uppercase tracking-wide mb-3">{perMonth(p)} / mo effective</div>}
                                 {!perMonth(p) && <div className="mb-3" />}
                                 <p className="text-xs text-slate-600 font-medium mb-6">{p.sub}</p>
-                                <button onClick={onLogin} className={`w-full border-2 border-black font-black py-3 text-xs uppercase tracking-wide mt-auto relative overflow-hidden transition-all hover:translate-x-[1px] hover:translate-y-[1px] ${p.highlight ? 'bg-black text-white shadow-[4px_4px_0px_0px_rgba(0,0,0,0.3)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,0.3)]' : 'bg-white text-black shadow-[4px_4px_0px_0px_#000] hover:shadow-[2px_2px_0px_0px_#000]'}`}>
+                                <button onClick={onCreateWorkspace} className={`w-full border-2 border-black font-black py-3 text-xs uppercase tracking-wide mt-auto relative overflow-hidden transition-all hover:translate-x-[1px] hover:translate-y-[1px] ${p.highlight ? 'bg-black text-white shadow-[4px_4px_0px_0px_rgba(0,0,0,0.3)] hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,0.3)]' : 'bg-white text-black shadow-[4px_4px_0px_0px_#000] hover:shadow-[2px_2px_0px_0px_#000]'}`}>
                                     {p.highlight && <span className="animate-shimmer-sweep absolute inset-0 w-1/3 bg-white/15" />}
-                                    <span className="relative z-10">Start Free Trial</span>
+                                    <span className="relative z-10">Create Workspace</span>
                                 </button>
                             </motion.div>
                         </StaggerCard>
@@ -1244,13 +1297,13 @@ function FAQ() {
     const [open, setOpen] = useState<number | null>(null);
     const faqs = [
         { q: 'What counts as a project?', a: 'One project is one website or domain. Your base plan includes 1 project with full access to all features including crawl, keyword research, audit, and GSC/GA4 integration. Add extra projects for ₹149 ($1.99) per month each.' },
-        { q: 'Can I switch between INR and USD billing?', a: 'Yes. Indian users can pay in INR via UPI, net banking, or cards. International users pay in USD via card. Both currencies give access to the same full feature set.' },
+        { q: 'Can I try the product before connecting Google?', a: 'Yes. The public demo shows a real saved dashboard snapshot, audit summary, and keyword research run. Inside the app, keyword research also works without project setup.' },
         { q: 'Do I need a Google Ads account to use keyword research?', a: 'No. The SERP DNA analysis and keyword research work without Google Ads. The Ads integration is optional and unlocks search volume data from the Google Ads API when connected.' },
         { q: 'How does the Google Search Console integration work?', a: 'Connect your Google account once and ClimbSEO pulls real GSC data including clicks, impressions, positions, and indexed pages directly. No sampling and no estimates.' },
         { q: 'How is ClimbSEO different from Screaming Frog?', a: 'Screaming Frog is a desktop crawler with no cloud access, no keyword research, no GSC or GA4 integration, and no change detection between audits. ClimbSEO runs in the cloud with SERP DNA analysis, AI insights, real-time GSC and GA4 data, and audit change detection built in.' },
         { q: 'How is ClimbSEO different from Ahrefs or SEMrush?', a: 'Ahrefs ($99/mo) and SEMrush ($119/mo) focus on backlink and keyword volume data. Neither offers indexation gap analysis, audit change detection, or template clustering. They also do not integrate directly with your live GSC or GA4 data. ClimbSEO does all of this starting at ₹499/mo ($6.99/mo).' },
-        { q: 'Is there a free trial?', a: 'Yes. Start your free trial with no credit card required. You get full access to every feature including crawl, keyword research, GSC integration, and AI insights during the trial period.' },
-        { q: 'What happens to my data if I cancel?', a: 'Export all your audit history and keyword data at any time via CSV or Google Sheets before cancelling. We do not hold your data hostage. Cancel anytime with no penalty.' },
+        { q: 'Is self-serve checkout live?', a: 'Not yet. The pricing model is shown on this page, but in-app self-serve billing is still being finalized. Today you can create a workspace, use the keyword workflow, and inspect the public demo before buying.' },
+        { q: 'What exports exist today?', a: 'Dashboard reports export to CSV and can update a configured Google Sheet when a spreadsheet is attached to the project. Audit and keyword research currently export to CSV.' },
     ];
     return (
         <section id="faq" aria-labelledby="faq-heading" className="py-20 bg-white border-t-2 border-black">
@@ -1292,7 +1345,13 @@ function FAQ() {
     );
 }
 
-function CTA({ onLogin }: { onLogin: () => void }) {
+function CTA({
+    onCreateWorkspace,
+    onOpenDemo,
+}: {
+    onCreateWorkspace: () => void;
+    onOpenDemo: () => void;
+}) {
     return (
         <section className="py-20 operator-shell border-t-2 border-black">
             <div className="max-w-4xl mx-auto px-4 text-center">
@@ -1319,20 +1378,20 @@ function CTA({ onLogin }: { onLogin: () => void }) {
                             </p>
                             <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
                                 <motion.button
-                                    onClick={onLogin}
+                                    onClick={onCreateWorkspace}
                                     whileHover={{ scale: 1.02, y: -2 }}
                                     whileTap={{ scale: 0.98, y: 0 }}
                                     className="animate-glow-pulse w-full sm:w-auto relative overflow-hidden border-2 border-yellow-300 bg-yellow-300 text-black font-black px-8 py-3.5 text-sm uppercase tracking-wide flex items-center justify-center gap-2"
                                 >
                                     <span className="animate-shimmer-sweep absolute inset-0 w-1/3 bg-white/30" />
-                                    <span className="relative z-10 flex items-center gap-2">Start Free Trial <ArrowRight className="w-4 h-4" /></span>
+                                    <span className="relative z-10 flex items-center gap-2">Create Workspace <ArrowRight className="w-4 h-4" /></span>
                                 </motion.button>
-                                <a href="#pricing"
+                                <button onClick={onOpenDemo}
                                     className="w-full sm:w-auto border-2 border-white bg-transparent text-white hover:bg-white hover:text-black font-black px-8 py-3.5 text-sm uppercase tracking-wide transition-all flex items-center justify-center gap-2">
-                                    See Pricing
-                                </a>
+                                    Open Demo
+                                </button>
                             </div>
-                            <p className="mt-4 text-slate-500 text-xs font-bold uppercase tracking-wide">No credit card required. Full access. Cancel anytime.</p>
+                            <p className="mt-4 text-slate-500 text-xs font-bold uppercase tracking-wide">Start with the demo or keyword research. Connect Google when you are ready.</p>
                         </div>
                     </div>
                 </FadeUp>
@@ -1347,12 +1406,13 @@ function Footer() {
         <footer className="bg-white border-t-2 border-black py-10">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-6 mb-8">
-                    <a href="https://seotool.harshrathi.com/" rel="home"><Logo variant="dark" height={28} /></a>
+                    <a href="/" rel="home"><Logo variant="dark" height={28} /></a>
                     <p className="text-slate-400 text-xs font-bold uppercase tracking-wide order-last sm:order-none">{year} ClimbSEO. All rights reserved.</p>
                     <div className="flex gap-5 text-xs font-bold uppercase tracking-wide text-slate-500">
-                        <a href="https://seotool.harshrathi.com/privacy" rel="noopener" className="hover:text-black transition-colors">Privacy</a>
-                        <a href="https://seotool.harshrathi.com/terms" rel="noopener" className="hover:text-black transition-colors">Terms</a>
-                        <a href="mailto:support@seotool.harshrathi.com" rel="noopener" className="hover:text-black transition-colors">Contact</a>
+                        <a href="/demo" className="hover:text-black transition-colors">Demo</a>
+                        <a href="/privacy" className="hover:text-black transition-colors">Privacy</a>
+                        <a href="/terms" className="hover:text-black transition-colors">Terms</a>
+                        <a href="mailto:support@seotool.harshrathi.com" className="hover:text-black transition-colors">Contact</a>
                     </div>
                 </div>
                 <div className="border-t-2 border-black pt-6 grid sm:grid-cols-3 gap-4 text-[10px] font-medium text-slate-400">
@@ -1365,13 +1425,18 @@ function Footer() {
     );
 }
 
-export default function LandingPage({ onLogin, serverReady = false }: LandingPageProps) {
+export default function LandingPage({
+    onLogin,
+    onCreateWorkspace,
+    onOpenDemo,
+    serverReady = false,
+}: LandingPageProps) {
     return (
         <div className="min-h-screen bg-[#f8fafc] font-sans">
             <WarmupToast serverReady={serverReady} />
-            <NavBar onLogin={onLogin} />
+            <NavBar onLogin={onLogin} onCreateWorkspace={onCreateWorkspace} onOpenDemo={onOpenDemo} />
             <main>
-                <Hero onLogin={onLogin} />
+                <Hero onCreateWorkspace={onCreateWorkspace} onOpenDemo={onOpenDemo} />
                 <StatsSection />
                 <ComparisonStrip />
                 <WhySection />
@@ -1379,11 +1444,11 @@ export default function LandingPage({ onLogin, serverReady = false }: LandingPag
                 <ValueComparison />
                 <FeatureShowcase />
                 <FeatureGrid />
-                <Testimonials />
-                <FitSection onLogin={onLogin} />
-                <Pricing onLogin={onLogin} />
+                <ProofSection onCreateWorkspace={onCreateWorkspace} onOpenDemo={onOpenDemo} />
+                <FitSection onCreateWorkspace={onCreateWorkspace} />
+                <Pricing onCreateWorkspace={onCreateWorkspace} />
                 <FAQ />
-                <CTA onLogin={onLogin} />
+                <CTA onCreateWorkspace={onCreateWorkspace} onOpenDemo={onOpenDemo} />
             </main>
             <Footer />
         </div>

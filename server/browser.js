@@ -44,7 +44,7 @@ function installChromeForPuppeteer() {
         const result = spawnSync(
             npxCmd,
             ['puppeteer', 'browsers', 'install', 'chrome'],
-            { stdio: 'inherit', env: process.env }
+            { stdio: 'inherit', env: process.env, shell: true }
         );
 
         if (result.error || result.status !== 0) {

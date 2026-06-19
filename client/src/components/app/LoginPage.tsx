@@ -10,6 +10,15 @@ interface GoogleCredentialResponse {
 
 type AuthMode = 'login' | 'register';
 
+interface GooglePromptMomentNotification {
+    isNotDisplayed?: () => boolean;
+    getNotDisplayedReason?: () => string;
+    isSkippedMoment?: () => boolean;
+    getSkippedReason?: () => string;
+    isDismissedMoment?: () => boolean;
+    getDismissedReason?: () => string;
+}
+
 interface GoogleIdentityClient {
     initialize(config: {
         client_id: string;
@@ -25,6 +34,8 @@ interface GoogleIdentityClient {
         text: 'signin_with' | 'signup_with';
         logo_alignment: 'left';
     }): void;
+    prompt(momentListener?: (notification: GooglePromptMomentNotification) => void): void;
+    cancel(): void;
     disableAutoSelect(): void;
 }
 
@@ -42,12 +53,23 @@ function getErrorMessage(error: unknown, fallback: string): string {
     return error instanceof Error ? error.message : fallback;
 }
 
-export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => void }) {
-    const [authMode, setAuthMode] = useState<AuthMode>('login');
+export default function LoginPage({
+    onLogin,
+    initialMode = 'login',
+}: {
+    onLogin: (user: AuthUser) => void;
+    initialMode?: AuthMode;
+}) {
+    const [authMode, setAuthMode] = useState<AuthMode>(initialMode);
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
     const [configLoading, setConfigLoading] = useState(true);
     const [googleClientId, setGoogleClientId] = useState('');
+    const [allowRegistration, setAllowRegistration] = useState(true);
+
+    useEffect(() => {
+        setAuthMode(initialMode);
+    }, [initialMode]);
 
     const handleCredential = useCallback(async (response: GoogleCredentialResponse) => {
         if (!response.credential) {
@@ -81,10 +103,11 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
             }
 
             buttonElement.innerHTML = '';
+            googleId.cancel();
             googleId.initialize({
                 client_id: clientId,
                 callback: handleCredential,
-                auto_select: false,
+                auto_select: authMode === 'login',
                 ux_mode: 'popup',
             });
             googleId.renderButton(buttonElement, {
@@ -95,6 +118,15 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
                 text: authMode === 'register' ? 'signup_with' : 'signin_with',
                 logo_alignment: 'left',
             });
+
+            if (authMode === 'login') {
+                googleId.prompt((notification) => {
+                    if (notification.isNotDisplayed?.() || notification.isSkippedMoment?.()) {
+                        setError('');
+                    }
+                });
+            }
+
             setConfigLoading(false);
         };
 
@@ -108,6 +140,10 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
                     }
                     nextClientId = config.googleClientId;
                     setGoogleClientId(nextClientId);
+                    if (config.allowRegistration === false) {
+                        setAllowRegistration(false);
+                        setAuthMode('login');
+                    }
                 }
 
                 if (window.google?.accounts?.id) {
@@ -156,7 +192,7 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
                         <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-medium text-rose-600">{error}</div>
                     )}
 
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className={`grid gap-3 ${allowRegistration ? 'sm:grid-cols-2' : ''}`}>
                         <button
                             type="button"
                             onClick={() => setAuthMode('login')}
@@ -165,14 +201,16 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
                             <p className="text-sm font-semibold">Sign in</p>
                             <p className="mt-1 text-xs leading-relaxed text-slate-500">Use your existing access level, whether that is admin, viewer, or keyword-only.</p>
                         </button>
-                        <button
-                            type="button"
-                            onClick={() => setAuthMode('register')}
-                            className={`rounded-2xl border px-4 py-4 text-left transition ${authMode === 'register' ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'}`}
-                        >
-                            <p className="text-sm font-semibold">Register your workspace</p>
-                            <p className="mt-1 text-xs leading-relaxed text-slate-500">Create your own account, connect your Google properties, and set up your own projects without admin help.</p>
-                        </button>
+                        {allowRegistration && (
+                            <button
+                                type="button"
+                                onClick={() => setAuthMode('register')}
+                                className={`rounded-2xl border px-4 py-4 text-left transition ${authMode === 'register' ? 'border-emerald-500 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'}`}
+                            >
+                                <p className="text-sm font-semibold">Register your workspace</p>
+                                <p className="mt-1 text-xs leading-relaxed text-slate-500">Create your own account, connect your Google properties, and set up your own projects without admin help.</p>
+                            </button>
+                        )}
                     </div>
 
                     {(loading || configLoading) && (
@@ -186,7 +224,7 @@ export default function LoginPage({ onLogin }: { onLogin: (user: AuthUser) => vo
                     <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 text-xs leading-relaxed text-slate-500">
                         {authMode === 'register'
                             ? 'Registration creates a self-serve workspace with project setup, dashboard, audit, and keyword access enabled by default.'
-                            : 'Sign in uses the access already stored for your Google email. Admin and viewer permissions are still managed on the server.'}
+                            : 'Sign in uses the access already stored for your Google email. Returning users can also use Google One Tap for faster access on supported browsers.'}
                     </div>
                 </div>
                 <p className="mt-6 text-center text-xs text-slate-400">seotool.harshrathi.com</p>

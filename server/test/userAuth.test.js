@@ -5,7 +5,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
 process.env.CLIENT_ID = process.env.CLIENT_ID || 'test-client';
 process.env.DEV_ADMIN_BYPASS = process.env.DEV_ADMIN_BYPASS || 'true';
 
-const { requireAccess, __internal } = require('../userAuth');
+const { requireAccess, requireCsrf, __internal } = require('../userAuth');
 
 function createResponse() {
     return {
@@ -116,6 +116,44 @@ test('requireAccess always allows admins through', () => {
     let nextCalled = false;
 
     middleware(req, res, () => {
+        nextCalled = true;
+    });
+
+    assert.equal(nextCalled, true);
+    assert.equal(res.statusCode, 200);
+});
+
+test('requireCsrf skips safe methods so reads work without the header', () => {
+    const req = { method: 'GET', session: null, get: () => '', body: {} };
+    const res = createResponse();
+    let nextCalled = false;
+
+    requireCsrf(req, res, () => {
+        nextCalled = true;
+    });
+
+    assert.equal(nextCalled, true);
+    assert.equal(res.statusCode, 200);
+});
+
+test('requireCsrf rejects mutating requests with a missing or wrong token', () => {
+    const reqMissing = { method: 'POST', session: { csrfToken: 'expected-token' }, get: () => '', body: {} };
+    const resMissing = createResponse();
+    requireCsrf(reqMissing, resMissing, () => assert.fail('next should not be called'));
+    assert.equal(resMissing.statusCode, 403);
+
+    const reqWrong = { method: 'DELETE', session: { csrfToken: 'expected-token' }, get: () => 'other-token!!', body: {} };
+    const resWrong = createResponse();
+    requireCsrf(reqWrong, resWrong, () => assert.fail('next should not be called'));
+    assert.equal(resWrong.statusCode, 403);
+});
+
+test('requireCsrf accepts mutating requests with the correct token', () => {
+    const req = { method: 'POST', session: { csrfToken: 'expected-token' }, get: () => 'expected-token', body: {} };
+    const res = createResponse();
+    let nextCalled = false;
+
+    requireCsrf(req, res, () => {
         nextCalled = true;
     });
 

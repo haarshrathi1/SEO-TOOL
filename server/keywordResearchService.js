@@ -1,7 +1,6 @@
 const axios = require('axios');
 
 const {
-    BACKEND_VERTEX,
     formatBackendLabel,
     generateJson,
     getProviderRuntime,
@@ -46,11 +45,7 @@ const GROUNDED_SEARCH_DAILY_LIMIT = parseGroundedSearchDailyLimit(
 
 function getRuntimeProviderLabel() {
     const runtime = getProviderRuntime();
-    const fallbackLabel = runtime.allowGeminiFallback && runtime.availableBackends.includes('gemini')
-        ? ' with Gemini backup'
-        : '';
-    const primaryLabel = formatBackendLabel(runtime.primaryBackend);
-    return `${primaryLabel} primary${fallbackLabel}`;
+    return `${formatBackendLabel(runtime.primaryBackend)} (${runtime.keywordModel})`;
 }
 
 function clampPercent(value) {
@@ -102,7 +97,9 @@ function createProviderEventHandler({ onProgress, layer, label }) {
         }
 
         if (event.type === 'retry') {
-            void pushProgress(onProgress, buildProgressUpdate(layer, `${event.provider} is busy. Retrying ${label.toLowerCase()} (${event.attempt}/${event.maxAttempts})...`, {
+            const waitLabel = event.delayMs ? ` in ${Math.round(event.delayMs / 1000)}s` : '';
+            const reason = event.status === 429 ? 'hit a rate limit' : 'is busy';
+            void pushProgress(onProgress, buildProgressUpdate(layer, `${event.provider} ${reason}. Retrying ${label.toLowerCase()}${waitLabel} (${event.attempt}/${event.maxAttempts})...`, {
                 phase: 'mid',
             }));
             return;
@@ -830,6 +827,152 @@ function normalizeStrategicSynthesis(raw) {
     };
 }
 
+const BLOG_KEYWORD_ROLES = ['primary', 'secondary', 'supporting'];
+const BLOG_FAQ_SOURCES = ['paa', 'related-search', 'autocomplete'];
+
+function slugifyKeyword(value) {
+    return asString(value)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+}
+
+function titleCaseSeed(seed) {
+    return asString(seed)
+        .split(/\s+/)
+        .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
+        .join(' ');
+}
+
+// Deterministic brief assembled purely from real searcher data — used when
+// the model omits or mangles blogBrief so the writer still gets a usable plan.
+function buildFallbackBlogBrief(context = {}) {
+    const seed = asString(context.seed, 'this topic');
+    const paaQuestions = normalizeUniqueStrings(context.paaQuestions, 8);
+    const relatedSearches = normalizeUniqueStrings(context.relatedSearches, 8);
+    const suggestions = normalizeUniqueStrings(context.suggestions, 8);
+    const universeKeywords = Array.isArray(context.keywordUniverse?.keywords)
+        ? context.keywordUniverse.keywords.map((keyword) => asString(keyword?.term)).filter(Boolean)
+        : [];
+
+    const targetKeywords = [
+        { term: seed, role: 'primary', placement: 'H1 + first 100 words' },
+        ...universeKeywords
+            .filter((term) => term.toLowerCase() !== seed.toLowerCase())
+            .slice(0, 5)
+            .map((term) => ({ term, role: 'secondary', placement: 'H2 or body' })),
+    ];
+
+    const outline = [
+        {
+            heading: `What is ${seed}?`,
+            purpose: 'Define the topic and match informational intent.',
+            coversQueries: suggestions.slice(0, 2),
+        },
+        ...paaQuestions.slice(0, 5).map((question) => ({
+            heading: question,
+            purpose: 'Answer a real People Also Ask question directly.',
+            coversQueries: [question],
+        })),
+    ];
+
+    return {
+        recommendedTitle: `${titleCaseSeed(seed)}: A Complete Guide`,
+        titleOptions: [`${titleCaseSeed(seed)}: A Complete Guide`],
+        metaDescription: `Everything people actually search about ${seed} — real questions answered in one practical guide.`,
+        slug: slugifyKeyword(seed),
+        readerPromise: `After reading, the reader can act on ${seed} without searching again.`,
+        targetKeywords,
+        outline,
+        faq: paaQuestions.slice(0, 6).map((question) => ({
+            question,
+            source: 'paa',
+            answerAngle: 'Answer in 2-3 sentences, then expand with a concrete example.',
+        })),
+        searcherLanguage: normalizeUniqueStrings([...suggestions, ...relatedSearches], 8),
+        generatedBy: 'fallback',
+    };
+}
+
+function normalizeBlogBrief(raw, context = {}) {
+    const fallback = buildFallbackBlogBrief(context);
+    const source = raw && typeof raw === 'object' ? raw : {};
+
+    const targetKeywords = Array.isArray(source.targetKeywords)
+        ? source.targetKeywords
+            .map((entry) => {
+                const term = asString(entry?.term);
+                if (!term) {
+                    return null;
+                }
+                return {
+                    term,
+                    role: normalizeChoice(entry?.role, BLOG_KEYWORD_ROLES, 'supporting'),
+                    placement: asString(entry?.placement, 'Body'),
+                };
+            })
+            .filter(Boolean)
+            .slice(0, 8)
+        : [];
+
+    const outline = Array.isArray(source.outline)
+        ? source.outline
+            .map((entry) => {
+                const heading = asString(entry?.heading);
+                if (!heading) {
+                    return null;
+                }
+                return {
+                    heading,
+                    purpose: asString(entry?.purpose, ''),
+                    coversQueries: normalizeUniqueStrings(entry?.coversQueries, 5),
+                };
+            })
+            .filter(Boolean)
+            .slice(0, 8)
+        : [];
+
+    const faq = Array.isArray(source.faq)
+        ? source.faq
+            .map((entry) => {
+                const question = asString(entry?.question);
+                if (!question) {
+                    return null;
+                }
+                return {
+                    question,
+                    source: normalizeChoice(entry?.source, BLOG_FAQ_SOURCES, 'paa'),
+                    answerAngle: asString(entry?.answerAngle, ''),
+                };
+            })
+            .filter(Boolean)
+            .slice(0, 6)
+        : [];
+
+    const usable = targetKeywords.length > 0 && outline.length >= 3;
+    if (!usable) {
+        return fallback;
+    }
+
+    const titleOptions = normalizeUniqueStrings(source.titleOptions, 3);
+    const recommendedTitle = asString(source.recommendedTitle, titleOptions[0] || fallback.recommendedTitle);
+
+    return {
+        recommendedTitle,
+        titleOptions: titleOptions.length > 0 ? titleOptions : [recommendedTitle],
+        metaDescription: asString(source.metaDescription, fallback.metaDescription).slice(0, 160),
+        slug: slugifyKeyword(source.slug) || fallback.slug,
+        readerPromise: asString(source.readerPromise, fallback.readerPromise),
+        targetKeywords,
+        outline,
+        faq: faq.length > 0 ? faq : fallback.faq,
+        searcherLanguage: normalizeUniqueStrings(source.searcherLanguage, 8).length > 0
+            ? normalizeUniqueStrings(source.searcherLanguage, 8)
+            : fallback.searcherLanguage,
+        generatedBy: 'model',
+    };
+}
+
 function buildAnalysisMapping(strategy) {
     const clusters = Array.isArray(strategy.clusters)
         ? strategy.clusters.map((cluster) => ({
@@ -1043,7 +1186,6 @@ Return this exact JSON schema:
         modelType: 'keyword',
         model: runtime.groundedSearchModel,
         modelFallbacks: [runtime.keywordModel, ...runtime.keywordModelFallbacks],
-        preferredBackend: options.preferredBackend || BACKEND_VERTEX,
         taskName: 'grounded search verification',
         contents: prompt,
         useGoogleSearchGrounding: true,
@@ -1351,7 +1493,6 @@ Return this exact JSON schema:
     try {
         const response = await generateJson({
             modelType: 'keyword',
-            preferredBackend: options.preferredBackend || BACKEND_VERTEX,
             taskName: 'SERP DNA analysis',
             contents: prompt,
             config: {
@@ -1370,6 +1511,7 @@ Return this exact JSON schema:
     } catch (error) {
         console.error('[Layer 2] Error:', error.message);
         return {
+            error: error.message,
             data: {
                 serpPersonality: 'Mixed Bazaar',
                 googleWants: 'Unable to determine due to analysis error.',
@@ -1446,7 +1588,6 @@ Return this exact JSON schema:
     try {
         const response = await generateJson({
             modelType: 'keyword',
-            preferredBackend: options.preferredBackend || BACKEND_VERTEX,
             taskName: 'intent decomposition',
             contents: prompt,
             config: {
@@ -1465,6 +1606,7 @@ Return this exact JSON schema:
     } catch (error) {
         console.error('[Layer 3] Error:', error.message);
         return {
+            error: error.message,
             data: {
                 primaryIntent: 'Informational',
                 intentSpectrum: { know: 50, do: 20, go: 5, buy: 10, compare: 10, learn: 5 },
@@ -1536,7 +1678,6 @@ Return this exact JSON schema:
     try {
         const response = await generateJson({
             modelType: 'keyword',
-            preferredBackend: options.preferredBackend || BACKEND_VERTEX,
             taskName: 'keyword universe expansion',
             contents: prompt,
             config: {
@@ -1555,6 +1696,7 @@ Return this exact JSON schema:
     } catch (error) {
         console.error('[Layer 4] Error:', error.message);
         return {
+            error: error.message,
             data: {
                 totalKeywords: 0,
                 keywords: [],
@@ -1567,7 +1709,7 @@ Return this exact JSON schema:
     }
 }
 
-async function layer5StrategicSynthesis(seed, serpDna, intentData, keywordUniverse, serpSummary, groundedSearch, options = {}) {
+async function layer5StrategicSynthesis(seed, serpDna, intentData, keywordUniverse, serpSummary, groundedSearch, searchSignals = {}, options = {}) {
     console.log(`[Layer 5] Strategic Synthesis for: ${seed}`);
 
     const prompt = `
@@ -1584,6 +1726,11 @@ ANALYSIS INPUTS:
 - Heuristic Summary: ${JSON.stringify(serpSummary)}
 - Grounded Search Verification: ${JSON.stringify(groundedSearch)}
 
+REAL SEARCHER SIGNALS (verbatim from Google — ground truth of what people actually type and ask):
+- People Also Ask questions: ${JSON.stringify((searchSignals.paaQuestions || []).slice(0, 12))}
+- Related searches: ${JSON.stringify((searchSignals.relatedSearches || []).slice(0, 12))}
+- Autocomplete phrases: ${JSON.stringify((searchSignals.suggestions || []).slice(0, 15))}
+
 Think deeply to produce the most actionable, realistic strategy. Avoid optimism bias and be honest about difficulty and timeline.
 
 OUTPUT STYLE:
@@ -1596,6 +1743,15 @@ OUTPUT STYLE:
 - "mustInclude" and "avoid" must each contain at most 5 short items, 2-6 words each.
 - "alternativeStrategy.keywords" must contain at most 4 items.
 - "executionPriority" must contain at most 5 items, max 10 words each.
+
+BLOG BRIEF RULES — "blogBrief" turns this research into a ready-to-write article plan. It must be grounded in the REAL SEARCHER SIGNALS above, not invented:
+- Every "faq" item must restate an actual People Also Ask question or related search (light rewording allowed, meaning identical). Set "source" honestly.
+- "outline" must have 5-8 H2 sections in reading order; each section's "coversQueries" lists the real queries (PAA / related / autocomplete) that section answers. Do not include a section that answers nothing people search for.
+- "searcherLanguage" quotes up to 8 verbatim autocomplete or related-search phrases the writer should use word-for-word in the article.
+- "titleOptions" max 3, each under 60 characters, each containing the primary keyword naturally.
+- "metaDescription" max 155 characters, written to earn the click against the current SERP.
+- "targetKeywords" max 8 with exactly one "primary" role; "placement" says where it belongs (e.g. "H1 + first 100 words", "H2", "FAQ answer").
+- "readerPromise" is one sentence: what the reader can do after reading that they could not before.
 
 Return this exact JSON schema:
 {
@@ -1644,13 +1800,29 @@ Return this exact JSON schema:
     "keywords": ["string"]
   },
   "contentGap": "string",
-  "executionPriority": ["string"]
+  "executionPriority": ["string"],
+  "blogBrief": {
+    "recommendedTitle": "string",
+    "titleOptions": ["string"],
+    "metaDescription": "string",
+    "slug": "string",
+    "readerPromise": "string",
+    "targetKeywords": [
+      { "term": "string", "role": "primary | secondary | supporting", "placement": "string" }
+    ],
+    "outline": [
+      { "heading": "string", "purpose": "string", "coversQueries": ["string"] }
+    ],
+    "faq": [
+      { "question": "string", "source": "paa | related-search | autocomplete", "answerAngle": "string" }
+    ],
+    "searcherLanguage": ["string"]
+  }
 }`;
 
     try {
         const response = await generateJson({
             modelType: 'keyword',
-            preferredBackend: options.preferredBackend || BACKEND_VERTEX,
             taskName: 'strategic synthesis',
             contents: prompt,
             config: {
@@ -1669,6 +1841,7 @@ Return this exact JSON schema:
     } catch (error) {
         console.error('[Layer 5] Error:', error.message);
         return {
+            error: error.message,
             data: {
                 difficulty: { score: 0, label: 'Unknown', reason: 'Analysis failed' },
                 viability: {
@@ -1712,7 +1885,6 @@ Return valid JSON with: difficulty, viability, recommendedStrategy, alternativeS
 
     const response = await generateJson({
         modelType: 'keyword',
-        preferredBackend: options.preferredBackend || BACKEND_VERTEX,
         taskName: 'legacy keyword analysis',
         contents: prompt,
         config: {
@@ -1844,7 +2016,15 @@ async function runKeywordResearchV2(seedInput, options = {}) {
     await pushProgress(options.onProgress, buildProgressUpdate(2, 'Mapping SERP DNA and authority patterns...', {
         phase: 'start',
     }));
+    const layerErrors = [];
+    const recordLayerError = (layer, label, response) => {
+        if (response?.error) {
+            layerErrors.push({ layer, label, message: response.error });
+        }
+    };
+
     const serpDnaResponse = await layer2SerpDna(seed, serpData, serpSummary, suggestions, groundedSearch, options);
+    recordLayerError(2, 'SERP DNA analysis', serpDnaResponse);
     const serpDna = normalizeSerpDna(serpDnaResponse.data);
     lastAiMeta = serpDnaResponse.meta || lastAiMeta;
     await pushProgress(options.onProgress, buildProgressUpdate(2, `Layer 2 complete. SERP personality: ${serpDna.serpPersonality}.`, {
@@ -1857,6 +2037,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         provider: serpDnaResponse.meta?.provider || getRuntimeProviderLabel(),
     }));
     const intentResponse = await layer3IntentDecomposition(seed, serpData, serpDna, suggestions, groundedSearch, options);
+    recordLayerError(3, 'Intent decomposition', intentResponse);
     const intentData = normalizeIntentDecomposition(intentResponse.data);
     lastAiMeta = intentResponse.meta || lastAiMeta;
     await pushProgress(options.onProgress, buildProgressUpdate(3, `Layer 3 complete. Primary intent: ${intentData.primaryIntent}.`, {
@@ -1869,6 +2050,7 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         provider: intentResponse.meta?.provider || getRuntimeProviderLabel(),
     }));
     const keywordUniverseResponse = await layer4KeywordUniverse(seed, serpData, serpDna, intentData, suggestions, groundedSearch, options);
+    recordLayerError(4, 'Keyword expansion', keywordUniverseResponse);
     const keywordContext = {
         suggestions,
         serpData,
@@ -2010,8 +2192,20 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         phase: 'start',
         provider: keywordUniverseResponse.meta?.provider || getRuntimeProviderLabel(),
     }));
-    const strategyResponse = await layer5StrategicSynthesis(seed, serpDna, intentData, keywordUniverse, serpSummary, groundedSearch, options);
+    const strategyResponse = await layer5StrategicSynthesis(seed, serpDna, intentData, keywordUniverse, serpSummary, groundedSearch, {
+        paaQuestions: serpData.paaQuestions,
+        relatedSearches: serpData.relatedSearches,
+        suggestions,
+    }, options);
+    recordLayerError(5, 'Strategic synthesis', strategyResponse);
     const strategy = normalizeStrategicSynthesis(strategyResponse.data);
+    const blogBrief = normalizeBlogBrief(strategyResponse.data?.blogBrief, {
+        seed,
+        paaQuestions: serpData.paaQuestions,
+        relatedSearches: serpData.relatedSearches,
+        suggestions,
+        keywordUniverse,
+    });
     lastAiMeta = strategyResponse.meta || lastAiMeta;
     await pushProgress(options.onProgress, buildProgressUpdate(5, `Layer 5 complete. Difficulty scored at ${strategy.difficulty.score}/100.`, {
         phase: 'complete',
@@ -2040,9 +2234,11 @@ async function runKeywordResearchV2(seedInput, options = {}) {
         intentData,
         keywordUniverse,
         strategy,
+        blogBrief,
         analysis: buildAnalysisMapping(strategy),
         metadata: {
             ...buildMetadata(lastAiMeta),
+            layerErrors,
             groundedSearchRequested,
             groundedSearchUsed: Boolean(groundedSearch),
             groundedSearchSkippedReason,
@@ -2059,37 +2255,10 @@ async function runKeywordResearchV2(seedInput, options = {}) {
     };
 }
 
-async function runLegacyKeywordResearch(seedInput, options = {}) {
-    const seed = normalizeSeed(seedInput);
-    if (!seed) {
-        throw new Error('Seed keyword required');
-    }
-
-    console.log(`Starting Legacy Research for: ${seed}`);
-
-    const [suggestions, serpData] = await Promise.all([
-        fetchAutocomplete(seed),
-        fetchSERP(seed),
-    ]);
-
-    const serpSummary = await analyzeSERP(serpData.organic, suggestions);
-    const analysisResponse = await analyzeWithAi(seed, suggestions, serpData.organic, serpSummary, options);
-
-    return {
-        seed,
-        projectId: options.projectId || null,
-        serp: serpData.organic,
-        serpSummary,
-        analysis: analysisResponse.data,
-        metadata: buildMetadata(analysisResponse.meta),
-    };
-}
-
 module.exports = {
     TOTAL_LAYERS,
     getRuntimeProviderLabel,
     runKeywordResearchV2,
-    runLegacyKeywordResearch,
     __internal: {
         applyGroundedSearchUsageLimit,
         getGroundingDateKey,
@@ -2097,6 +2266,8 @@ module.exports = {
         normalizeIntentDecomposition,
         normalizeKeywordUniverse,
         normalizeStrategicSynthesis,
+        normalizeBlogBrief,
+        buildFallbackBlogBrief,
         buildAnalysisMapping,
     },
 };

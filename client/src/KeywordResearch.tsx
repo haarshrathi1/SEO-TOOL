@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Loader2, Target, BarChart3, Layers, Sparkles, ExternalLink, Zap, History, ChevronRight, TrendingUp, Brain, Lightbulb, Crosshair, Rocket, ArrowRight, ChevronDown, ChevronUp, HelpCircle, Star, Shield, Eye, BookOpen, Filter, Download, Check, type LucideIcon } from 'lucide-react';
+import { Search, Loader2, Target, BarChart3, Layers, Sparkles, ExternalLink, Zap, History, ChevronRight, TrendingUp, Brain, Lightbulb, Crosshair, Rocket, ArrowRight, ChevronDown, ChevronUp, HelpCircle, Star, Shield, Eye, BookOpen, Filter, Download, Check, Link2, Printer, Share2, type LucideIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from './api';
 import { downloadCsv } from './csv';
+import { copyCurrentUrl, shareCurrentUrl } from './reportActions';
+import { printKeywordPdfReport } from './keywordPdfReport';
 import { useToast } from './toast';
-import type { AuthUser, KeywordAdsStatus, KeywordDataV2, KeywordHistoryItem, KeywordItem, KeywordJob, KeywordScanResult, StrategicSynthesis } from './types';
+import type { AuthUser, BlogBrief, KeywordAdsStatus, KeywordDataV2, KeywordHistoryItem, KeywordItem, KeywordJob, KeywordScanResult, StrategicSynthesis } from './types';
 
 interface QuestionKeywordItem {
     question: string;
@@ -491,6 +493,179 @@ function Section({ icon: Icon, title, badge, children, defaultOpen = true }: { i
     );
 }
 
+function blogBriefToMarkdown(brief: BlogBrief): string {
+    const lines: string[] = [
+        `# ${brief.recommendedTitle}`,
+        '',
+        `**Slug:** /${brief.slug}`,
+        `**Meta description:** ${brief.metaDescription}`,
+        `**Reader promise:** ${brief.readerPromise}`,
+        '',
+        '## Target keywords',
+        ...brief.targetKeywords.map((k) => `- **${k.term}** (${k.role}) — ${k.placement}`),
+        '',
+        '## Outline',
+        ...brief.outline.flatMap((s, i) => [
+            `${i + 1}. **${s.heading}**${s.purpose ? ` — ${s.purpose}` : ''}`,
+            ...(s.coversQueries.length ? [`   Answers: ${s.coversQueries.join(' · ')}`] : []),
+        ]),
+        '',
+        '## FAQ (from real searches)',
+        ...brief.faq.map((f) => `- **${f.question}** (${f.source})${f.answerAngle ? ` — ${f.answerAngle}` : ''}`),
+        '',
+        '## Use these phrases verbatim',
+        ...brief.searcherLanguage.map((p) => `- ${p}`),
+    ];
+    return lines.join('\n');
+}
+
+const BRIEF_ROLE_ACCENTS: Record<string, string> = {
+    primary: 'bg-yellow-300',
+    secondary: 'bg-blue-200',
+    supporting: 'bg-slate-100',
+};
+
+const BRIEF_SOURCE_LABELS: Record<string, string> = {
+    paa: 'People Also Ask',
+    'related-search': 'Related Search',
+    autocomplete: 'Autocomplete',
+};
+
+function BlogBriefSection({ brief }: { brief: BlogBrief }) {
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = async () => {
+        try {
+            await navigator.clipboard.writeText(blogBriefToMarkdown(brief));
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        } catch {
+            /* clipboard unavailable */
+        }
+    };
+
+    return (
+        <Section
+            icon={BookOpen}
+            title="Blog Writing Brief"
+            badge={brief.generatedBy === 'fallback' ? 'From real search data' : 'Ready to write'}
+        >
+            <div className="space-y-4">
+                {/* Title + meta */}
+                <div className="border-2 border-black p-4 bg-yellow-50 shadow-[4px_4px_0px_0px_#000]">
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                            <p className="text-[11px] font-black uppercase text-slate-600">Recommended Title</p>
+                            <p className="mt-1 text-lg font-black text-black leading-tight">{brief.recommendedTitle}</p>
+                            <p className="mt-2 text-xs font-mono text-slate-600">/{brief.slug}</p>
+                        </div>
+                        <button
+                            onClick={() => void handleCopy()}
+                            className="flex items-center gap-1.5 border-2 border-black bg-white px-3 py-2 text-[11px] font-black uppercase hover:bg-yellow-200 transition-colors flex-shrink-0 active:translate-x-[1px] active:translate-y-[1px]"
+                        >
+                            {copied ? <Check className="w-3.5 h-3.5" /> : <Download className="w-3.5 h-3.5" />}
+                            {copied ? 'Copied' : 'Copy Brief'}
+                        </button>
+                    </div>
+                    {brief.titleOptions.length > 1 && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            {brief.titleOptions.slice(1).map((t, i) => (
+                                <span key={i} className="border border-black px-2 py-0.5 text-[11px] font-bold bg-white">{t}</span>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="border-2 border-black p-4 bg-white shadow-[4px_4px_0px_0px_#000]">
+                        <p className="text-[11px] font-black uppercase text-slate-600 mb-1">Meta Description <span className="font-mono normal-case">({brief.metaDescription.length}/155)</span></p>
+                        <p className="text-sm text-slate-800 font-medium">{brief.metaDescription}</p>
+                    </div>
+                    <div className="border-2 border-black p-4 bg-emerald-50 shadow-[4px_4px_0px_0px_#000]">
+                        <p className="text-[11px] font-black uppercase text-emerald-800 mb-1">Reader Promise</p>
+                        <p className="text-sm text-slate-800 font-medium">{brief.readerPromise}</p>
+                    </div>
+                </div>
+
+                {/* Target keywords */}
+                {brief.targetKeywords.length > 0 && (
+                    <div>
+                        <p className="text-[11px] font-black uppercase text-slate-600 mb-2">Target Keywords ({brief.targetKeywords.length})</p>
+                        <div className="space-y-1.5">
+                            {brief.targetKeywords.map((k, i) => (
+                                <div key={i} className="flex flex-wrap items-center gap-2 border-2 border-black p-2.5 bg-white">
+                                    <span className={`border border-black px-2 py-0.5 text-[10px] font-black uppercase ${BRIEF_ROLE_ACCENTS[k.role] || 'bg-slate-100'}`}>{k.role}</span>
+                                    <span className="font-black text-sm text-black">{k.term}</span>
+                                    <span className="text-xs text-slate-500 font-medium ml-auto">{k.placement}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* Outline */}
+                {brief.outline.length > 0 && (
+                    <div>
+                        <p className="text-[11px] font-black uppercase text-slate-600 mb-2">Article Outline — every section answers a real search</p>
+                        <div className="space-y-2">
+                            {brief.outline.map((section, i) => (
+                                <div key={i} className="border-2 border-black p-3 bg-white hover:bg-yellow-50 transition-colors">
+                                    <div className="flex items-start gap-3">
+                                        <span className="w-7 h-7 border-2 border-black bg-black text-white flex items-center justify-center text-xs font-black flex-shrink-0">H2</span>
+                                        <div className="min-w-0">
+                                            <p className="font-black text-sm text-black">{section.heading}</p>
+                                            {section.purpose && <p className="text-xs text-slate-600 mt-0.5 font-medium">{section.purpose}</p>}
+                                            {section.coversQueries.length > 0 && (
+                                                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                                    {section.coversQueries.map((q, qi) => (
+                                                        <span key={qi} className="border border-black px-1.5 py-0.5 text-[10px] font-bold bg-blue-50">{q}</span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* FAQ */}
+                    {brief.faq.length > 0 && (
+                        <div>
+                            <p className="text-[11px] font-black uppercase text-slate-600 mb-2">FAQ — real questions people ask</p>
+                            <div className="space-y-1.5">
+                                {brief.faq.map((f, i) => (
+                                    <div key={i} className="border-2 border-black p-2.5 bg-white">
+                                        <p className="font-black text-xs text-black">{f.question}</p>
+                                        <div className="mt-1 flex items-center gap-2">
+                                            <span className="border border-black px-1.5 py-0.5 text-[9px] font-black uppercase bg-purple-100">{BRIEF_SOURCE_LABELS[f.source] || f.source}</span>
+                                            {f.answerAngle && <span className="text-[11px] text-slate-600 font-medium">{f.answerAngle}</span>}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Searcher language */}
+                    {brief.searcherLanguage.length > 0 && (
+                        <div>
+                            <p className="text-[11px] font-black uppercase text-slate-600 mb-2">Searcher Language — use verbatim in the article</p>
+                            <div className="flex flex-wrap gap-2">
+                                {brief.searcherLanguage.map((phrase, i) => (
+                                    <span key={i} className="border border-black px-2 py-1 text-[11px] font-bold bg-emerald-50">"{phrase}"</span>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+        </Section>
+    );
+}
+
 export default function KeywordResearch({ user }: { user: AuthUser }) {
     const { push } = useToast();
     const [seed, setSeed] = useState('');
@@ -882,6 +1057,18 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
         push({ tone: 'success', title: 'Keyword export ready', description: 'CSV download started.' });
     };
 
+    const handleCopyPageLink = async () => {
+        await copyCurrentUrl(push, '/keywords');
+    };
+
+    const handleSharePage = async () => {
+        await shareCurrentUrl(push, {
+            path: '/keywords',
+            title: data?.seed ? `${data.seed} keyword research` : 'ClimbSEO keyword research',
+            text: 'Open the keyword research workspace in ClimbSEO.',
+        });
+    };
+
     const viabilityAudiences: Array<{ key: keyof StrategicSynthesis['viability']; label: string }> = [
         { key: 'soloCreator', label: 'Solo Creator' },
         { key: 'smallBusiness', label: 'Small Business' },
@@ -891,7 +1078,7 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
     return (
         <div className="operator-shell text-slate-900 font-sans selection:bg-black selection:text-white pb-20">
             {/* Brutalist Header */}
-            <header className="sticky top-0 z-50 border-b-2 border-black bg-white/90 backdrop-blur-md">
+            <header data-print-hidden className="sticky top-0 z-50 border-b-2 border-black bg-white/90 backdrop-blur-md">
                 <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row items-center justify-between gap-4">
                     <div className="flex items-center gap-4">
                         <div className="p-2 bg-black border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,0.5)]">
@@ -911,6 +1098,17 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
                                 <Download className="w-4 h-4" /> Export CSV
                             </button>
                         )}
+                        {data && (
+                            <button onClick={() => printKeywordPdfReport(data)} className="operator-button-secondary px-4 py-2">
+                                <Printer className="w-4 h-4" /> PDF Report
+                            </button>
+                        )}
+                        <button onClick={() => void handleCopyPageLink()} className="operator-button-secondary px-4 py-2">
+                            <Link2 className="w-4 h-4" /> Copy Link
+                        </button>
+                        <button onClick={() => void handleSharePage()} className="operator-button-secondary px-4 py-2">
+                            <Share2 className="w-4 h-4" /> Share
+                        </button>
                         <button onClick={() => setShowHistory(!showHistory)} className="operator-button-secondary px-4 py-2">
                             <History className="w-4 h-4" /> History{history.length > 0 ? ` (${history.length})` : ''}
                         </button>
@@ -923,6 +1121,7 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
                 {showHistory && (<>
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/20 z-40" onClick={() => setShowHistory(false)} />
                     <motion.div initial={{ x: -320 }} animate={{ x: 0 }} exit={{ x: -320 }} transition={{ type: 'spring', damping: 25 }}
+                        data-print-hidden
                         className="fixed top-0 left-0 h-full w-80 bg-white z-50 border-r-2 border-black overflow-y-auto"
                         style={{ boxShadow: '8px 0 0 0 #000' }}
                     >
@@ -1314,6 +1513,22 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
                             </div>
                         )}
 
+                        {/* Layer failure warning — partial results */}
+                        {(data.metadata?.layerErrors?.length ?? 0) > 0 && (
+                            <div className="border-2 border-black bg-red-50 p-4 shadow-[4px_4px_0px_0px_#000]">
+                                <p className="text-sm font-black uppercase text-red-700">Partial results — {data.metadata!.layerErrors!.length} layer{data.metadata!.layerErrors!.length > 1 ? 's' : ''} failed</p>
+                                <div className="mt-2 space-y-1">
+                                    {data.metadata!.layerErrors!.map((e, i) => (
+                                        <p key={i} className="text-xs font-medium text-red-800">
+                                            <span className="border border-black bg-white px-1.5 py-0.5 text-[10px] font-black uppercase mr-2">Layer {e.layer}</span>
+                                            {e.label}: {e.message}
+                                        </p>
+                                    ))}
+                                </div>
+                                <p className="mt-2 text-xs font-medium text-red-700">Sections fed by these layers show placeholder values. Re-run the research to fill them in.</p>
+                            </div>
+                        )}
+
                         <Section icon={Target} title="Strategic Snapshot" badge={highestScoringKeyword ? getOpportunityTier(highestScoringKeyword.opportunityScore) : 'Overview'}>
                             <div className="space-y-4">
                                 <div className="grid gap-4 lg:grid-cols-[1.4fr_0.9fr]">
@@ -1657,6 +1872,9 @@ export default function KeywordResearch({ user }: { user: AuthUser }) {
                                 </div>
                             </Section>
                         )}
+
+                        {/* Blog Writing Brief */}
+                        {data.blogBrief && <BlogBriefSection brief={data.blogBrief} />}
 
                         {/* Viability */}
                         {data.strategy?.viability && (

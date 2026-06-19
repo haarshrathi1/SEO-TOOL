@@ -1,46 +1,41 @@
-require('dotenv').config({ path: require('path').join(__dirname, '.env') });
-const { google } = require('googleapis');
 const express = require('express');
 const fs = require('fs');
-const path = require('path');
 const jwt = require('jsonwebtoken');
-const { OauthToken, Project, UserGoogleConnection } = require('./models');
+const path = require('path');
+const { google } = require('googleapis');
+const { config } = require('./config');
+const { logger } = require('./logger');
+const {
+    AdminUser,
+    GoogleConnection,
+    OauthToken,
+    Project,
+} = require('./models');
 const { getProject } = require('./projects');
+const userAuth = require('./userAuth');
 
 const router = express.Router();
 const userRouter = express.Router();
 
-const clientId = process.env.CLIENT_ID;
-const clientSecret = process.env.CLIENT_SECRET;
-const redirectUri = process.env.REDIRECT_URI;
-const stateSecret = process.env.JWT_SECRET || process.env.CLIENT_SECRET || 'development-google-state-secret';
-
-if (!clientId || !clientSecret || !redirectUri) {
-    console.error('CRITICAL ERROR: Missing Google OAuth Environment Variables.');
-    console.error('Please verify .env has CLIENT_ID, CLIENT_SECRET, and REDIRECT_URI');
-}
-
-console.log('Initializing OAuth Client with ID:', clientId ? 'Set' : 'Missing');
-
-const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
 const TOKEN_PROVIDER = 'google-oauth';
 const GOOGLE_ADS_TOKEN_PROVIDER = 'google-ads-oauth';
+const GOOGLE_ALL_TOKEN_PROVIDER = 'google-all-oauth';
 const USER_GOOGLE_PROVIDER = 'google-user-oauth';
 const USER_GOOGLE_STATE_KIND = 'user_google_connection';
-const isProduction = process.env.NODE_ENV === 'production';
-const disableServiceAccountRaw = process.env.DISABLE_SERVICE_ACCOUNT ?? (isProduction ? 'true' : 'false');
-const DISABLE_SERVICE_ACCOUNT = /^(1|true|yes|on)$/i.test(disableServiceAccountRaw);
+const ADMIN_GOOGLE_STATE_KIND = 'admin_google_connection';
+const ADMIN_OAUTH_PROVIDERS = new Set([TOKEN_PROVIDER, GOOGLE_ADS_TOKEN_PROVIDER, GOOGLE_ALL_TOKEN_PROVIDER]);
 const GOOGLE_ADS_OAUTH_SCOPE = 'https://www.googleapis.com/auth/adwords';
+const frontendUrl = config.frontendUrl.replace(/\/+$/, '');
 
 const oauth2Client = new google.auth.OAuth2(
-    clientId,
-    clientSecret,
-    redirectUri
+    config.google.clientId,
+    config.google.clientSecret,
+    config.google.redirectUri
 );
 const googleAdsOauth2Client = new google.auth.OAuth2(
-    clientId,
-    clientSecret,
-    redirectUri
+    config.google.clientId,
+    config.google.clientSecret,
+    config.google.redirectUri
 );
 
 const SCOPES = [
@@ -68,6 +63,10 @@ const GOOGLE_ADS_SCOPES = [
     'https://www.googleapis.com/auth/userinfo.email',
 ];
 
+const ALL_SCOPES = [
+    ...new Set([...SCOPES, ...GOOGLE_ADS_SCOPES]),
+];
+
 const SERVICE_ACCOUNT_SCOPES = [
     'https://www.googleapis.com/auth/webmasters.readonly',
     'https://www.googleapis.com/auth/webmasters',
@@ -78,9 +77,9 @@ const SERVICE_ACCOUNT_SCOPES = [
 
 function createOauthClient() {
     return new google.auth.OAuth2(
-        clientId,
-        clientSecret,
-        redirectUri
+        config.google.clientId,
+        config.google.clientSecret,
+        config.google.redirectUri
     );
 }
 
@@ -116,24 +115,74 @@ function normalizeComparableSiteUrl(value) {
 function buildUserOauthState(payload) {
     return jwt.sign({
         kind: USER_GOOGLE_STATE_KIND,
+        userId: String(payload.userId || ''),
+        workspaceId: String(payload.workspaceId || ''),
         email: normalizeEmail(payload.email),
         projectId: typeof payload.projectId === 'string' ? payload.projectId.trim() : '',
         redirectPath: normalizePath(payload.redirectPath),
-    }, stateSecret, { expiresIn: '15m' });
+    }, config.jwtSecret, { expiresIn: '15m' });
 }
 
-function parseUserOauthState(state) {
-    if (!state || typeof state !== 'string' || state === TOKEN_PROVIDER || state === GOOGLE_ADS_TOKEN_PROVIDER) {
+function buildAdminOauthState(provider, user) {
+    return jwt.sign({
+        kind: ADMIN_GOOGLE_STATE_KIND,
+        provider,
+        email: normalizeEmail(user?.email),
+    }, config.jwtSecret, { expiresIn: '15m' });
+}
+
+function parseAdminOauthState(state) {
+    if (!state || typeof state !== 'string') {
         return null;
     }
 
     try {
-        const payload = jwt.verify(state, stateSecret);
-        if (payload?.kind !== USER_GOOGLE_STATE_KIND || !payload?.email) {
+        const payload = jwt.verify(state, config.jwtSecret);
+        if (payload?.kind !== ADMIN_GOOGLE_STATE_KIND || !ADMIN_OAUTH_PROVIDERS.has(payload?.provider)) {
             return null;
         }
 
         return {
+            provider: payload.provider,
+            email: normalizeEmail(payload.email),
+        };
+    } catch {
+        return null;
+    }
+}
+
+// Shared admin tokens power workspace-wide Google API access, so only
+// seeded platform admins (ADMIN_EMAIL / ADMIN_EMAILS) may replace them.
+async function requirePlatformAdmin(req, res, next) {
+    try {
+        const email = normalizeEmail(req.user?.email);
+        const seededAdmin = email ? await AdminUser.findOne({ email }).lean() : null;
+        if (!seededAdmin) {
+            return res.status(403).json({ error: 'Platform admin access required' });
+        }
+        return next();
+    } catch (error) {
+        logger.error('auth.platform_admin_check_failed', {
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return res.status(500).json({ error: 'Failed to verify admin access' });
+    }
+}
+
+function parseUserOauthState(state) {
+    if (!state || typeof state !== 'string' || state === TOKEN_PROVIDER || state === GOOGLE_ADS_TOKEN_PROVIDER || state === GOOGLE_ALL_TOKEN_PROVIDER) {
+        return null;
+    }
+
+    try {
+        const payload = jwt.verify(state, config.jwtSecret);
+        if (payload?.kind !== USER_GOOGLE_STATE_KIND || !payload?.email || !payload?.workspaceId || !payload?.userId) {
+            return null;
+        }
+
+        return {
+            userId: String(payload.userId),
+            workspaceId: String(payload.workspaceId),
             email: normalizeEmail(payload.email),
             projectId: typeof payload.projectId === 'string' ? payload.projectId.trim() : '',
             redirectPath: normalizePath(payload.redirectPath),
@@ -294,36 +343,44 @@ async function initializeAuth() {
 
         if (defaultTokenDoc?.tokens) {
             oauth2Client.setCredentials(defaultTokenDoc.tokens);
-            global.oauthTokens = defaultTokenDoc.tokens;
-            console.log('Loaded saved default Google tokens from MongoDB for persistent auth.');
         }
 
         if (googleAdsTokenDoc?.tokens) {
             googleAdsOauth2Client.setCredentials(googleAdsTokenDoc.tokens);
-            global.googleAdsOauthTokens = googleAdsTokenDoc.tokens;
-            console.log('Loaded saved Google Ads tokens from MongoDB for persistent auth.');
         }
-    } catch (e) {
-        console.error('Failed to load tokens from MongoDB:', e.message);
+    } catch (error) {
+        logger.warn('auth.initialize_failed', {
+            error: error instanceof Error ? error.message : String(error),
+        });
     }
 }
 
-router.get('/login', (req, res) => {
+router.get('/login', userAuth.requireAuth, requirePlatformAdmin, (req, res) => {
     const url = oauth2Client.generateAuthUrl({
         access_type: 'offline',
         scope: SCOPES,
         prompt: 'consent',
-        state: TOKEN_PROVIDER,
+        state: buildAdminOauthState(TOKEN_PROVIDER, req.user),
     });
     res.redirect(url);
 });
 
-router.get('/login/ads', (req, res) => {
+router.get('/login/ads', userAuth.requireAuth, requirePlatformAdmin, (req, res) => {
     const url = googleAdsOauth2Client.generateAuthUrl({
         access_type: 'offline',
         scope: GOOGLE_ADS_SCOPES,
         prompt: 'consent',
-        state: GOOGLE_ADS_TOKEN_PROVIDER,
+        state: buildAdminOauthState(GOOGLE_ADS_TOKEN_PROVIDER, req.user),
+    });
+    res.redirect(url);
+});
+
+router.get('/login/all', userAuth.requireAuth, requirePlatformAdmin, (req, res) => {
+    const url = oauth2Client.generateAuthUrl({
+        access_type: 'offline',
+        scope: ALL_SCOPES,
+        prompt: 'consent',
+        state: buildAdminOauthState(GOOGLE_ALL_TOKEN_PROVIDER, req.user),
     });
     res.redirect(url);
 });
@@ -338,17 +395,23 @@ async function fetchGoogleProfile(authClient) {
     };
 }
 
-async function persistUserGoogleConnection(ownerEmail, tokens) {
+async function persistUserGoogleConnection(context, tokens) {
     const authClient = createOauthClient();
     authClient.setCredentials(tokens);
     const profile = await fetchGoogleProfile(authClient);
 
-    const connection = await UserGoogleConnection.findOneAndUpdate(
-        { ownerEmail: normalizeEmail(ownerEmail) },
+    const connection = await GoogleConnection.findOneAndUpdate(
         {
-            ownerEmail: normalizeEmail(ownerEmail),
+            workspaceId: context.workspaceId,
+            userId: context.userId,
             provider: USER_GOOGLE_PROVIDER,
-            googleEmail: profile.email || normalizeEmail(ownerEmail),
+        },
+        {
+            workspaceId: context.workspaceId,
+            userId: context.userId,
+            provider: USER_GOOGLE_PROVIDER,
+            label: profile.name || profile.email || context.email,
+            googleEmail: profile.email || normalizeEmail(context.email),
             displayName: profile.name || '',
             picture: profile.picture || '',
             scope: typeof tokens?.scope === 'string' ? tokens.scope : '',
@@ -369,6 +432,14 @@ router.get('/callback', async (req, res) => {
     const { code } = req.query;
     const userOauthState = parseUserOauthState(req.query.state);
 
+    if (!code || typeof code !== 'string') {
+        res.redirect(buildFrontendRedirect(userOauthState?.redirectPath || '/projects', {
+            google: 'error',
+            message: 'Google authorization was cancelled or did not return a code',
+        }));
+        return;
+    }
+
     if (userOauthState) {
         const userClient = createOauthClient();
 
@@ -376,16 +447,17 @@ router.get('/callback', async (req, res) => {
             const { tokens } = await userClient.getToken(code);
             userClient.setCredentials(tokens);
 
-            const { profile } = await persistUserGoogleConnection(userOauthState.email, tokens);
+            const { connection, profile } = await persistUserGoogleConnection(userOauthState, tokens);
 
             if (userOauthState.projectId) {
                 await Project.findOneAndUpdate(
                     {
+                        workspaceId: userOauthState.workspaceId,
                         id: userOauthState.projectId,
-                        ownerEmail: userOauthState.email,
                     },
                     {
-                        googleConnectionEmail: userOauthState.email,
+                        googleConnectionId: connection._id,
+                        googleConnectionEmail: connection.googleEmail || userOauthState.email,
                         updatedAt: new Date(),
                     }
                 );
@@ -398,7 +470,11 @@ router.get('/callback', async (req, res) => {
             }));
             return;
         } catch (error) {
-            console.error('Error authenticating user Google connection', error);
+            logger.error('auth.user_google_connection_failed', {
+                error: error instanceof Error ? error.message : String(error),
+                workspaceId: userOauthState.workspaceId,
+                userId: userOauthState.userId,
+            });
             res.redirect(buildFrontendRedirect(userOauthState.redirectPath || '/projects', {
                 google: 'error',
                 message: 'Failed to connect Google account',
@@ -407,9 +483,16 @@ router.get('/callback', async (req, res) => {
         }
     }
 
-    const requestedProvider = req.query.state === GOOGLE_ADS_TOKEN_PROVIDER
-        ? GOOGLE_ADS_TOKEN_PROVIDER
-        : TOKEN_PROVIDER;
+    const adminOauthState = parseAdminOauthState(req.query.state);
+    if (!adminOauthState) {
+        logger.warn('auth.callback_invalid_state', {
+            hasState: Boolean(req.query.state),
+        });
+        res.status(400).send('Invalid or expired OAuth state. Restart the connection from the app.');
+        return;
+    }
+
+    const requestedProvider = adminOauthState.provider;
     const selectedClient = requestedProvider === GOOGLE_ADS_TOKEN_PROVIDER
         ? googleAdsOauth2Client
         : oauth2Client;
@@ -418,49 +501,83 @@ router.get('/callback', async (req, res) => {
         const { tokens } = await selectedClient.getToken(code);
         selectedClient.setCredentials(tokens);
 
-        await OauthToken.findOneAndUpdate(
-            { provider: requestedProvider },
-            { provider: requestedProvider, tokens, updatedAt: new Date() },
-            { upsert: true, setDefaultsOnInsert: true }
-        );
-
-        if (requestedProvider === GOOGLE_ADS_TOKEN_PROVIDER) {
-            global.googleAdsOauthTokens = tokens;
+        if (requestedProvider === GOOGLE_ALL_TOKEN_PROVIDER) {
+            // Store tokens for both providers so all APIs work
+            googleAdsOauth2Client.setCredentials(tokens);
+            await Promise.all([
+                OauthToken.findOneAndUpdate(
+                    { provider: TOKEN_PROVIDER },
+                    { provider: TOKEN_PROVIDER, tokens, updatedAt: new Date() },
+                    { upsert: true, setDefaultsOnInsert: true }
+                ),
+                OauthToken.findOneAndUpdate(
+                    { provider: GOOGLE_ADS_TOKEN_PROVIDER },
+                    { provider: GOOGLE_ADS_TOKEN_PROVIDER, tokens, updatedAt: new Date() },
+                    { upsert: true, setDefaultsOnInsert: true }
+                ),
+            ]);
         } else {
-            global.oauthTokens = tokens;
+            await OauthToken.findOneAndUpdate(
+                { provider: requestedProvider },
+                { provider: requestedProvider, tokens, updatedAt: new Date() },
+                { upsert: true, setDefaultsOnInsert: true }
+            );
         }
 
-        console.log('Authentication successful & saved to MongoDB');
         res.redirect(`${frontendUrl}?auth=success`);
     } catch (error) {
-        console.error('Error authenticating', error);
+        logger.error('auth.shared_callback_failed', {
+            error: error instanceof Error ? error.message : String(error),
+            provider: requestedProvider,
+        });
         res.status(500).send('Authentication failed');
     }
 });
 
-const getAuthClient = () => {
+function getAuthClient() {
     const credentials = oauth2Client.credentials || {};
     if (credentials.access_token || credentials.refresh_token) {
         return oauth2Client;
     }
-    if (DISABLE_SERVICE_ACCOUNT) {
+
+    if (config.google.disableServiceAccount) {
         return null;
     }
+
     const serviceAccount = getServiceAccountAuth();
     if (serviceAccount) {
-        console.log('Using Service Account for Authentication');
         return serviceAccount;
     }
-    return null;
-};
 
-async function getUserAuthClient(ownerEmail) {
-    const normalizedOwnerEmail = normalizeEmail(ownerEmail);
-    if (!normalizedOwnerEmail) {
-        return null;
+    return null;
+}
+
+async function getUserAuthClient(options = {}) {
+    const workspaceId = String(options.workspaceId || '').trim();
+    const googleConnectionId = String(options.googleConnectionId || '').trim();
+    const userId = String(options.userId || '').trim();
+    const email = normalizeEmail(options.email);
+
+    let connection = null;
+    if (googleConnectionId) {
+        connection = await GoogleConnection.findOne({
+            _id: googleConnectionId,
+            ...(workspaceId ? { workspaceId } : {}),
+        }).lean();
+    } else if (workspaceId && userId) {
+        connection = await GoogleConnection.findOne({
+            workspaceId,
+            userId,
+            provider: USER_GOOGLE_PROVIDER,
+        }).sort({ updatedAt: -1 }).lean();
+    } else if (workspaceId && email) {
+        connection = await GoogleConnection.findOne({
+            workspaceId,
+            googleEmail: email,
+            provider: USER_GOOGLE_PROVIDER,
+        }).sort({ updatedAt: -1 }).lean();
     }
 
-    const connection = await UserGoogleConnection.findOne({ ownerEmail: normalizedOwnerEmail }).lean();
     if (!connection?.tokens) {
         return null;
     }
@@ -471,42 +588,23 @@ async function getUserAuthClient(ownerEmail) {
 }
 
 function resolveProjectAuthSource(project) {
-    const explicitConnectionEmail = normalizeEmail(project?.googleConnectionEmail || '');
-    if (explicitConnectionEmail) {
-        return {
-            connectionEmail: explicitConnectionEmail,
-            allowSharedFallback: false,
-        };
-    }
-
-    const ownerEmail = normalizeEmail(project?.ownerEmail || '');
-    if (ownerEmail) {
-        return {
-            connectionEmail: ownerEmail,
-            allowSharedFallback: true,
-        };
-    }
-
+    const googleConnectionId = String(project?.googleConnectionId || '').trim();
     return {
-        connectionEmail: '',
-        allowSharedFallback: true,
+        googleConnectionId,
+        allowSharedFallback: false,
     };
 }
 
 async function getProjectAuthClient(project) {
-    const { connectionEmail, allowSharedFallback } = resolveProjectAuthSource(project);
-    if (connectionEmail) {
-        const userClient = await getUserAuthClient(connectionEmail);
-        if (userClient) {
-            return userClient;
-        }
-
-        if (!allowSharedFallback) {
-            return null;
-        }
+    const { googleConnectionId } = resolveProjectAuthSource(project);
+    if (!googleConnectionId) {
+        return null;
     }
 
-    return getAuthClient();
+    return getUserAuthClient({
+        workspaceId: project.workspaceId,
+        googleConnectionId,
+    });
 }
 
 async function hasProjectAuth(project) {
@@ -514,11 +612,11 @@ async function hasProjectAuth(project) {
 }
 
 function getStoredOauthTokens() {
-    return oauth2Client.credentials || global.oauthTokens || null;
+    return oauth2Client.credentials || null;
 }
 
 function getStoredGoogleAdsOauthTokens() {
-    return googleAdsOauth2Client.credentials || global.googleAdsOauthTokens || null;
+    return googleAdsOauth2Client.credentials || null;
 }
 
 function hasOauthScope(scope, tokens = getStoredOauthTokens()) {
@@ -533,19 +631,17 @@ function hasOauthScope(scope, tokens = getStoredOauthTokens()) {
     return scopes.includes(scope);
 }
 
-const getServiceAccountAuth = () => {
+function getServiceAccountAuth() {
     const keyPath = path.join(__dirname, 'data', 'service_account.json');
     if (fs.existsSync(keyPath)) {
-        console.log('Found Service Account key at:', keyPath);
         return new google.auth.GoogleAuth({
             keyFile: keyPath,
             scopes: SERVICE_ACCOUNT_SCOPES,
         });
     }
 
-    console.log('Service Account key NOT found at:', keyPath);
     return null;
-};
+}
 
 async function listSearchConsoleSites(authClient) {
     const searchconsole = google.searchconsole({ version: 'v1', auth: authClient });
@@ -603,32 +699,64 @@ function serializeConnectionStatus(connection) {
             scope: '',
             connectedAt: null,
             updatedAt: null,
+            googleConnectionId: '',
         };
     }
 
     return {
         connected: true,
-        ownerEmail: connection.ownerEmail,
+        ownerEmail: '',
         googleEmail: connection.googleEmail || '',
         displayName: connection.displayName || '',
         picture: connection.picture || '',
         scope: connection.scope || '',
         connectedAt: connection.connectedAt || null,
         updatedAt: connection.updatedAt || null,
+        googleConnectionId: String(connection._id || ''),
     };
 }
 
-async function getConnectionStatus(ownerEmail) {
-    const connection = await UserGoogleConnection.findOne({ ownerEmail: normalizeEmail(ownerEmail) }).lean();
+async function getConnectionStatus(options = {}) {
+    const workspaceId = String(options.workspaceId || '').trim();
+    const userId = String(options.userId || '').trim();
+    const email = normalizeEmail(options.email);
+
+    if (!workspaceId) {
+        return serializeConnectionStatus(null);
+    }
+
+    let connection = null;
+    if (userId) {
+        connection = await GoogleConnection.findOne({
+            workspaceId,
+            userId,
+            provider: USER_GOOGLE_PROVIDER,
+        }).sort({ updatedAt: -1 }).lean();
+    } else if (email) {
+        connection = await GoogleConnection.findOne({
+            workspaceId,
+            googleEmail: email,
+            provider: USER_GOOGLE_PROVIDER,
+        }).sort({ updatedAt: -1 }).lean();
+    }
+
     return serializeConnectionStatus(connection);
 }
 
 userRouter.get('/connection', async (req, res) => {
     try {
-        const status = await getConnectionStatus(req.user.email);
+        const status = await getConnectionStatus({
+            workspaceId: req.user.workspaceId,
+            userId: req.user.userId,
+            email: req.user.email,
+        });
         res.json(status);
     } catch (error) {
-        console.error('Failed to load Google connection status', error);
+        logger.error('auth.connection_status_failed', {
+            error: error instanceof Error ? error.message : String(error),
+            workspaceId: req.user.workspaceId,
+            userId: req.user.userId,
+        });
         res.status(500).json({ error: 'Failed to load Google connection status' });
     }
 });
@@ -643,6 +771,8 @@ userRouter.get('/connect', async (req, res) => {
         login_hint: req.user.email,
         scope: USER_SCOPES,
         state: buildUserOauthState({
+            userId: req.user.userId,
+            workspaceId: req.user.workspaceId,
             email: req.user.email,
             projectId,
             redirectPath,
@@ -654,15 +784,21 @@ userRouter.get('/connect', async (req, res) => {
 
 userRouter.get('/resources', async (req, res) => {
     try {
-        const authClient = await getUserAuthClient(req.user.email);
-        if (!authClient) {
-            return res.status(404).json({ error: 'Google account not connected' });
-        }
-
         const projectId = typeof req.query.projectId === 'string' ? req.query.projectId.trim() : '';
         const project = projectId ? await getProject(projectId, req.user) : null;
         if (projectId && !project) {
             return res.status(404).json({ error: 'Project not found' });
+        }
+
+        const authClient = project?.googleConnectionId
+            ? await getProjectAuthClient(project)
+            : await getUserAuthClient({
+                workspaceId: req.user.workspaceId,
+                userId: req.user.userId,
+                email: req.user.email,
+            });
+        if (!authClient) {
+            return res.status(404).json({ error: 'Google account not connected' });
         }
 
         const recommendationProject = buildProjectRecommendationContext({
@@ -676,7 +812,9 @@ userRouter.get('/resources', async (req, res) => {
         const [sites, properties, connectionStatus] = await Promise.all([
             listSearchConsoleSites(authClient),
             listGa4Properties(authClient),
-            getConnectionStatus(req.user.email),
+            getConnectionStatus(project?.googleConnectionId
+                ? { workspaceId: req.user.workspaceId, email: project.googleConnectionEmail }
+                : { workspaceId: req.user.workspaceId, userId: req.user.userId, email: req.user.email }),
         ]);
 
         return res.json({
@@ -689,7 +827,11 @@ userRouter.get('/resources', async (req, res) => {
             },
         });
     } catch (error) {
-        console.error('Failed to load Google resources', error);
+        logger.error('auth.resources_failed', {
+            error: error instanceof Error ? error.message : String(error),
+            workspaceId: req.user.workspaceId,
+            userId: req.user.userId,
+        });
         return res.status(500).json({ error: 'Failed to load Google resources' });
     }
 });
@@ -713,15 +855,20 @@ module.exports = {
     getServiceAccountAuth,
     initializeAuth,
     __internal: {
-        normalizeEmail,
-        normalizePath,
-        normalizeComparableSiteUrl,
-        normalizeComparisonText,
+        buildAdminOauthState,
+        buildProjectRecommendationContext,
+        buildUserOauthState,
+        parseAdminOauthState,
         collapseComparisonText,
         extractHostname,
-        buildProjectRecommendationContext,
+        normalizeComparableSiteUrl,
+        normalizeComparisonText,
+        normalizeEmail,
+        normalizePath,
+        parseUserOauthState,
         resolveProjectAuthSource,
-        suggestSearchConsoleSite,
+        serializeConnectionStatus,
         suggestGa4Property,
+        suggestSearchConsoleSite,
     },
 };

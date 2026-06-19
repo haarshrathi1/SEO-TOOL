@@ -11,18 +11,21 @@ const axios = require('axios');
 const { getAuthClient } = require('./auth');
 
 const PSI_API_BASE = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';
-const DEFAULT_TIMEOUT_MS = 60000;
-const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_TIMEOUT_MS = 30000;
+const DEFAULT_MAX_ATTEMPTS = 2;
 const RETRYABLE_STATUS_CODES = new Set([408, 409, 429, 500, 502, 503, 504]);
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function buildPsiEndpoint(url, strategy, categories) {
+function buildPsiEndpoint(url, strategy, categories, apiKey = '') {
     const params = new URLSearchParams();
     params.set('url', url);
     params.set('strategy', strategy);
+    if (apiKey) {
+        params.set('key', apiKey);
+    }
     (categories || []).forEach((category) => {
         params.append('category', category);
     });
@@ -68,7 +71,7 @@ function isRetriablePsiError(error) {
 }
 
 async function runPsiRequest(url, strategy, categories, token, requestOptions = {}) {
-    const endpoint = buildPsiEndpoint(url, strategy, categories);
+    const endpoint = buildPsiEndpoint(url, strategy, categories, requestOptions.apiKey);
     const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
     const response = await axios.get(endpoint, {
@@ -120,8 +123,9 @@ async function fetchPsiForStrategy(url, strategy, token, requestOptions = {}) {
     }
 }
 
-const getPSI = async (url) => {
-    const auth = getAuthClient();
+const getPSI = async (url, options = {}) => {
+    const auth = options.authClient || getAuthClient();
+    const apiKey = String(process.env.PAGESPEED_API_KEY || '').trim();
     // we can get the token and pass it as key or bearer
     // but PSI v5 supports access_token query param.
 
@@ -135,27 +139,47 @@ const getPSI = async (url) => {
         }
     }
 
-    const strategies = ['desktop', 'mobile'];
-    const results = {};
+    const strategies = ['mobile', 'desktop'];
 
-    for (const strategy of strategies) {
+    // Run both strategies in parallel — they are independent network calls and
+    // sequential execution was the dominant cost when PSI ran inline in the crawl.
+    const settled = await Promise.all(strategies.map(async (strategy) => {
         try {
-            results[strategy] = await fetchPsiForStrategy(url, strategy, token);
+            return [strategy, await fetchPsiForStrategy(url, strategy, token, { apiKey })];
         } catch (e) {
             const message = getErrorMessage(e);
             console.warn(`PSI Error for ${strategy}: ${message}`);
-            results[strategy] = {
-                error: message,
-                status: getErrorStatus(e),
-            };
+            return [strategy, { error: message, status: getErrorStatus(e) }];
         }
-    }
+    }));
 
-    return results;
+    return Object.fromEntries(settled);
 };
+
+// Collapse a raw PSI response (mobile/desktop) into the compact shape the UI consumes.
+function formatPsiSummary(rawPsi = {}) {
+    const pick = (strategy) => {
+        const audits = rawPsi?.[strategy]?.lighthouseResult?.audits || {};
+        const rawScore = rawPsi?.[strategy]?.lighthouseResult?.categories?.performance?.score;
+        return {
+            score: Math.round((Number(rawScore) || 0) * 100),
+            lcp: audits['largest-contentful-paint']?.displayValue,
+            cls: audits['cumulative-layout-shift']?.displayValue,
+            inp: audits['interaction-to-next-paint']?.displayValue,
+        };
+    };
+
+    const mobile = pick('mobile');
+    const desktop = pick('desktop');
+    return {
+        psi_score: mobile.score || desktop.score || 0,
+        psi_data: { mobile, desktop },
+    };
+}
 
 module.exports = {
     getPSI,
+    formatPsiSummary,
     __internal: {
         buildPsiEndpoint,
         getErrorStatus,

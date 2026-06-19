@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle, Info, Play, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Gauge, Info, Loader2, Play, XCircle } from 'lucide-react';
 import { getCanonicalBadges } from '../../canonicalAudit';
 import { getInternalLinkBadges } from '../../internalLinkRecommendations';
 import { getStructuredDataBadges } from '../../structuredDataAudit';
+import { getTechnicalIssues } from '../../technicalIssues';
 import { computeSeoScore, getSeoScoreBadgeClass, getSeoScoreBarClass } from '../../seoScore';
 import type { SeoScoreBreakdown } from '../../seoScore';
 import type { AuditResult } from '../../types';
@@ -11,6 +12,8 @@ import { getUrlPathLabel } from '../../url';
 interface TableProps {
     results: AuditResult[];
     onRequestIndexing?: ((url: string) => void) | null;
+    onCheckSpeed?: ((url: string) => void) | null;
+    speedPending?: Set<string>;
 }
 
 const SCORE_CATEGORIES: Array<{ key: keyof Omit<SeoScoreBreakdown, 'total' | 'label'>; label: string }> = [
@@ -22,6 +25,23 @@ const SCORE_CATEGORIES: Array<{ key: keyof Omit<SeoScoreBreakdown, 'total' | 'la
     { key: 'speed', label: 'Page Speed' },
     { key: 'indexation', label: 'Indexation' },
 ];
+
+function getPsiScoreCls(score: number) {
+    if (score >= 90) return 'bg-green-300 text-black';
+    if (score >= 50) return 'bg-amber-300 text-black';
+    return 'bg-red-500 text-white';
+}
+
+function PsiScoreBadge({ score, label }: { score?: number; label: string }) {
+    return (
+        <div className="inline-flex flex-col items-center gap-1">
+            <div className={`inline-flex h-8 w-8 items-center justify-center border-2 border-black font-mono text-sm font-black shadow-[2px_2px_0px_0px_#000] ${getPsiScoreCls(score ?? 0)}`}>
+                {score ?? '-'}
+            </div>
+            <span className="text-[8px] font-black uppercase text-slate-400">{label}</span>
+        </div>
+    );
+}
 
 function ScoreBreakdownPanel({ breakdown }: { breakdown: SeoScoreBreakdown }) {
     return (
@@ -55,13 +75,13 @@ function ScoreBreakdownPanel({ breakdown }: { breakdown: SeoScoreBreakdown }) {
     );
 }
 
-export default function AuditTable({ results, onRequestIndexing = null }: TableProps) {
+export default function AuditTable({ results, onRequestIndexing = null, onCheckSpeed = null, speedPending }: TableProps) {
     const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
     const scores = useMemo(() => results.map(computeSeoScore), [results]);
 
     const indexedCount = results.filter((r) => r.status === 'PASS').length;
-    const reviewCount = results.filter((r) => r.status !== 'PASS').length;
+    const reviewCount = results.filter((r) => getTechnicalIssues(r, results).length > 0).length;
     const viewsTrackedCount = results.filter((r) => typeof r.ga4_views === 'number').length;
     const totalTrackedViews = results.reduce((sum, r) => sum + (typeof r.ga4_views === 'number' ? r.ga4_views : 0), 0);
     const avgSeoScore = scores.length > 0
@@ -107,7 +127,7 @@ export default function AuditTable({ results, onRequestIndexing = null }: TableP
                     <div className="mt-1 text-2xl font-black text-black">{indexedCount}</div>
                 </div>
                 <div className="border border-black bg-red-50 px-3 py-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.1)]">
-                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Review Queue</div>
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Issue Pages</div>
                     <div className="mt-1 text-2xl font-black text-black">{reviewCount}</div>
                 </div>
                 <div className={`border border-black px-3 py-2 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.1)] ${avgSeoScore >= 80 ? 'bg-emerald-50' : avgSeoScore >= 60 ? 'bg-yellow-50' : avgSeoScore >= 40 ? 'bg-amber-50' : 'bg-red-50'}`}>
@@ -136,7 +156,7 @@ export default function AuditTable({ results, onRequestIndexing = null }: TableP
                             <th className="w-[20%] border-r-2 border-black px-6 py-4">Content Health</th>
                             <th className="w-[10%] border-r-2 border-black px-4 py-4 text-center">SEO Score</th>
                             <th className="w-[10%] border-r-2 border-black px-4 py-4 text-center">Links</th>
-                            <th className="w-[8%] border-r-2 border-black px-4 py-4 text-center">PSI</th>
+                            <th className="w-[12%] border-r-2 border-black px-4 py-4 text-center">Speed</th>
                             <th className="w-[7%] px-4 py-4 text-right">Views</th>
                         </tr>
                     </thead>
@@ -224,6 +244,9 @@ export default function AuditTable({ results, onRequestIndexing = null }: TableP
                                                 )}
                                             </div>
                                             <div className="mt-1 flex flex-wrap gap-1">
+                                                {getTechnicalIssues(result, results).slice(0, 2).map((issue) => (
+                                                    <span key={`${issue.id}-${issue.title}`} className={`inline-flex items-center gap-1 border border-black px-1.5 py-0.5 text-[9px] font-black uppercase ${getBadgeCls(issue.severity === 'critical' || issue.severity === 'high' ? 'critical' : issue.severity === 'medium' ? 'warning' : 'info')}`}>{issue.title}</span>
+                                                ))}
                                                 {getCanonicalBadges(result).slice(0, 2).map((b) => (
                                                     <span key={b.label} className={`inline-flex items-center gap-1 border border-black px-1.5 py-0.5 text-[9px] font-black uppercase ${getBadgeCls(b.tone)}`}>{b.label}</span>
                                                 ))}
@@ -271,12 +294,26 @@ export default function AuditTable({ results, onRequestIndexing = null }: TableP
                                         </div>
                                     </td>
 
-                                    {/* PSI */}
+                                    {/* Speed */}
                                     <td className="border-r-2 border-black px-4 py-4 text-center">
                                         {result.psi_data ? (
-                                            <div className={`inline-flex h-8 w-8 items-center justify-center border-2 border-black font-mono text-sm font-black shadow-[2px_2px_0px_0px_#000] ${(result.psi_data.desktop?.score || 0) >= 90 ? 'bg-green-300 text-black' : (result.psi_data.desktop?.score || 0) >= 50 ? 'bg-amber-300 text-black' : 'bg-red-500 text-white'}`}>
-                                                {result.psi_data.desktop?.score ?? '-'}
+                                            <div className="inline-flex items-center justify-center gap-2">
+                                                <PsiScoreBadge score={result.psi_data.mobile?.score} label="Mobile" />
+                                                <PsiScoreBadge score={result.psi_data.desktop?.score} label="Desktop" />
                                             </div>
+                                        ) : onCheckSpeed ? (
+                                            <button
+                                                onClick={() => onCheckSpeed(result.url)}
+                                                disabled={speedPending?.has(result.url)}
+                                                className="inline-flex items-center gap-1 border-2 border-black bg-white px-2 py-1 text-[9px] font-black uppercase text-black shadow-[2px_2px_0px_0px_#000] transition-colors hover:bg-black hover:text-white active:translate-x-[1px] active:translate-y-[1px] active:shadow-none disabled:cursor-wait disabled:opacity-60"
+                                                title="Run a PageSpeed Insights test for this URL"
+                                            >
+                                                {speedPending?.has(result.url) ? (
+                                                    <><Loader2 className="h-3 w-3 animate-spin" /> Testing</>
+                                                ) : (
+                                                    <><Gauge className="h-3 w-3" /> Check Speed</>
+                                                )}
+                                            </button>
                                         ) : (
                                             <span className="text-xs font-bold text-slate-400">—</span>
                                         )}

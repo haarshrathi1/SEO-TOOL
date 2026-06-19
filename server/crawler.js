@@ -3,11 +3,14 @@ const { getAuthClient } = require('./auth');
 const { URL } = require('url');
 const gsc = require('./gsc');
 const ga4 = require('./ga4');
-const psi = require('./psi');
 const { summarizeStructuredData } = require('./structuredData');
-const { fetchSitemapUrls } = require('./sitemaps');
+const { fetchSitemapUrls, fetchSitemapUrlsGscPrimary } = require('./sitemaps');
+const { LinkCheckCache } = require('./models');
+const { annotateTechnicalIssues } = require('./auditIssueDetector');
 
 const MAX_INTERNAL_LINK_TARGETS = 100;
+const MAX_UNIQUE_LINK_CHECKS_PER_RUN = 500;
+const LINK_CHECK_CACHE_TTL_MS = Math.max(15 * 60 * 1000, Number(process.env.LINK_CHECK_CACHE_TTL_MS || 6 * 60 * 60 * 1000));
 const CRAWL_BATCH_SIZE = Math.max(1, Number(process.env.CRAWL_BATCH_SIZE || 2));
 const CRAWL_NAVIGATION_TIMEOUT_MS = Math.max(10000, Number(process.env.CRAWL_NAVIGATION_TIMEOUT_MS || 45000));
 const CRAWL_CONTENT_WAIT_TIMEOUT_MS = Math.max(2000, Number(process.env.CRAWL_CONTENT_WAIT_TIMEOUT_MS || 6000));
@@ -227,7 +230,12 @@ function getCrawlOptions(options) {
         ga4PropertyId: typeof options?.ga4PropertyId === 'string' ? options.ga4PropertyId.trim() : '',
         gscSiteUrl: typeof options?.gscSiteUrl === 'string' ? options.gscSiteUrl.trim() : '',
         authClient: options?.authClient || null,
+        gscDeep: options?.gscDeep === true,
     };
+}
+
+function buildCacheExpiry(ttlMs) {
+    return new Date(Date.now() + ttlMs);
 }
 
 function isNavigationTimeoutError(error) {
@@ -242,6 +250,20 @@ async function waitForAuditContent(page, options = {}) {
 
     await page.waitForSelector('body', { timeout: bodyTimeout }).catch(() => {});
     await page.waitForSelector(CONTENT_READY_SELECTOR, { timeout: timeoutMs }).catch(() => {});
+
+    // Wait for JS frameworks (React/Next/Vue/Angular) to hydrate their mount point with
+    // real content before extraction. Static HTML / PHP pages satisfy this immediately.
+    // Best-effort and bounded — never block the crawl if a page never settles.
+    await page.waitForFunction(() => {
+        const roots = ['#root', '#app', '#__next', '[data-reactroot]', '[ng-version]', 'main', 'article', 'body'];
+        for (const selector of roots) {
+            const el = document.querySelector(selector);
+            if (el && el.childElementCount > 0 && (el.innerText || '').trim().length >= 20) {
+                return true;
+            }
+        }
+        return false;
+    }, { timeout: timeoutMs, polling: 250 }).catch(() => {});
 
     if (settleDelayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, settleDelayMs));
@@ -284,6 +306,7 @@ async function extractAuditPageSnapshot(page) {
     return page.evaluate(() => {
         const title = document.title;
         const description = document.querySelector('meta[name="description"]')?.content || '';
+        const metaContent = (selector) => document.querySelector(selector)?.content || '';
         const h1s = Array.from(document.querySelectorAll('h1')).map((el) => el.textContent?.trim() || '').filter(Boolean);
         const bodyText = document.body.innerText || '';
         const wordCount = bodyText.split(/\s+/).filter(Boolean).length;
@@ -300,6 +323,49 @@ async function extractAuditPageSnapshot(page) {
         const microdataTypes = Array.from(document.querySelectorAll('[itemscope][itemtype]'))
             .map((element) => element.getAttribute('itemtype') || '')
             .filter(Boolean);
+        const robotsMeta = [
+            document.querySelector('meta[name="robots"]')?.content || '',
+            document.querySelector('meta[name="googlebot"]')?.content || '',
+        ].filter(Boolean).join(', ');
+        const viewport = document.querySelector('meta[name="viewport"]')?.content || '';
+        const htmlLang = document.documentElement.getAttribute('lang') || '';
+        const hreflangs = Array.from(document.querySelectorAll('link[rel="alternate"][hreflang]'))
+            .map((element) => ({
+                hreflang: element.getAttribute('hreflang') || '',
+                href: element.getAttribute('href') ? new URL(element.getAttribute('href'), document.baseURI).href : '',
+            }))
+            .filter((entry) => entry.hreflang && entry.href);
+        const images = Array.from(document.querySelectorAll('img')).map((image) => ({
+            src: image.currentSrc || image.src || '',
+            alt: image.getAttribute('alt') || '',
+            hasAlt: image.hasAttribute('alt') && Boolean((image.getAttribute('alt') || '').trim()),
+            hasDimensions: Boolean(image.getAttribute('width') && image.getAttribute('height')),
+            loading: image.getAttribute('loading') || '',
+        })).filter((image) => image.src);
+        const socialMeta = {
+            ogTitle: metaContent('meta[property="og:title"]'),
+            ogDescription: metaContent('meta[property="og:description"]'),
+            ogImage: metaContent('meta[property="og:image"]'),
+            twitterCard: metaContent('meta[name="twitter:card"]'),
+            twitterTitle: metaContent('meta[name="twitter:title"]'),
+            twitterDescription: metaContent('meta[name="twitter:description"]'),
+            twitterImage: metaContent('meta[name="twitter:image"]'),
+        };
+        const appRootEmpty = (() => {
+            const mount = ['#root', '#app', '#__next', '[data-reactroot]', '[ng-version]']
+                .map((selector) => document.querySelector(selector))
+                .find(Boolean);
+            if (!mount) {
+                return false; // No SPA mount point — not an un-hydrated-shell concern.
+            }
+            return mount.childElementCount === 0 || (mount.innerText || '').trim().length < 20;
+        })();
+        const mixedContentUrls = location.protocol === 'https:'
+            ? Array.from(document.querySelectorAll('[src], [href]'))
+                .map((element) => element.getAttribute('src') || element.getAttribute('href') || '')
+                .filter((value) => /^http:\/\//i.test(value))
+                .slice(0, 20)
+            : [];
 
         return {
             title,
@@ -309,6 +375,14 @@ async function extractAuditPageSnapshot(page) {
             wordCount,
             links,
             canonicals,
+            robotsMeta,
+            viewport,
+            htmlLang,
+            hreflangs,
+            images,
+            socialMeta,
+            mixedContentUrls,
+            appRootEmpty,
             structuredData: { jsonLdBlocks, microdataTypes },
         };
     });
@@ -324,8 +398,9 @@ function shouldRetrySeoExtraction(snapshot = {}) {
     const description = typeof snapshot.description === 'string' ? snapshot.description.trim() : '';
     const hasNoSeoSignals = !title && !description && h1Count === 0 && canonicalCount === 0;
     const thinShellContent = wordCount > 0 && wordCount < 120 && h1Count === 0 && (canonicalCount === 0 || hasLoadingShellText);
+    const appRootEmpty = snapshot.appRootEmpty === true;
 
-    return hasLoadingShellText || hasNoSeoSignals || thinShellContent;
+    return hasLoadingShellText || hasNoSeoSignals || thinShellContent || appRootEmpty;
 }
 
 async function extractAuditPageData(page, options = {}) {
@@ -347,6 +422,13 @@ async function extractAuditPageData(page, options = {}) {
         wordCount: snapshot.wordCount,
         links: snapshot.links,
         canonicals: snapshot.canonicals,
+        robotsMeta: snapshot.robotsMeta,
+        viewport: snapshot.viewport,
+        htmlLang: snapshot.htmlLang,
+        hreflangs: snapshot.hreflangs,
+        images: snapshot.images,
+        socialMeta: snapshot.socialMeta,
+        mixedContentUrls: snapshot.mixedContentUrls,
         structuredData: snapshot.structuredData,
     };
 }
@@ -366,8 +448,37 @@ async function reportProgress(onProgress, payload) {
     });
 }
 
+async function getCachedLinkCheck(url) {
+    const cached = await LinkCheckCache.findOne({
+        url,
+        expiresAt: { $gt: new Date() },
+    }).lean();
+
+    if (!cached) {
+        return null;
+    }
+
+    return {
+        status: cached.status || 0,
+        result: cached.result || '',
+    };
+}
+
+async function setCachedLinkCheck(url, payload) {
+    await LinkCheckCache.findOneAndUpdate(
+        { url },
+        {
+            url,
+            status: payload.status || 0,
+            result: payload.result || '',
+            expiresAt: buildCacheExpiry(LINK_CHECK_CACHE_TTL_MS),
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+}
+
 const crawlSite = async (startUrl, options = {}) => {
-    const { maxPages, onProgress, ga4PropertyId, gscSiteUrl: selectedGscSiteUrl, authClient } = getCrawlOptions(options);
+    const { maxPages, onProgress, ga4PropertyId, gscSiteUrl: selectedGscSiteUrl, authClient, gscDeep } = getCrawlOptions(options);
     console.log('Starting GSC Index Audit + Live Crawl...');
     const auth = authClient || getAuthClient();
     if (!auth) {
@@ -382,10 +493,20 @@ const crawlSite = async (startUrl, options = {}) => {
         message: 'Loading sitemap URLs',
     });
 
-    let urlsToAudit = await fetchSitemapUrls(startUrl, { logger: console });
+    const sitemapOptions = {
+        logger: console,
+        authClient: auth,
+        gscSiteUrl: selectedGscSiteUrl || startUrl,
+    };
+    let urlsToAudit = gscDeep
+        ? await fetchSitemapUrlsGscPrimary(startUrl, sitemapOptions)
+        : await fetchSitemapUrls(startUrl, sitemapOptions);
     if (urlsToAudit.length > maxPages) {
         urlsToAudit = urlsToAudit.slice(0, maxPages);
     }
+    const checkedLinksThisRun = new Map();
+    const pendingLinkChecks = new Map();
+    let totalUniqueLinkChecks = 0;
 
     await reportProgress(onProgress, {
         stage: 'Preparing crawl',
@@ -483,10 +604,18 @@ const crawlSite = async (startUrl, options = {}) => {
                         wordCount: 0,
                         links: [],
                         canonicals: [],
+                        robotsMeta: '',
+                        viewport: '',
+                        htmlLang: '',
+                        hreflangs: [],
+                        images: [],
+                        socialMeta: {},
+                        mixedContentUrls: [],
                         structuredData: { jsonLdBlocks: [], microdataTypes: [] },
                         finalUrl: url,
                         httpStatus: 0,
                         redirectCount: 0,
+                        crawlError: '',
                     };
                     let page = null;
                     try {
@@ -497,7 +626,9 @@ const crawlSite = async (startUrl, options = {}) => {
                         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
                         await page.setRequestInterception(true);
                         page.on('request', (req) => {
-                            if (['image', 'stylesheet', 'font'].includes(req.resourceType())) req.abort();
+                            // Keep stylesheets: some frameworks gate content visibility on CSS,
+                            // and we need the final rendered layout for accurate extraction.
+                            if (['image', 'font', 'media'].includes(req.resourceType())) req.abort();
                             else req.continue();
                         });
 
@@ -513,6 +644,7 @@ const crawlSite = async (startUrl, options = {}) => {
                         };
                     } catch (err) {
                         console.error(`Crawl failed for ${url}:`, err.message);
+                        pageData.crawlError = err.message || 'Crawl failed';
                     } finally {
                         if (page) await page.close();
                     }
@@ -536,6 +668,7 @@ const crawlSite = async (startUrl, options = {}) => {
                 const ga4Views = pageViewsByPath[trafficPathKey] || 0;
 
                 const contentBlocked = (() => {
+                    if (pageData.crawlError) return pageData.crawlError;
                     if (pageData.httpStatus && pageData.httpStatus >= 400) return 'HTTP error';
                     if ((pageData.wordCount || 0) < 20 && !pageData.title && !pageData.description) return 'Empty body';
                     return '';
@@ -544,14 +677,53 @@ const crawlSite = async (startUrl, options = {}) => {
                 const brokenLinks = [];
                 const linkCheckTargets = [...internalLinks, ...externalLinks].slice(0, 40);
                 for (const link of linkCheckTargets) {
-                    try {
-                        const res = await fetch(link, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(8000) });
-                        const status = res.status || 0;
-                        if (status >= 400) {
-                            brokenLinks.push(`${link} (${status})`);
+                    if (checkedLinksThisRun.has(link)) {
+                        const cachedResult = checkedLinksThisRun.get(link);
+                        if (cachedResult?.status >= 400 || cachedResult?.result === 'fetch-error') {
+                            brokenLinks.push(`${link} (${cachedResult.result === 'fetch-error' ? 'fetch-error' : cachedResult.status})`);
                         }
-                    } catch (err) {
-                        brokenLinks.push(`${link} (fetch-error)`);
+                        continue;
+                    }
+
+                    const cachedLink = await getCachedLinkCheck(link);
+                    if (cachedLink) {
+                        checkedLinksThisRun.set(link, cachedLink);
+                        if (cachedLink.status >= 400 || cachedLink.result === 'fetch-error') {
+                            brokenLinks.push(`${link} (${cachedLink.result === 'fetch-error' ? 'fetch-error' : cachedLink.status})`);
+                        }
+                        continue;
+                    }
+
+                    if (totalUniqueLinkChecks >= MAX_UNIQUE_LINK_CHECKS_PER_RUN) {
+                        continue;
+                    }
+
+                    let linkPromise = pendingLinkChecks.get(link);
+                    if (!linkPromise) {
+                        totalUniqueLinkChecks += 1;
+                        linkPromise = (async () => {
+                            try {
+                                const res = await fetch(link, { method: 'HEAD', redirect: 'manual', signal: AbortSignal.timeout(8000) });
+                                const payload = {
+                                    status: res.status || 0,
+                                    result: String(res.status || 0),
+                                };
+                                await setCachedLinkCheck(link, payload);
+                                return payload;
+                            } catch (error) {
+                                const payload = { status: 0, result: 'fetch-error' };
+                                await setCachedLinkCheck(link, payload);
+                                return payload;
+                            }
+                        })();
+                        pendingLinkChecks.set(link, linkPromise);
+                    }
+
+                    const checked = await linkPromise;
+                    checkedLinksThisRun.set(link, checked);
+                    pendingLinkChecks.delete(link);
+                    if (checked.status >= 400 || checked.result === 'fetch-error') {
+                        brokenLinks.push(`${link} (${checked.result === 'fetch-error' ? 'fetch-error' : checked.status})`);
                     }
                 }
 
@@ -572,8 +744,16 @@ const crawlSite = async (startUrl, options = {}) => {
                         canonicalUrl: pageData.canonicals?.[0] || '',
                         canonicalCount: pageData.canonicals?.length || 0,
                         canonicalIssues: [],
+                        robotsMeta: pageData.robotsMeta || '',
+                        viewport: pageData.viewport || '',
+                        htmlLang: pageData.htmlLang || '',
+                        hreflangs: pageData.hreflangs || [],
+                        images: pageData.images || [],
+                        socialMeta: pageData.socialMeta || {},
+                        mixedContentUrls: pageData.mixedContentUrls || [],
                         structuredData,
                         h1Count: pageData.h1s?.length || 0,
+                        h1Text: pageData.h1s?.[0] || '',
                         wordCount: pageData.wordCount || 0,
                         internalLinksOut: internalLinks.length,
                         externalLinksOut: externalLinks.length,
@@ -598,30 +778,6 @@ const crawlSite = async (startUrl, options = {}) => {
                         finalCoverage = 'Indexed (Dormant)';
                     }
 
-                    let psiData = null;
-                    try {
-                        console.log(`Running PSI for ${url}...`);
-                        const rawPsi = await psi.getPSI(url);
-                        const mobileScore = (rawPsi.mobile?.lighthouseResult?.categories?.performance?.score * 100) || 0;
-                        const desktopScore = (rawPsi.desktop?.lighthouseResult?.categories?.performance?.score * 100) || 0;
-                        psiData = {
-                            mobile: {
-                                score: Math.round(mobileScore),
-                                lcp: rawPsi.mobile?.lighthouseResult?.audits?.['largest-contentful-paint']?.displayValue,
-                                cls: rawPsi.mobile?.lighthouseResult?.audits?.['cumulative-layout-shift']?.displayValue,
-                                inp: rawPsi.mobile?.lighthouseResult?.audits?.['interaction-to-next-paint']?.displayValue,
-                            },
-                            desktop: {
-                                score: Math.round(desktopScore),
-                                lcp: rawPsi.desktop?.lighthouseResult?.audits?.['largest-contentful-paint']?.displayValue,
-                                cls: rawPsi.desktop?.lighthouseResult?.audits?.['cumulative-layout-shift']?.displayValue,
-                                inp: rawPsi.desktop?.lighthouseResult?.audits?.['interaction-to-next-paint']?.displayValue,
-                            },
-                        };
-                    } catch {
-                        psiData = null;
-                    }
-
                     results.push({
                         url,
                         finalUrl: pageData.finalUrl || url,
@@ -634,15 +790,21 @@ const crawlSite = async (startUrl, options = {}) => {
                         lastCrawlTime: indexStatus.lastCrawlTime ? new Date(indexStatus.lastCrawlTime).toLocaleString() : 'Never',
                         robotStatus,
                         ga4_views: ga4Views,
-                        psi_score: psiData?.mobile?.score || 0,
-                        psi_data: psiData,
                         title: pageData.title,
                         description: pageData.description,
                         canonicalUrl: pageData.canonicals?.[0] || '',
                         canonicalCount: pageData.canonicals?.length || 0,
                         canonicalIssues: [],
+                        robotsMeta: pageData.robotsMeta || '',
+                        viewport: pageData.viewport || '',
+                        htmlLang: pageData.htmlLang || '',
+                        hreflangs: pageData.hreflangs || [],
+                        images: pageData.images || [],
+                        socialMeta: pageData.socialMeta || {},
+                        mixedContentUrls: pageData.mixedContentUrls || [],
                         structuredData,
                         h1Count: pageData.h1s.length,
+                        h1Text: pageData.h1s?.[0] || '',
                         wordCount: pageData.wordCount,
                         internalLinksOut: internalLinks.length,
                         externalLinksOut: externalLinks.length,
@@ -694,8 +856,16 @@ const crawlSite = async (startUrl, options = {}) => {
         });
 
         annotateCanonicalSignals(results);
+        annotateTechnicalIssues(results);
     } finally {
-        await browser.close();
+        // On Windows, Chrome can still hold a lock on its temp profile when close() tries
+        // to unlink it (EBUSY on first_party_sets.db). Don't let cleanup fail an audit whose
+        // results are already computed.
+        try {
+            await browser.close();
+        } catch (closeError) {
+            console.warn('Browser close failed during cleanup:', closeError.message);
+        }
     }
 
     results.sort((a, b) => a.url.localeCompare(b.url));

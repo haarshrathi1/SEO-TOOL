@@ -14,7 +14,15 @@ test('buildProjectPayload normalizes urls, domains, and crawl caps', async () =>
     assert.equal(payload.id, 'new-project');
     assert.equal(payload.url, 'https://example.com/');
     assert.equal(payload.domain, 'example.com');
-    assert.equal(payload.auditMaxPages, 500);
+    assert.equal(payload.auditMaxPages, 999);
+
+    const capped = await __internal.buildProjectPayload({
+        id: 'Capped Project',
+        name: 'Capped Project',
+        url: 'example.com',
+        auditMaxPages: 5000,
+    });
+    assert.equal(capped.auditMaxPages, 2000);
 });
 
 test('buildProjectPayload rejects non-http and private project URLs', async () => {
@@ -90,4 +98,20 @@ test('buildGetProjectQuery allows a viewer to request an assigned project', () =
 test('normalizeSearchConsoleSiteUrl accepts domain properties', async () => {
     const property = await __internal.normalizeSearchConsoleSiteUrl('sc-domain:Example.com', 'https://example.com/');
     assert.equal(property, 'sc-domain:example.com');
+});
+
+test('duplicate project id helper returns a user-facing message', () => {
+    assert.equal(
+        __internal.getDuplicateProjectMessage('fleetflow'),
+        'Project ID "fleetflow" already exists. Use a different Project ID, or edit the existing project instead.'
+    );
+    assert.equal(
+        __internal.isDuplicateProjectIdError({
+            code: 11000,
+            keyPattern: { id: 1 },
+            keyValue: { id: 'fleetflow' },
+            message: 'E11000 duplicate key error collection: test.projects index: id_1 dup key',
+        }),
+        true
+    );
 });

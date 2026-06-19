@@ -1,7 +1,6 @@
-﻿require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const mongoose = require('mongoose');
+const { config } = require('./config');
 
-const MONGODB_URI = process.env.MONGODB_URI;
 let connectPromise = null;
 
 const RETRIABLE_MONGO_ERROR_CODES = new Set([
@@ -59,12 +58,12 @@ async function connectMongo() {
         return mongoose.connection;
     }
 
-    if (!MONGODB_URI) {
+    if (!config.mongoUri) {
         throw new Error('MONGODB_URI is missing. Add it to server/.env');
     }
 
     if (!connectPromise) {
-        connectPromise = mongoose.connect(MONGODB_URI, {
+        connectPromise = mongoose.connect(config.mongoUri, {
             serverSelectionTimeoutMS: 10000,
         }).then(() => {
             console.log('[MongoDB] Connected');
@@ -86,4 +85,3 @@ module.exports = {
         isRetriableMongoError,
     },
 };
-

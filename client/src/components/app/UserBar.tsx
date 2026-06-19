@@ -24,7 +24,7 @@ export default function UserBar({
     const initials = (user.name || user.email).slice(0, 2).toUpperCase();
 
     return (
-        <div className="sticky top-0 z-[70] border-b-2 border-black bg-white">
+        <div data-print-hidden className="sticky top-0 z-[70] border-b-2 border-black bg-white">
             <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-3">
                 {/* Brand */}
                 <div className="flex items-center">

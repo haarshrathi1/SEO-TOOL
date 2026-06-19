@@ -2,39 +2,13 @@ const {
     AnalysisHistory,
     AuditHistory,
     AuditJob,
+    GoogleConnection,
     KeywordJob,
     KeywordResearch,
     Project,
-    Viewer,
 } = require('./models');
 const { assertPublicHttpUrl, isPrivateHostname } = require('./networkSafety');
-
-const SELF_SERVICE_ACCESS = ['keywords', 'dashboard', 'audit'];
-
-const DEFAULT_PROJECTS = [
-    {
-        id: 'laserlift',
-        name: 'Laserlift Solutions',
-        domain: 'laserliftsolutions.com',
-        url: 'https://laserliftsolutions.com/',
-        ga4PropertyId: '503587971',
-        spreadsheetId: '1VpSfz6pVmGbgltxcs4UNmDEhHfo0Vh4kMDwtFUaOaWM',
-        sheetGid: 0,
-        auditMaxPages: 200,
-        isActive: true,
-    },
-    {
-        id: 'fleetflow',
-        name: 'FleetFlow',
-        domain: 'fleetflow.hyvikk.com',
-        url: 'https://fleetflow.hyvikk.com/',
-        ga4PropertyId: '518947686',
-        spreadsheetId: '1VpSfz6pVmGbgltxcs4UNmDEhHfo0Vh4kMDwtFUaOaWM',
-        sheetGid: 1772579534,
-        auditMaxPages: 200,
-        isActive: true,
-    },
-];
+const { recordAuditEvent } = require('./auditEvents');
 
 function normalizeText(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -46,6 +20,22 @@ function hasOwn(input, key) {
 
 function normalizeOwnerEmail(value) {
     return normalizeText(value).toLowerCase();
+}
+
+function normalizeWorkspaceId(value) {
+    if (!value) {
+        return null;
+    }
+
+    if (typeof value === 'string') {
+        return value.trim() || null;
+    }
+
+    if (typeof value.toString === 'function') {
+        return value.toString();
+    }
+
+    return null;
 }
 
 function extractHostname(value) {
@@ -109,9 +99,28 @@ function slugifyId(value) {
     return slug || `project-${Date.now()}`;
 }
 
+function isDuplicateProjectIdError(error) {
+    return Boolean(
+        error
+        && (error.code === 11000 || /E11000|duplicate key/i.test(error.message || ''))
+        && (
+            error.keyPattern?.id
+            || error.keyValue?.id
+            || /projects.*id/i.test(error.message || '')
+        )
+    );
+}
+
+function getDuplicateProjectMessage(projectId) {
+    const suffix = projectId ? ` "${projectId}"` : '';
+    return `Project ID${suffix} already exists. Use a different Project ID, or edit the existing project instead.`;
+}
+
 function toProjectDto(record) {
     return {
         id: record.id,
+        workspaceId: normalizeWorkspaceId(record.workspaceId),
+        googleConnectionId: normalizeWorkspaceId(record.googleConnectionId),
         name: record.name,
         domain: record.domain,
         url: record.url,
@@ -128,52 +137,25 @@ function toProjectDto(record) {
     };
 }
 
-async function buildProjectPayload(input, existing = null, options = {}) {
-    const url = await normalizeUrl(input.url || existing?.url || '');
-    if (!url) {
-        throw new Error('Project URL is required');
+function canManageWorkspaceProjects(user) {
+    if (!user) {
+        return false;
     }
 
-    const name = normalizeText(input.name || existing?.name || '');
-    if (!name) {
-        throw new Error('Project name is required');
+    const effectiveRole = user.workspaceRole || user.role;
+    return effectiveRole !== 'viewer';
+}
+
+function canManageProjectRecord(record, user) {
+    if (!record || !user) {
+        return false;
     }
 
-    const domain = normalizeDomain(input.domain, url);
-    const auditMaxPages = Number(input.auditMaxPages ?? existing?.auditMaxPages ?? 200);
-    const ownerEmail = normalizeOwnerEmail(
-        options.ownerEmail !== undefined
-            ? options.ownerEmail
-            : hasOwn(input, 'ownerEmail')
-                ? input.ownerEmail
-                : existing?.ownerEmail || ''
-    );
-    const googleConnectionEmail = normalizeOwnerEmail(
-        options.googleConnectionEmail !== undefined
-            ? options.googleConnectionEmail
-            : hasOwn(input, 'googleConnectionEmail')
-                ? input.googleConnectionEmail
-                : existing?.googleConnectionEmail || ownerEmail
-    );
-    const gscSiteUrl = await normalizeSearchConsoleSiteUrl(
-        hasOwn(input, 'gscSiteUrl') ? input.gscSiteUrl : existing?.gscSiteUrl || url,
-        url
-    );
+    if (!canManageWorkspaceProjects(user)) {
+        return false;
+    }
 
-    return {
-        id: existing?.id || slugifyId(input.id || name),
-        name,
-        domain,
-        url,
-        ownerEmail,
-        googleConnectionEmail,
-        gscSiteUrl,
-        ga4PropertyId: normalizeText(input.ga4PropertyId || existing?.ga4PropertyId || ''),
-        spreadsheetId: normalizeText(input.spreadsheetId || existing?.spreadsheetId || ''),
-        sheetGid: Number.isFinite(Number(input.sheetGid)) ? Number(input.sheetGid) : Number(existing?.sheetGid || 0),
-        auditMaxPages: Number.isFinite(auditMaxPages) && auditMaxPages > 0 ? Math.min(auditMaxPages, 500) : 200,
-        isActive: typeof input.isActive === 'boolean' ? input.isActive : existing?.isActive !== false,
-    };
+    return normalizeWorkspaceId(record.workspaceId) === normalizeWorkspaceId(user.workspaceId);
 }
 
 function buildViewerScope(user) {
@@ -191,80 +173,177 @@ function buildViewerScope(user) {
         scope.push({ ownerEmail });
     }
 
-    return scope.length > 0 ? { $or: scope } : null;
+    if (!scope.length) {
+        return null;
+    }
+
+    return scope.length === 1 ? scope[0] : { $or: scope };
 }
 
 function buildListProjectsQuery(user, options = {}) {
-    const includeInactive = options.includeInactive === true && user?.role === 'admin';
-    const query = includeInactive ? {} : { isActive: true };
-
-    if (user?.role === 'viewer') {
-        const scope = buildViewerScope(user);
-        if (!scope) {
-            return null;
-        }
-        query.$or = scope.$or;
-    }
-
-    return query;
-}
-
-function buildGetProjectQuery(id, user) {
+    const workspaceId = normalizeWorkspaceId(user?.workspaceId);
+    const includeInactive = options.includeInactive === true && canManageWorkspaceProjects(user);
     const query = {};
 
-    if (id) {
-        query.id = id;
-    } else {
+    if (workspaceId) {
+        query.workspaceId = workspaceId;
+    }
+
+    if (!includeInactive) {
         query.isActive = true;
     }
 
-    if (user?.role === 'viewer') {
+    const effectiveRole = user?.workspaceRole || user?.role;
+    if (effectiveRole === 'viewer') {
         const scope = buildViewerScope(user);
         if (!scope) {
             return null;
         }
-        query.$or = scope.$or;
+
+        if (scope.$or) {
+            query.$or = scope.$or;
+        } else if (scope.id) {
+            query.id = scope.id;
+        } else if (scope.ownerEmail) {
+            query.ownerEmail = scope.ownerEmail;
+        }
     }
 
     return query;
 }
 
-function canManageProjectRecord(record, user) {
-    if (!record || !user) {
-        return false;
+function buildGetProjectQuery(id, user, options = {}) {
+    const query = {};
+    const workspaceId = normalizeWorkspaceId(options.workspaceId || user?.workspaceId);
+
+    if (id) {
+        query.id = id;
     }
 
-    if (user.role === 'admin') {
-        return true;
+    if (workspaceId) {
+        query.workspaceId = workspaceId;
     }
 
-    return normalizeOwnerEmail(record.ownerEmail) === normalizeOwnerEmail(user.email);
+    const effectiveRole = user?.workspaceRole || user?.role;
+    if (effectiveRole === 'viewer') {
+        const scope = buildViewerScope(user);
+        if (!scope) {
+            return null;
+        }
+
+        if (scope.$or) {
+            query.$or = scope.$or;
+        } else if (scope.id) {
+            if (!scope.id.$in.includes(id)) {
+                return null;
+            }
+            query.id = id;
+        } else if (scope.ownerEmail) {
+            query.ownerEmail = scope.ownerEmail;
+        }
+    }
+
+    return Object.keys(query).length > 0 ? query : null;
 }
 
-async function syncViewerProjectAccess(ownerEmail, projectId, options = {}) {
-    const normalizedOwnerEmail = normalizeOwnerEmail(ownerEmail);
-    if (!normalizedOwnerEmail || !projectId) {
-        return;
+async function resolveGoogleConnection(input, existing = null, options = {}) {
+    const workspaceId = normalizeWorkspaceId(options.workspaceId || existing?.workspaceId);
+    if (!workspaceId) {
+        return { googleConnectionId: null, googleConnectionEmail: '' };
     }
 
-    const addToSet = { projectIds: projectId };
-    if (options.grantSelfServiceAccess) {
-        addToSet.access = { $each: SELF_SERVICE_ACCESS };
-    }
-
-    await Viewer.findOneAndUpdate(
-        { email: normalizedOwnerEmail },
-        { $addToSet: addToSet }
+    const requestedConnectionId = normalizeWorkspaceId(
+        hasOwn(input, 'googleConnectionId') ? input.googleConnectionId : existing?.googleConnectionId || null
     );
+    const requestedEmail = normalizeOwnerEmail(
+        hasOwn(input, 'googleConnectionEmail') ? input.googleConnectionEmail : existing?.googleConnectionEmail || ''
+    );
+
+    if (requestedConnectionId) {
+        const connection = await GoogleConnection.findOne({
+            _id: requestedConnectionId,
+            workspaceId,
+        }).lean();
+
+        if (!connection) {
+            throw new Error('Selected Google connection was not found in this workspace');
+        }
+
+        return {
+            googleConnectionId: String(connection._id),
+            googleConnectionEmail: connection.googleEmail || '',
+        };
+    }
+
+    if (requestedEmail) {
+        const connection = await GoogleConnection.findOne({
+            workspaceId,
+            googleEmail: requestedEmail,
+        }).sort({ updatedAt: -1 }).lean();
+
+        if (!connection) {
+            throw new Error('Selected Google connection was not found in this workspace');
+        }
+
+        return {
+            googleConnectionId: String(connection._id),
+            googleConnectionEmail: connection.googleEmail || requestedEmail,
+        };
+    }
+
+    return {
+        googleConnectionId: null,
+        googleConnectionEmail: '',
+    };
+}
+
+async function buildProjectPayload(input, existing = null, options = {}) {
+    const url = await normalizeUrl(input.url || existing?.url || '');
+    if (!url) {
+        throw new Error('Project URL is required');
+    }
+
+    const name = normalizeText(input.name || existing?.name || '');
+    if (!name) {
+        throw new Error('Project name is required');
+    }
+
+    const workspaceId = normalizeWorkspaceId(options.workspaceId || existing?.workspaceId || options.user?.workspaceId);
+    const domain = normalizeDomain(input.domain, url);
+    const auditMaxPages = Number(input.auditMaxPages ?? existing?.auditMaxPages ?? 200);
+    const ownerEmail = normalizeOwnerEmail(
+        options.ownerEmail !== undefined
+            ? options.ownerEmail
+            : hasOwn(input, 'ownerEmail')
+                ? input.ownerEmail
+                : existing?.ownerEmail || options.user?.email || ''
+    );
+    const gscSiteUrl = await normalizeSearchConsoleSiteUrl(
+        hasOwn(input, 'gscSiteUrl') ? input.gscSiteUrl : existing?.gscSiteUrl || url,
+        url
+    );
+    const googleConnection = await resolveGoogleConnection(input, existing, { workspaceId });
+
+    return {
+        id: existing?.id || slugifyId(input.id || name),
+        workspaceId,
+        googleConnectionId: googleConnection.googleConnectionId,
+        name,
+        domain,
+        url,
+        ownerEmail,
+        googleConnectionEmail: googleConnection.googleConnectionEmail,
+        gscSiteUrl,
+        ga4PropertyId: normalizeText(input.ga4PropertyId || existing?.ga4PropertyId || ''),
+        spreadsheetId: normalizeText(input.spreadsheetId || existing?.spreadsheetId || ''),
+        sheetGid: Number.isFinite(Number(input.sheetGid)) ? Number(input.sheetGid) : Number(existing?.sheetGid || 0),
+        auditMaxPages: Number.isFinite(auditMaxPages) && auditMaxPages > 0 ? Math.min(auditMaxPages, 2000) : 200,
+        isActive: typeof input.isActive === 'boolean' ? input.isActive : existing?.isActive !== false,
+    };
 }
 
 async function initializeProjects() {
-    const count = await Project.countDocuments({});
-    if (count > 0) {
-        return;
-    }
-
-    await Project.insertMany(DEFAULT_PROJECTS, { ordered: false });
+    return null;
 }
 
 async function listProjects(user, options = {}) {
@@ -277,8 +356,8 @@ async function listProjects(user, options = {}) {
     return records.map(toProjectDto);
 }
 
-async function getProject(id, user) {
-    const query = buildGetProjectQuery(id, user);
+async function getProject(id, user = null, options = {}) {
+    const query = buildGetProjectQuery(id, user, options);
     if (!query) {
         return null;
     }
@@ -288,96 +367,131 @@ async function getProject(id, user) {
 }
 
 async function createProject(input, user) {
-    const ownerEmail = user?.role === 'admin'
-        ? normalizeOwnerEmail(input.ownerEmail || '')
-        : normalizeOwnerEmail(user?.email || '');
-    const googleConnectionEmail = user?.role === 'admin'
-        ? (hasOwn(input, 'googleConnectionEmail') ? input.googleConnectionEmail : ownerEmail)
-        : normalizeOwnerEmail(user?.email || '');
+    if (!canManageWorkspaceProjects(user)) {
+        throw new Error('Project access denied');
+    }
+
     const payload = await buildProjectPayload(input, null, {
-        ownerEmail,
-        googleConnectionEmail,
+        workspaceId: user.workspaceId,
+        ownerEmail: user.email,
+        user,
     });
     const existing = await Project.findOne({ id: payload.id }).lean();
     if (existing) {
-        throw new Error('Project ID already exists');
+        throw new Error(getDuplicateProjectMessage(payload.id));
     }
 
-    const doc = await Project.create(payload);
-    if (payload.ownerEmail) {
-        await syncViewerProjectAccess(payload.ownerEmail, payload.id, {
-            grantSelfServiceAccess: user?.role !== 'admin',
-        });
+    let doc;
+    try {
+        doc = await Project.create(payload);
+    } catch (error) {
+        if (isDuplicateProjectIdError(error)) {
+            throw new Error(getDuplicateProjectMessage(payload.id));
+        }
+        throw error;
     }
+    await recordAuditEvent({
+        workspaceId: user.workspaceId,
+        userId: user.userId,
+        action: 'project.created',
+        entityType: 'project',
+        entityId: payload.id,
+        metadata: { url: payload.url },
+    });
     return toProjectDto(doc.toObject());
 }
 
 async function updateProject(id, input, user) {
-    const existing = await Project.findOne({ id });
+    const existing = await Project.findOne({
+        workspaceId: user.workspaceId,
+        id,
+    });
     if (!existing) {
         throw new Error('Project not found');
     }
 
-    if (user && !canManageProjectRecord(existing.toObject(), user)) {
+    if (!canManageProjectRecord(existing.toObject(), user)) {
         throw new Error('Project access denied');
     }
 
     const payload = await buildProjectPayload(input, existing.toObject(), {
-        ownerEmail: user?.role === 'admin'
-            ? (hasOwn(input, 'ownerEmail') ? input.ownerEmail : existing.ownerEmail)
-            : existing.ownerEmail || user?.email || '',
-        googleConnectionEmail: user?.role === 'admin'
-            ? (hasOwn(input, 'googleConnectionEmail') ? input.googleConnectionEmail : existing.googleConnectionEmail || existing.ownerEmail)
-            : (hasOwn(input, 'googleConnectionEmail') ? input.googleConnectionEmail : existing.googleConnectionEmail || existing.ownerEmail || user?.email || ''),
+        workspaceId: user.workspaceId,
+        ownerEmail: existing.ownerEmail || user.email,
+        user,
     });
     payload.id = existing.id;
 
     existing.set(payload);
-    await existing.save();
-    if (payload.ownerEmail) {
-        await syncViewerProjectAccess(payload.ownerEmail, payload.id, {
-            grantSelfServiceAccess: user?.role !== 'admin',
-        });
+    try {
+        await existing.save();
+    } catch (error) {
+        if (isDuplicateProjectIdError(error)) {
+            throw new Error(getDuplicateProjectMessage(existing.id));
+        }
+        throw error;
     }
+
+    await recordAuditEvent({
+        workspaceId: user.workspaceId,
+        userId: user.userId,
+        action: 'project.updated',
+        entityType: 'project',
+        entityId: existing.id,
+        metadata: { url: existing.url },
+    });
+
     return toProjectDto(existing.toObject());
 }
 
 async function archiveProject(id, user) {
-    const existing = await Project.findOne({ id });
+    const existing = await Project.findOne({
+        workspaceId: user.workspaceId,
+        id,
+    });
     if (!existing) {
         throw new Error('Project not found');
     }
 
-    if (user && !canManageProjectRecord(existing.toObject(), user)) {
+    if (!canManageProjectRecord(existing.toObject(), user)) {
         throw new Error('Project access denied');
     }
 
     existing.set({ isActive: false });
     await existing.save();
-
     return toProjectDto(existing.toObject());
 }
 
 async function deleteProject(id, user) {
-    const existing = await Project.findOne({ id });
+    const existing = await Project.findOne({
+        workspaceId: user.workspaceId,
+        id,
+    });
     if (!existing) {
         throw new Error('Project not found');
     }
 
     const record = existing.toObject();
-    if (user && !canManageProjectRecord(record, user)) {
+    if (!canManageProjectRecord(record, user)) {
         throw new Error('Project access denied');
     }
 
     await Promise.all([
-        Project.deleteOne({ id }),
-        Viewer.updateMany({ projectIds: id }, { $pull: { projectIds: id } }),
-        AnalysisHistory.deleteMany({ projectId: id }),
-        AuditHistory.deleteMany({ projectId: id }),
-        AuditJob.deleteMany({ projectId: id }),
-        KeywordJob.deleteMany({ projectId: id }),
-        KeywordResearch.deleteMany({ projectId: id }),
+        Project.deleteOne({ workspaceId: user.workspaceId, id }),
+        AnalysisHistory.deleteMany({ workspaceId: user.workspaceId, projectId: id }),
+        AuditHistory.deleteMany({ workspaceId: user.workspaceId, projectId: id }),
+        AuditJob.deleteMany({ workspaceId: user.workspaceId, projectId: id }),
+        KeywordJob.deleteMany({ workspaceId: user.workspaceId, projectId: id }),
+        KeywordResearch.deleteMany({ workspaceId: user.workspaceId, projectId: id }),
     ]);
+
+    await recordAuditEvent({
+        workspaceId: user.workspaceId,
+        userId: user.userId,
+        action: 'project.deleted',
+        entityType: 'project',
+        entityId: id,
+        metadata: { url: record.url },
+    });
 
     return toProjectDto(record);
 }
@@ -391,18 +505,21 @@ module.exports = {
     archiveProject,
     deleteProject,
     __internal: {
-        normalizeUrl,
+        buildGetProjectQuery,
+        buildListProjectsQuery,
+        buildProjectPayload,
+        buildViewerScope,
+        canManageProjectRecord,
+        canManageWorkspaceProjects,
+        getDuplicateProjectMessage,
+        isDuplicateProjectIdError,
+        isPrivateHostname,
         normalizeDomain,
         normalizeOwnerEmail,
         normalizeSearchConsoleSiteUrl,
+        normalizeUrl,
+        resolveGoogleConnection,
         slugifyId,
-        buildProjectPayload,
-        buildListProjectsQuery,
-        buildGetProjectQuery,
-        buildViewerScope,
-        canManageProjectRecord,
         toProjectDto,
-        isPrivateHostname,
     },
 };
-

@@ -10,3 +10,21 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20
+      - key: PROCESS_ROLE
+        value: web
+      - key: QUEUE_MODE
+        value: bullmq
+  - type: worker
+    name: seo-tool-worker
+    runtime: node
+    rootDir: server
+    buildCommand: npm ci
+    startCommand: npm run start:worker
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: PROCESS_ROLE
+        value: worker
+      - key: QUEUE_MODE
+        value: bullmq

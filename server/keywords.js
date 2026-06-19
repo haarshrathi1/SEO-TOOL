@@ -1,10 +1,6 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 
-const {
-    runKeywordResearchV2,
-    runLegacyKeywordResearch,
-} = require('./keywordResearchService');
 const { persistKeywordResearchResult } = require('./keywordResearchPersistence');
 const { launchBrowser } = require('./browser');
 const { assertPublicHttpUrl, isPrivateHostname, normalizePublicHttpUrl } = require('./networkSafety');
@@ -247,43 +243,6 @@ async function autoSaveKeywordResearch(req, result) {
     });
 }
 
-async function researchKeywordV2(req, res) {
-    const seed = typeof req.body?.seed === 'string' ? req.body.seed.trim() : '';
-    if (!seed) {
-        return res.status(400).json({ error: 'Seed keyword required' });
-    }
-
-    try {
-        const result = await runKeywordResearchV2(seed, {
-            projectId: req.body?.projectId || null,
-            user: req.user,
-        });
-        await autoSaveKeywordResearch(req, result);
-        return res.json(result);
-    } catch (error) {
-        console.error('Advanced Research Failed:', error);
-        return res.status(500).json({ error: error.message });
-    }
-}
-
-async function researchKeyword(req, res) {
-    const seed = typeof req.body?.seed === 'string' ? req.body.seed.trim() : '';
-    if (!seed) {
-        return res.status(400).json({ error: 'Seed keyword required' });
-    }
-
-    try {
-        const result = await runLegacyKeywordResearch(seed, {
-            projectId: req.body?.projectId || null,
-        });
-        await autoSaveKeywordResearch(req, result);
-        return res.json(result);
-    } catch (error) {
-        console.error('Research Failed:', error);
-        return res.status(500).json({ error: error.message });
-    }
-}
-
 async function analyzePageContent(req, res) {
     const normalizedUrl = normalizeScanUrl(req.body?.url);
     if (!normalizedUrl) {
@@ -320,8 +279,6 @@ async function analyzePageContent(req, res) {
 }
 
 module.exports = {
-    researchKeyword,
-    researchKeywordV2,
     analyzePageContent,
     __internal: {
         buildKeywordScanResult,

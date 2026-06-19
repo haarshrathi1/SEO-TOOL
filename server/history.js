@@ -1,7 +1,6 @@
 const { AnalysisHistory } = require('./models');
 const { buildPaginatedResult, parseBefore, parseLimit } = require('./pagination');
-
-const LEGACY_DEFAULT_PROJECT_ID = 'laserlift';
+const { normalizeAnalysisData } = require('./analysisMetrics');
 
 function normalizeProjectId(projectId) {
     return typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null;
@@ -11,11 +10,16 @@ function buildHistoryQuery(user, options = {}) {
     const projectId = normalizeProjectId(options.projectId);
     const query = {};
 
+    if (user?.workspaceId) {
+        query.workspaceId = user.workspaceId;
+    }
+
     if (projectId) {
         query.projectId = projectId;
     }
 
-    if (user?.role === 'viewer') {
+    const effectiveRole = user?.workspaceRole || user?.role;
+    if (effectiveRole === 'viewer') {
         if (!Array.isArray(user.projectIds) || user.projectIds.length === 0) {
             return null;
         }
@@ -27,23 +31,18 @@ function buildHistoryQuery(user, options = {}) {
         } else {
             query.projectId = { $in: user.projectIds };
         }
-    } else if (projectId === LEGACY_DEFAULT_PROJECT_ID) {
-        delete query.projectId;
-        query.$or = [
-            { projectId },
-            { projectId: { $exists: false } },
-            { projectId: null },
-        ];
     }
 
     return query;
 }
 
-const addToHistory = async (analysisData, projectId) => {
+const addToHistory = async (analysisData, projectId, workspaceId = null) => {
     try {
+        const normalizedAnalysisData = normalizeAnalysisData(analysisData);
         const doc = await AnalysisHistory.create({
+            workspaceId,
             projectId,
-            data: analysisData,
+            data: normalizedAnalysisData,
             timestamp: new Date(),
         });
 
@@ -51,7 +50,7 @@ const addToHistory = async (analysisData, projectId) => {
             id: doc._id.toString(),
             timestamp: doc.timestamp,
             projectId: doc.projectId,
-            data: doc.data,
+            data: normalizedAnalysisData,
         };
     } catch (error) {
         console.error('Failed to save analysis history:', error);
@@ -77,7 +76,7 @@ const getHistory = async (user, options = {}) => {
             id: record._id.toString(),
             timestamp: record.timestamp,
             projectId: record.projectId,
-            data: record.data,
+            data: normalizeAnalysisData(record.data),
         }));
     } catch (error) {
         console.error('Failed to read history:', error);
@@ -91,5 +90,6 @@ module.exports = {
     __internal: {
         normalizeProjectId,
         buildHistoryQuery,
+        normalizeAnalysisData,
     },
 };

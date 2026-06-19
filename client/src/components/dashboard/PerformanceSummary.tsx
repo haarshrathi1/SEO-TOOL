@@ -9,8 +9,8 @@ interface PerformanceSummaryProps {
     history?: { timestamp: string; results: AuditResult[] }[];
 }
 
-function getNormalizedDesktopPsi(result: AuditResult): number {
-    const score = result.psi_data?.desktop?.score;
+function getNormalizedPrimaryPsi(result: AuditResult): number {
+    const score = result.psi_data?.mobile?.score ?? result.psi_data?.desktop?.score;
     if (typeof score === 'number') {
         return Math.max(0, Math.min(1, score / 100));
     }
@@ -40,7 +40,7 @@ function calculateScore(auditResults: AuditResult[]) {
     ).length;
     score -= (warningCount / total) * 30;
 
-    const avgPsi = auditResults.reduce((acc, result) => acc + getNormalizedDesktopPsi(result), 0) / total;
+    const avgPsi = auditResults.reduce((acc, result) => acc + getNormalizedPrimaryPsi(result), 0) / total;
     score -= (1 - avgPsi) * 30;
 
     return Math.round(Math.max(0, Math.min(100, score)));
@@ -60,17 +60,17 @@ export default function PerformanceSummary({ results, history = [] }: Performanc
         trendData.unshift({ v: currentScore, date: 'Start' });
     }
 
-    const representativePage = results.find((result) => result.psi_data?.desktop?.lcp || result.psi_data?.desktop?.cls) || results[0];
-    const lcp = representativePage?.psi_data?.desktop?.lcp;
-    const cls = representativePage?.psi_data?.desktop?.cls;
-    const pagesWithPsi = results.filter((result) => typeof result.psi_data?.desktop?.score === 'number');
-    const avgScore = Math.round(pagesWithPsi.reduce((acc, result) => acc + (result.psi_data?.desktop?.score || 0), 0) / (pagesWithPsi.length || 1));
+    const representativePage = results.find((result) => result.psi_data?.mobile?.lcp || result.psi_data?.mobile?.cls || result.psi_data?.desktop?.lcp || result.psi_data?.desktop?.cls) || results[0];
+    const lcp = representativePage?.psi_data?.mobile?.lcp || representativePage?.psi_data?.desktop?.lcp;
+    const cls = representativePage?.psi_data?.mobile?.cls || representativePage?.psi_data?.desktop?.cls;
+    const pagesWithPsi = results.filter((result) => typeof result.psi_data?.mobile?.score === 'number' || typeof result.psi_data?.desktop?.score === 'number');
+    const avgScore = Math.round(pagesWithPsi.reduce((acc, result) => acc + (result.psi_data?.mobile?.score ?? result.psi_data?.desktop?.score ?? 0), 0) / (pagesWithPsi.length || 1));
 
     return (
         <div className="bg-black p-6 border-2 border-black shadow-[8px_8px_0px_0px_#000] text-white flex flex-col justify-between relative overflow-hidden h-full">
             <div className="relative z-10">
                 <div className="flex items-center gap-2 mb-2">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-yellow-400 border border-yellow-400 px-1 py-0.5">Desktop Performance</span>
+                    <span className="text-[10px] font-black uppercase tracking-wider text-yellow-400 border border-yellow-400 px-1 py-0.5">Mobile Performance</span>
                 </div>
                 <h3 className="text-4xl font-black uppercase tracking-tighter">Stable</h3>
                 <p className="text-slate-400 font-bold text-xs mt-1">Avg Score: <span className="text-white">{avgScore} / 100</span></p>

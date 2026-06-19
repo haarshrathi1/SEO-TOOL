@@ -74,8 +74,8 @@ const AUDIT_CHANGE_META: Record<AuditChangeFilterId, AuditChangeMeta> = {
         group: 'regressions',
     },
     'psi-drop': {
-        title: 'Desktop PSI drops',
-        description: 'Pages whose desktop PSI score dropped by at least 10 points.',
+        title: 'Mobile PSI drops',
+        description: 'Pages whose mobile PSI score dropped by at least 10 points.',
         tone: 'warning',
         group: 'regressions',
     },
@@ -92,8 +92,8 @@ const AUDIT_CHANGE_META: Record<AuditChangeFilterId, AuditChangeMeta> = {
         group: 'fixes',
     },
     'psi-gain': {
-        title: 'Desktop PSI gains',
-        description: 'Pages whose desktop PSI score improved by at least 10 points.',
+        title: 'Mobile PSI gains',
+        description: 'Pages whose mobile PSI score improved by at least 10 points.',
         tone: 'positive',
         group: 'fixes',
     },
@@ -149,7 +149,8 @@ function normalizeText(value: string | undefined) {
     return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
-function getDesktopPsi(result: AuditResult) {
+function getPrimaryPsi(result: AuditResult) {
+    if (typeof result.psi_data?.mobile?.score === 'number') return result.psi_data.mobile.score;
     return typeof result.psi_data?.desktop?.score === 'number' ? result.psi_data.desktop.score : null;
 }
 
@@ -207,13 +208,13 @@ function matchesChangeFilter(current: AuditResult, previous: AuditResult | undef
         case 'new-orphans':
             return (previous.incomingLinks || 0) > 0 && (current.incomingLinks || 0) === 0;
         case 'psi-drop': {
-            const currentPsi = getDesktopPsi(current);
-            const previousPsi = getDesktopPsi(previous);
+            const currentPsi = getPrimaryPsi(current);
+            const previousPsi = getPrimaryPsi(previous);
             return currentPsi !== null && previousPsi !== null && currentPsi <= previousPsi - 10;
         }
         case 'psi-gain': {
-            const currentPsi = getDesktopPsi(current);
-            const previousPsi = getDesktopPsi(previous);
+            const currentPsi = getPrimaryPsi(current);
+            const previousPsi = getPrimaryPsi(previous);
             return currentPsi !== null && previousPsi !== null && currentPsi >= previousPsi + 10;
         }
         case 'title-changed':

@@ -59,6 +59,8 @@
 
 export interface Project {
     id: string;
+    workspaceId?: string | null;
+    googleConnectionId?: string | null;
     name: string;
     domain: string;
     url: string;
@@ -77,6 +79,11 @@ export interface Project {
 export interface AuthUser {
     email: string;
     role: 'admin' | 'viewer';
+    workspaceRole?: 'owner' | 'admin' | 'member' | 'viewer';
+    workspaceId?: string;
+    workspaceSlug?: string;
+    workspaceName?: string;
+    userId?: string;
     name?: string;
     picture?: string;
     access?: string[];
@@ -92,6 +99,7 @@ export interface AuthUser {
 export interface ViewerRecord {
     email: string;
     role?: 'viewer';
+    workspaceRole?: 'owner' | 'admin' | 'member' | 'viewer';
     name?: string;
     picture?: string;
     access: string[];
@@ -104,14 +112,29 @@ export interface ViewerRecord {
     lastLoginAt?: string | null;
 }
 
+export interface WorkspaceMember {
+    email: string;
+    name?: string;
+    picture?: string;
+    role: 'owner' | 'admin' | 'member' | 'viewer';
+    access: string[];
+    features: string[];
+    projectIds: string[];
+    status?: string | null;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+}
+
 export interface AuthConfigResponse {
     googleClientId: string;
+    allowRegistration?: boolean;
 }
 
 export interface GoogleConnectionStatus {
     connected: boolean;
     ownerEmail: string;
     googleEmail: string;
+    googleConnectionId?: string;
     displayName: string;
     picture: string;
     scope: string;
@@ -148,10 +171,12 @@ export interface GoogleResourcesResponse {
 
 export interface AuthSessionResponse {
     user: AuthUser;
+    csrfToken?: string;
 }
 
 export interface GoogleLoginResponse {
     user: AuthUser;
+    csrfToken?: string;
 }
 
 export interface PaginatedResult<T> {
@@ -233,6 +258,7 @@ export interface AuditResult {
     canonicalIssues?: string[];
     structuredData?: StructuredDataSummary;
     h1Count?: number;
+    h1Text?: string;
     wordCount?: number;
     internalLinksOut?: number;
     externalLinksOut?: number;
@@ -241,6 +267,37 @@ export interface AuditResult {
     brokenLinks?: string[];
     contentBlocked?: boolean;
     contentBlockedReason?: string;
+    robotsMeta?: string;
+    viewport?: string;
+    htmlLang?: string;
+    hreflangs?: { hreflang: string; href: string }[];
+    images?: {
+        src: string;
+        alt: string;
+        hasAlt: boolean;
+        hasDimensions: boolean;
+        loading: string;
+    }[];
+    socialMeta?: {
+        ogTitle?: string;
+        ogDescription?: string;
+        ogImage?: string;
+        twitterCard?: string;
+        twitterTitle?: string;
+        twitterDescription?: string;
+        twitterImage?: string;
+    };
+    mixedContentUrls?: string[];
+    technicalIssues?: TechnicalAuditIssue[];
+}
+
+export interface TechnicalAuditIssue {
+    id: string;
+    category: string;
+    severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+    title: string;
+    details: string;
+    metadata?: Record<string, unknown>;
 }
 
 export interface AuditJobProgress {
@@ -256,7 +313,8 @@ export interface AuditJob {
     id: string;
     projectId: string;
     ownerEmail: string;
-    status: 'queued' | 'running' | 'completed' | 'failed';
+    mode?: 'standard' | 'gsc-deep';
+    status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
     progress: AuditJobProgress;
     error: string;
     auditHistoryId?: string | null;
@@ -482,6 +540,37 @@ export interface StrategicSynthesis {
     executionPriority: string[];
 }
 
+export interface BlogBriefKeyword {
+    term: string;
+    role: 'primary' | 'secondary' | 'supporting';
+    placement: string;
+}
+
+export interface BlogBriefOutlineSection {
+    heading: string;
+    purpose: string;
+    coversQueries: string[];
+}
+
+export interface BlogBriefFaq {
+    question: string;
+    source: 'paa' | 'related-search' | 'autocomplete';
+    answerAngle: string;
+}
+
+export interface BlogBrief {
+    recommendedTitle: string;
+    titleOptions: string[];
+    metaDescription: string;
+    slug: string;
+    readerPromise: string;
+    targetKeywords: BlogBriefKeyword[];
+    outline: BlogBriefOutlineSection[];
+    faq: BlogBriefFaq[];
+    searcherLanguage: string[];
+    generatedBy?: 'model' | 'fallback';
+}
+
 export interface SerpRawData {
     paaQuestions: {
         question: string;
@@ -509,6 +598,7 @@ export interface KeywordDataV2 {
     intentData: IntentDecomposition;
     keywordUniverse: KeywordUniverse;
     strategy: StrategicSynthesis;
+    blogBrief?: BlogBrief;
     analysis: KeywordData['analysis'];
     metadata: {
         model: string;
@@ -516,6 +606,7 @@ export interface KeywordDataV2 {
         timestamp: string;
         provider?: string;
         backend?: string;
+        layerErrors?: { layer: number; label: string; message: string }[];
         keywordAds?: {
             requested: boolean;
             provider: string;
@@ -552,6 +643,18 @@ export interface SavedResearchV2 extends KeywordDataV2 {
 }
 
 export type KeywordHistoryItem = SavedResearch | SavedResearchV2;
+
+export interface DemoSnapshotResponse {
+    generatedAt: string;
+    analysis: HistoryItem | null;
+    audit: {
+        id: string;
+        timestamp: string;
+        projectId: string;
+        results: AuditResult[];
+    } | null;
+    keyword: SavedResearchV2 | null;
+}
 
 export interface KeywordScanResult {
     url: string;

@@ -1,10 +1,15 @@
 ﻿import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import LoginPage from './components/app/LoginPage';
+import DemoPage from './DemoPage';
 import LandingPage from './LandingPage';
+import PrivacyPage from './PrivacyPage';
+import TermsPage from './TermsPage';
 import UserBar from './components/app/UserBar';
+import PikaPopoi from './components/common/PikaPopoi';
 import { canAccessDashboardSurface, canAccessRoute, getDefaultRouteForUser, getNavItemsForUser } from './appNav';
 import { api } from './api';
+import AdminPanel from './AdminPanel';
 import ProjectsPage from './ProjectsPage';
 import { useRouter } from './router';
 import type { AuthUser } from './types';
@@ -13,7 +18,8 @@ const Dashboard = lazy(() => import('./Dashboard'));
 const KeywordResearch = lazy(() => import('./KeywordResearch'));
 
 // Routes that require authentication. Anything else is public / unknown.
-const PROTECTED_ROUTES = new Set(['/dashboard', '/keywords', '/projects']);
+const PROTECTED_ROUTES = new Set(['/dashboard', '/keywords', '/projects', '/admin']);
+type AuthIntent = 'login' | 'register';
 
 function FullScreenLoader() {
     return (
@@ -38,7 +44,7 @@ const SESSION_KEY = 'climbseo_had_session';
 export default function App() {
     const { path, navigate } = useRouter();
     const [user, setUser] = useState<AuthUser | null>(null);
-    const [showLogin, setShowLogin] = useState(false);
+    const [authModeIntent, setAuthModeIntent] = useState<AuthIntent>('login');
     const [serverReady, setServerReady] = useState(false);
 
     // Capture the URL the visitor tried to open before auth resolved so we
@@ -92,7 +98,6 @@ export default function App() {
 
     const handleLogin = (u: AuthUser) => {
         localStorage.setItem(SESSION_KEY, '1');
-        setShowLogin(false);
         setUser(u);
         // Redirect to the originally intended protected route if accessible,
         // otherwise fall back to the user's default route.
@@ -111,6 +116,11 @@ export default function App() {
         navigate('/', { replace: true });
     };
 
+    const openLogin = (mode: AuthIntent) => {
+        setAuthModeIntent(mode);
+        navigate('/login');
+    };
+
     // ── Render ────────────────────────────────────────────────────────────
 
     // Returning user within the grace period — show minimal loader.
@@ -120,8 +130,35 @@ export default function App() {
     // The URL does NOT change here; we let the user stay at whatever path
     // they typed. If they log in, they get redirected via handleLogin above.
     if (!user) {
-        if (showLogin) return <LoginPage onLogin={handleLogin} />;
-        return <LandingPage onLogin={() => setShowLogin(true)} serverReady={serverReady} />;
+        if (path === '/login') {
+            return <LoginPage onLogin={handleLogin} initialMode={authModeIntent} />;
+        }
+
+        if (path === '/demo') {
+            return (
+                <DemoPage
+                    onLogin={() => openLogin('login')}
+                    onCreateWorkspace={() => openLogin('register')}
+                />
+            );
+        }
+
+        if (path === '/privacy') {
+            return <PrivacyPage onCreateWorkspace={() => openLogin('register')} />;
+        }
+
+        if (path === '/terms') {
+            return <TermsPage onCreateWorkspace={() => openLogin('register')} />;
+        }
+
+        return (
+            <LandingPage
+                onLogin={() => openLogin('login')}
+                onCreateWorkspace={() => openLogin('register')}
+                onOpenDemo={() => navigate('/demo')}
+                serverReady={serverReady}
+            />
+        );
     }
 
     // Authenticated — resolve and render the correct route.
@@ -141,7 +178,9 @@ export default function App() {
                 {route === '/keywords' && canAccessRoute(user, '/keywords') && <KeywordResearch user={user} />}
                 {route === '/dashboard' && canAccessDashboardSurface(user) && <Dashboard user={user} />}
                 {route === '/projects' && <ProjectsPage user={user} />}
+                {route === '/admin' && canAccessRoute(user, '/admin') && <AdminPanel user={user} />}
             </Suspense>
+            <PikaPopoi />
         </div>
     );
 }

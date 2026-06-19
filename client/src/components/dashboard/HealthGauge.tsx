@@ -8,8 +8,8 @@ interface HealthGaugeProps {
     results: AuditResult[];
 }
 
-function getNormalizedDesktopPsi(result: AuditResult): number {
-    const score = result.psi_data?.desktop?.score;
+function getNormalizedPrimaryPsi(result: AuditResult): number {
+    const score = result.psi_data?.mobile?.score ?? result.psi_data?.desktop?.score;
     if (typeof score === 'number') {
         return Math.max(0, Math.min(1, score / 100));
     }
@@ -41,7 +41,7 @@ export default function HealthGauge({ results }: HealthGaugeProps) {
         ).length;
         score -= (warningCount / total) * 30;
 
-        const avgPsi = auditResults.reduce((acc, result) => acc + getNormalizedDesktopPsi(result), 0) / total;
+        const avgPsi = auditResults.reduce((acc, result) => acc + getNormalizedPrimaryPsi(result), 0) / total;
         score -= (1 - avgPsi) * 30;
 
         return Math.round(Math.max(0, Math.min(100, score)));

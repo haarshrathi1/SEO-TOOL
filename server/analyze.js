@@ -7,6 +7,7 @@ const history = require('./history');
 const sheets = require('./sheets');
 const { fetchSitemapUrls } = require('./sitemaps');
 const auth = require('./auth');
+const { normalizeAnalysisData, resolveVisibility } = require('./analysisMetrics');
 
 const { getProject } = require('./projects');
 
@@ -41,7 +42,7 @@ const analyzeSite = async (req, res) => {
         const clicks = siteTotals.clicks;
         const ctr = siteTotals.ctr;
         const avgPosition = siteTotals.avgPosition;
-        const visibility = ctr; // As per n8n logic
+        const visibility = resolveVisibility({ avgPosition });
 
         // Aggregate rows ONLY for Top Lists (Keywords/Pages)
         const keywordStats = {};
@@ -239,7 +240,7 @@ const analyzeSite = async (req, res) => {
         const projectName = project.name;
         const domain = project.domain; // or derive from siteUrl
 
-        const finalResponse = {
+        const finalResponse = normalizeAnalysisData({
             week: performance.dateRange.weekLabel,
             project: projectName,
             domain,
@@ -315,10 +316,10 @@ const analyzeSite = async (req, res) => {
                 Site_Health_Score: score,
                 SEO_Status: status
             }
-        };
+        });
 
         // Save to History
-        const historyRecord = await history.addToHistory(finalResponse, project.id);
+        const historyRecord = await history.addToHistory(finalResponse, project.id, req.user.workspaceId);
 
         // Export to Sheets
         let sheetStatus = false;

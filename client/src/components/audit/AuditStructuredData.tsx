@@ -1,6 +1,6 @@
-import { AlertTriangle, CheckCircle, FileText, Search } from 'lucide-react';
+import { AlertTriangle, CheckCircle, FileText, Lightbulb, Search, Zap } from 'lucide-react';
 import type { AuditResult } from '../../types';
-import { buildStructuredDataAuditModel, type StructuredDataFilterId } from '../../structuredDataAudit';
+import { buildSchemaOpportunitiesModel, buildStructuredDataAuditModel, type StructuredDataFilterId } from '../../structuredDataAudit';
 import { getUrlPathLabel } from '../../url';
 import { OperatorStatePanel } from '../common/OperatorUi';
 
@@ -41,8 +41,15 @@ function toneStyles(tone: 'critical' | 'warning' | 'positive' | 'info') {
     };
 }
 
+const PRIORITY_STYLES = {
+    high: { badge: 'bg-red-500 text-white', border: 'border-red-200 bg-red-50', label: 'text-red-700' },
+    medium: { badge: 'bg-amber-400 text-black', border: 'border-amber-200 bg-amber-50', label: 'text-amber-700' },
+    low: { badge: 'bg-sky-300 text-black', border: 'border-sky-200 bg-sky-50', label: 'text-sky-700' },
+};
+
 export default function AuditStructuredData({ results, onReview }: AuditStructuredDataProps) {
     const model = buildStructuredDataAuditModel(results);
+    const opportunities = buildSchemaOpportunitiesModel(results);
 
     if (!model.hasData) {
         return (
@@ -175,6 +182,59 @@ export default function AuditStructuredData({ results, onReview }: AuditStructur
                     </div>
                 </div>
             </div>
+
+            {opportunities.opportunities.length > 0 && (
+                <div className="border-2 border-black bg-white p-5 shadow-[6px_6px_0px_0px_#000]">
+                    <div className="flex items-center gap-3 mb-1">
+                        <div className="border-2 border-black bg-violet-100 p-1.5">
+                            <Lightbulb className="h-4 w-4 text-violet-700" />
+                        </div>
+                        <p className="text-sm font-black uppercase tracking-[0.2em] text-black">Schema Opportunities</p>
+                        <div className="border-2 border-black bg-violet-500 px-2 py-0.5 text-[10px] font-black uppercase tracking-widest text-white">
+                            {opportunities.totalPagesWithOpportunities} pages
+                        </div>
+                    </div>
+                    <p className="mb-4 text-sm font-medium text-slate-600">Pages that could benefit from additional schema markup based on URL and content signals.</p>
+
+                    <div className="space-y-3">
+                        {opportunities.opportunities.map((opp) => {
+                            const styles = PRIORITY_STYLES[opp.priority];
+                            return (
+                                <div key={`${opp.schemaType}-${opp.action}`} className={`border-2 border-black p-4 ${styles.border}`}>
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex flex-wrap items-center gap-2 mb-2">
+                                                <div className={`border-2 border-black px-2 py-0.5 text-[10px] font-black uppercase tracking-widest ${styles.badge}`}>
+                                                    {opp.priority}
+                                                </div>
+                                                <div className="border-2 border-black bg-white px-2 py-0.5 text-[10px] font-black uppercase tracking-widest text-slate-700">
+                                                    {opp.action === 'add' ? 'Add Schema' : 'Fill Fields'}
+                                                </div>
+                                                <p className="text-base font-black uppercase text-black">{opp.schemaType}</p>
+                                            </div>
+                                            <p className="text-sm font-medium text-slate-700">{opp.reason}</p>
+                                            {opp.sampleUrls.length > 0 && (
+                                                <div className="mt-3 flex flex-wrap gap-1.5">
+                                                    {opp.sampleUrls.map((url) => (
+                                                        <span key={url} className="max-w-xs truncate border border-black bg-white px-2 py-0.5 text-[11px] font-bold text-slate-600">
+                                                            {getUrlPathLabel(url)}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="flex shrink-0 flex-col items-center gap-1">
+                                            <Zap className="h-4 w-4 text-slate-400" />
+                                            <p className="text-3xl font-black text-black">{opp.count}</p>
+                                            <p className={`text-[10px] font-black uppercase tracking-widest ${styles.label}`}>pages</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

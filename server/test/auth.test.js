@@ -11,37 +11,68 @@ const { __internal } = require('../auth');
 test('resolveProjectAuthSource requires explicit self-serve Google connections', () => {
     assert.deepEqual(
         __internal.resolveProjectAuthSource({
-            ownerEmail: 'viewer@example.com',
-            googleConnectionEmail: 'viewer@example.com',
+            googleConnectionId: '507f1f77bcf86cd799439011',
         }),
         {
-            connectionEmail: 'viewer@example.com',
+            googleConnectionId: '507f1f77bcf86cd799439011',
             allowSharedFallback: false,
         }
     );
 });
 
-test('resolveProjectAuthSource keeps shared fallback for legacy owner-only projects', () => {
+test('resolveProjectAuthSource refuses shared fallback for projects without an explicit connection', () => {
     assert.deepEqual(
         __internal.resolveProjectAuthSource({
             ownerEmail: 'admin@example.com',
             googleConnectionEmail: '',
         }),
         {
-            connectionEmail: 'admin@example.com',
-            allowSharedFallback: true,
+            googleConnectionId: '',
+            allowSharedFallback: false,
         }
     );
 });
 
-test('resolveProjectAuthSource falls back to shared auth when no project user context exists', () => {
+test('resolveProjectAuthSource stays closed when no project connection exists', () => {
     assert.deepEqual(
         __internal.resolveProjectAuthSource({}),
         {
-            connectionEmail: '',
-            allowSharedFallback: true,
+            googleConnectionId: '',
+            allowSharedFallback: false,
         }
     );
+});
+
+test('admin OAuth state round-trips through sign and verify', () => {
+    const state = __internal.buildAdminOauthState('google-oauth', { email: 'Admin@Example.com' });
+    assert.deepEqual(__internal.parseAdminOauthState(state), {
+        provider: 'google-oauth',
+        email: 'admin@example.com',
+    });
+});
+
+test('parseAdminOauthState rejects legacy fixed-string and forged states', () => {
+    assert.equal(__internal.parseAdminOauthState('google-oauth'), null);
+    assert.equal(__internal.parseAdminOauthState('google-ads-oauth'), null);
+    assert.equal(__internal.parseAdminOauthState('google-all-oauth'), null);
+    assert.equal(__internal.parseAdminOauthState(''), null);
+    assert.equal(__internal.parseAdminOauthState('not-a-jwt'), null);
+    // A user-connection state must not be accepted as an admin state.
+    const userState = __internal.buildUserOauthState({
+        userId: 'u1',
+        workspaceId: 'w1',
+        email: 'user@example.com',
+    });
+    assert.equal(__internal.parseAdminOauthState(userState), null);
+});
+
+test('parseAdminOauthState rejects unknown providers', () => {
+    const jwt = require('jsonwebtoken');
+    const forged = jwt.sign({
+        kind: 'admin_google_connection',
+        provider: 'something-else',
+    }, process.env.JWT_SECRET);
+    assert.equal(__internal.parseAdminOauthState(forged), null);
 });
 
 test('buildProjectRecommendationContext derives comparable keys from draft inputs', () => {

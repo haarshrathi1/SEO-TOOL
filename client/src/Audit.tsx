@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AlertOctagon, Calendar, Clock3, Compass, Download, FileText, Filter, GitBranch, History, LayoutDashboard, Link2, Loader2, Play, RefreshCw, Search, Sparkles, TableProperties } from 'lucide-react';
+import { Activity, AlertOctagon, Calendar, Clock3, Compass, Database, Download, FileText, Filter, GitBranch, History, LayoutDashboard, Link2, Loader2, MoreHorizontal, Play, Printer, RefreshCw, Search, Share2, Sparkles, TableProperties, XCircle, Zap } from 'lucide-react';
 import type { AuditJob, AuditResult } from './types';
 import { api, requestIndexing } from './api';
 import AuditAI from './components/audit/AuditAI';
@@ -9,6 +9,7 @@ import AuditIndexation from './components/audit/AuditIndexation';
 import AuditInternalLinks from './components/audit/AuditInternalLinks';
 import AuditIssues from './components/audit/AuditIssues';
 import AuditOverview from './components/audit/AuditOverview';
+import AuditPriorityFixes from './components/audit/AuditPriorityFixes';
 import AuditStructuredData from './components/audit/AuditStructuredData';
 import AuditTemplates from './components/audit/AuditTemplates';
 import AuditTable from './components/audit/AuditTable';
@@ -16,8 +17,11 @@ import { filterResultsByAuditChange, isAuditChangeFilterId } from './changeDetec
 import { filterResultsByInternalLinkFilter, getInternalLinkBadges, isInternalLinkFilterId } from './internalLinkRecommendations';
 import { filterResultsByStructuredDataFilter, hasStructuredDataError, isStructuredDataFilterId } from './structuredDataAudit';
 import { buildTemplateClusterLookup, filterResultsByTemplateFilter, getTemplateLookupKey, getTemplatePatternFromFilterId, isTemplateFilterId } from './templateClusters';
+import { filterResultsByTechnicalIssue, getTechnicalIssues, isTechnicalIssueFilterId } from './technicalIssues';
+import { printAuditPdfReport } from './auditPdfReport';
 import { downloadCsv } from './csv';
 import { computeSeoScore } from './seoScore';
+import { copyCurrentUrl, shareCurrentUrl } from './reportActions';
 import { useToast } from './toast';
 import { OperatorPageHero, OperatorStatePanel } from './components/common/OperatorUi';
 import { OperatorComparisonCard } from './components/common/OperatorStats';
@@ -47,7 +51,7 @@ interface RuntimeLogEntry {
     elapsedMs: number;
 }
 
-type Tab = 'overview' | 'changes' | 'indexation' | 'links' | 'templates' | 'canonicals' | 'schema' | 'issues' | 'pages' | 'ai';
+type Tab = 'priority' | 'overview' | 'changes' | 'indexation' | 'links' | 'templates' | 'canonicals' | 'schema' | 'issues' | 'pages' | 'ai';
 
 const ACTIVE_AUDIT_STATUSES: AuditJob['status'][] = ['queued', 'running'];
 const MAX_RUNTIME_LOG_ITEMS = 8;
@@ -74,13 +78,21 @@ function getFilterLabel(filterId: string) {
         return `Template ${getTemplatePatternFromFilterId(filterId)}`;
     }
 
+    if (filterId === 'http-errors') return 'HTTP errors';
+    if (filterId === 'core-web-vitals') return 'Core Web Vitals';
+
     return filterId.replace(/-/g, ' ');
 }
 
-function avgDesktopPsi(results: AuditResult[]) {
-    const withPsi = results.filter((result) => typeof result.psi_data?.desktop?.score === 'number');
+function avgPrimaryPsi(results: AuditResult[]) {
+    const getScore = (result: AuditResult) => {
+        if (typeof result.psi_data?.mobile?.score === 'number') return result.psi_data.mobile.score;
+        if (typeof result.psi_data?.desktop?.score === 'number') return result.psi_data.desktop.score;
+        return null;
+    };
+    const withPsi = results.map(getScore).filter((score): score is number => typeof score === 'number');
     if (!withPsi.length) return 0;
-    return Math.round(withPsi.reduce((sum, result) => sum + (result.psi_data?.desktop?.score || 0), 0) / withPsi.length);
+    return Math.round(withPsi.reduce((sum, score) => sum + score, 0) / withPsi.length);
 }
 
 function compareAuditResults(current: AuditResult[], previous: AuditResult[]) {
@@ -96,9 +108,9 @@ function compareAuditResults(current: AuditResult[], previous: AuditResult[]) {
             previous: countIssues(previous),
         },
         {
-            label: 'Avg desktop PSI',
-            current: avgDesktopPsi(current),
-            previous: avgDesktopPsi(previous),
+            label: 'Avg mobile PSI',
+            current: avgPrimaryPsi(current),
+            previous: avgPrimaryPsi(previous),
         },
     ].map((item) => ({
         ...item,
@@ -162,9 +174,12 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
     const { push } = useToast();
     const [liveResults, setLiveResults] = useState<AuditResult[]>([]);
     const [displayResults, setDisplayResults] = useState<AuditResult[]>([]);
+    const [speedPending, setSpeedPending] = useState<Set<string>>(new Set());
     const [startingAudit, setStartingAudit] = useState(false);
+    const [cancellingAudit, setCancellingAudit] = useState(false);
+    const [startingGscDeep, setStartingGscDeep] = useState(false);
     const [error, setError] = useState('');
-    const [activeTab, setActiveTab] = useState<Tab>('overview');
+    const [activeTab, setActiveTab] = useState<Tab>('priority');
     const [filterId, setFilterId] = useState('');
     const [history, setHistory] = useState<AuditHistoryItem[]>([]);
     const [historyHasMore, setHistoryHasMore] = useState(false);
@@ -466,6 +481,42 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
         }
     };
 
+    const cancelAudit = async () => {
+        if (!activeJob || cancellingAudit) return;
+        setCancellingAudit(true);
+        try {
+            await api.cancelAuditJob(activeJob.id);
+            clearPoll();
+            clearTimer();
+            setActiveJob(null);
+            setJobs((prev) => prev.map((j) => j.id === activeJob.id ? { ...j, status: 'cancelled' } : j));
+            push({ tone: 'info', title: 'Audit cancelled', description: 'The crawl has been stopped.' });
+        } catch (issue) {
+            push({ tone: 'error', title: 'Cancel failed', description: issue instanceof Error ? issue.message : 'Could not cancel the audit.' });
+        } finally {
+            setCancellingAudit(false);
+        }
+    };
+
+    const runGscDeepAudit = async () => {
+        if (!projectId || !canRunAudit) return;
+        setStartingGscDeep(true);
+        setError('');
+        setSelectedHistoryId('live');
+        setFilterId('');
+        try {
+            const job = await api.createGscDeepAuditJob(projectId);
+            trackActiveJob(job, { resetLog: true });
+            push({ tone: 'info', title: 'GSC Deep Audit queued', description: 'Fetching URLs from Google Search Console — this may take a few minutes for large sites.' });
+            await fetchJobs();
+            pollJob(job.id);
+        } catch (issue) {
+            setStartingGscDeep(false);
+            clearRuntimeState();
+            setError(issue instanceof Error ? issue.message : 'Failed to start GSC deep audit');
+        }
+    };
+
     const sortedProjectHistory = history
         .filter((entry) => entry.projectId === projectId)
         .sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime());
@@ -517,10 +568,28 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
         }
 
         try {
-            await requestIndexing(url);
+            await requestIndexing(url, projectId);
             push({ tone: 'success', title: 'Indexing requested', description: url });
         } catch (issue) {
             push({ tone: 'error', title: 'Indexing request failed', description: issue instanceof Error ? issue.message : 'Unknown error' });
+        }
+    };
+
+    const handleCheckSpeed = async (url: string) => {
+        setSpeedPending((prev) => new Set(prev).add(url));
+        try {
+            const { psi_score, psi_data } = await api.checkSpeed(url, projectId);
+            const merge = (list: AuditResult[]) => list.map((r) => (r.url === url ? { ...r, psi_score, psi_data } : r));
+            setDisplayResults(merge);
+            setLiveResults(merge);
+        } catch (issue) {
+            push({ tone: 'error', title: 'Speed check failed', description: issue instanceof Error ? issue.message : 'Unknown error' });
+        } finally {
+            setSpeedPending((prev) => {
+                const next = new Set(prev);
+                next.delete(url);
+                return next;
+            });
         }
     };
 
@@ -537,6 +606,9 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
         }
         if (isTemplateFilterId(filterId)) {
             return filterResultsByTemplateFilter(displayResults, filterId);
+        }
+        if (isTechnicalIssueFilterId(filterId)) {
+            return filterResultsByTechnicalIssue(displayResults, filterId);
         }
         switch (filterId) {
             case 'not-indexed':
@@ -575,8 +647,6 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
             case 'canonical-target-redirects':
             case 'canonical-loop':
                 return displayResults.filter((result) => result.canonicalIssues?.includes(filterId));
-            case 'slow-performance':
-                return displayResults.filter((result) => (result.psi_data?.desktop?.score || 0) < 50);
             default:
                 return displayResults;
         }
@@ -587,7 +657,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
 
         downloadCsv(
             `audit-${projectId}-${new Date().toISOString().slice(0, 10)}.csv`,
-            ['URL', 'Final URL', 'HTTP Status', 'Status', 'Coverage', 'Template Cluster', 'Canonical URL', 'Canonical Issues', 'Schema Types', 'Schema Issues', 'Internal Link Signals', 'Title', 'Description', 'H1 Count', 'Word Count', 'Desktop PSI', 'Incoming Links', 'SEO Score', 'SEO Label'],
+            ['URL', 'Final URL', 'HTTP Status', 'Status', 'Coverage', 'Technical Issues', 'Template Cluster', 'Canonical URL', 'Canonical Issues', 'Schema Types', 'Schema Issues', 'Internal Link Signals', 'Title', 'Description', 'H1 Count', 'Word Count', 'Mobile PSI', 'Desktop PSI', 'Incoming Links', 'SEO Score', 'SEO Label'],
             displayResults.map((result) => {
                 const seo = computeSeoScore(result);
                 return [
@@ -596,6 +666,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                     result.httpStatus || '',
                     result.status,
                     result.coverageState,
+                    getTechnicalIssues(result, displayResults).map((issue) => `${issue.severity}: ${issue.title}`).join(' | '),
                     templateLookup.get(getTemplateLookupKey(result.url)) || '',
                     result.canonicalUrl || '',
                     (result.canonicalIssues || []).join(', '),
@@ -609,6 +680,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                     result.description || '',
                     result.h1Count || 0,
                     result.wordCount || 0,
+                    result.psi_data?.mobile?.score || '',
                     result.psi_data?.desktop?.score || '',
                     result.incomingLinks || 0,
                     seo.total,
@@ -619,12 +691,44 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
         push({ tone: 'success', title: 'Audit exported', description: 'CSV download started.' });
     };
 
+    const handleCopyPageLink = async () => {
+        await copyCurrentUrl(push);
+    };
+
+    const handleSharePage = async () => {
+        await shareCurrentUrl(push, {
+            title: 'ClimbSEO audit workspace',
+            text: 'Open the audit workspace in ClimbSEO.',
+        });
+    };
+
+    const handlePrintAuditReport = () => {
+        const opened = printAuditPdfReport({
+            projectId,
+            results: displayResults,
+            snapshotLabel: currentSnapshotLabel,
+            baselineLabel: baselineSnapshotLabel,
+        });
+
+        if (!opened) {
+            push({
+                tone: 'error',
+                title: 'PDF report blocked',
+                description: displayResults.length === 0
+                    ? 'Run or load an audit before exporting the report.'
+                    : 'Allow pop-ups for this site and try again.',
+            });
+            return;
+        }
+
+        push({ tone: 'success', title: 'PDF report opened', description: 'Use Save as PDF in the print dialog.' });
+    };
+
     return (
         <div className="space-y-8 pb-20 animate-in slide-in-from-bottom-6 duration-700 fade-in">
             <OperatorPageHero
                 icon={Search}
-                title="SEO Commander"
-                titleClassName="italic"
+                title="Technical Audit"
                 supportingContent={(
                     <div className="mt-1 flex items-center justify-center gap-2 md:justify-start">
                         <span className="h-2 w-2 animate-pulse rounded-full border border-black bg-green-500"></span>
@@ -632,7 +736,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                     </div>
                 )}
                 actions={(
-                    <>
+                    <div data-print-hidden className="flex flex-wrap items-center gap-4">
                         {sortedProjectHistory.length > 0 && (
                             <div className="relative group min-w-[14rem]">
                                 <select
@@ -662,11 +766,32 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                             </button>
                         )}
 
-                        {canRunAudit && displayResults.length > 0 && (
-                            <button onClick={exportResults} className="operator-button-secondary px-5 py-3">
-                                <Download className="h-4 w-4" /> Export CSV
-                            </button>
-                        )}
+                        <details className="relative">
+                            <summary className="operator-button-secondary flex cursor-pointer list-none items-center gap-2 px-5 py-3">
+                                <MoreHorizontal className="h-4 w-4" /> Export / Share
+                            </summary>
+                            <div className="absolute right-0 z-30 mt-2 grid min-w-[13rem] gap-2 border-2 border-black bg-white p-2 shadow-[5px_5px_0px_0px_#000]">
+                                {canRunAudit && displayResults.length > 0 && (
+                                    <button onClick={exportResults} className="flex items-center gap-2 border border-black bg-white px-3 py-2 text-left text-xs font-black uppercase text-black hover:bg-slate-50">
+                                        <Download className="h-4 w-4" /> Export CSV
+                                    </button>
+                                )}
+
+                                {displayResults.length > 0 && (
+                                    <button onClick={() => handlePrintAuditReport()} className="flex items-center gap-2 border border-black bg-white px-3 py-2 text-left text-xs font-black uppercase text-black hover:bg-slate-50">
+                                        <Printer className="h-4 w-4" /> PDF Report
+                                    </button>
+                                )}
+
+                                <button onClick={() => void handleCopyPageLink()} className="flex items-center gap-2 border border-black bg-white px-3 py-2 text-left text-xs font-black uppercase text-black hover:bg-slate-50">
+                                    <Link2 className="h-4 w-4" /> Copy Link
+                                </button>
+
+                                <button onClick={() => void handleSharePage()} className="flex items-center gap-2 border border-black bg-white px-3 py-2 text-left text-xs font-black uppercase text-black hover:bg-slate-50">
+                                    <Share2 className="h-4 w-4" /> Share
+                                </button>
+                            </div>
+                        </details>
 
                         {canRunAudit && (
                             <button
@@ -678,7 +803,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                                 {startingAudit ? 'Starting...' : hasActiveJob ? 'Running...' : 'Start Audit'}
                             </button>
                         )}
-                    </>
+                    </div>
                 )}
             />
             {hasActiveJob && activeJob && (
@@ -687,13 +812,24 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                     <div className="grid gap-6 border-b-2 border-black bg-yellow-50 p-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.9fr)]">
                         <div>
                             <div className="flex flex-wrap items-center gap-3">
-                                <span className="inline-flex items-center gap-2 border-2 border-black bg-black px-3 py-1 text-[11px] font-black uppercase tracking-[0.22em] text-white">
-                                    <Activity className="h-3.5 w-3.5 animate-pulse" />
-                                    Deep audit live
+                                <span className={`inline-flex items-center gap-2 border-2 px-3 py-1 text-[11px] font-black uppercase tracking-[0.22em] text-white ${activeJob.mode === 'gsc-deep' ? 'border-violet-700 bg-violet-700' : 'border-black bg-black'}`}>
+                                    {activeJob.mode === 'gsc-deep' ? <Database className="h-3.5 w-3.5 animate-pulse" /> : <Activity className="h-3.5 w-3.5 animate-pulse" />}
+                                    {activeJob.mode === 'gsc-deep' ? 'GSC deep audit live' : 'Deep audit live'}
                                 </span>
                                 <span className="border-2 border-black bg-yellow-300 px-2 py-0.5 text-[11px] font-black uppercase tracking-[0.2em] text-black">
                                     {activeJob.status}
                                 </span>
+                                {canRunAudit && (
+                                    <button
+                                        type="button"
+                                        onClick={() => void cancelAudit()}
+                                        disabled={cancellingAudit}
+                                        className="inline-flex items-center gap-1.5 border-2 border-red-600 bg-white px-3 py-0.5 text-[11px] font-black uppercase tracking-[0.2em] text-red-600 transition-colors hover:bg-red-600 hover:text-white disabled:opacity-50"
+                                    >
+                                        {cancellingAudit ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3" />}
+                                        {cancellingAudit ? 'Cancelling…' : 'Cancel audit'}
+                                    </button>
+                                )}
                             </div>
                             <h3 className="mt-4 text-3xl font-black uppercase tracking-tight text-black">{activeJob.progress.stage}</h3>
                             <p className="mt-2 max-w-2xl text-sm font-bold text-slate-700">{activeJob.progress.message}</p>
@@ -781,6 +917,41 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                 </div>
             )}
 
+            {canRunAudit && !hasActiveJob && (
+                <div className="overflow-hidden border-2 border-violet-700 bg-white" style={{ boxShadow: '6px 6px 0 0 #6d28d9' }}>
+                    <div className="flex flex-col gap-4 bg-gradient-to-r from-violet-50 to-indigo-50 p-5 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex items-start gap-4">
+                            <div className="shrink-0 border-2 border-violet-700 bg-violet-100 p-2.5">
+                                <Database className="h-5 w-5 text-violet-700" />
+                            </div>
+                            <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm font-black uppercase tracking-[0.18em] text-violet-800">GSC Deep Audit</p>
+                                    <span className="border border-violet-400 bg-violet-600 px-2 py-0.5 text-[10px] font-black uppercase tracking-widest text-white">500+ pages</span>
+                                    <span className="border border-violet-300 bg-violet-100 px-2 py-0.5 text-[10px] font-black uppercase tracking-widest text-violet-700">Multi-sitemap</span>
+                                </div>
+                                <p className="mt-1 max-w-xl text-xs font-semibold text-slate-600">
+                                    For large sites or sites that block sitemap fetching. Discovers URLs directly from <strong>Google Search Console</strong> (Search Analytics + all registered sitemaps) — no sitemap HTTP access needed.
+                                </p>
+                                <div className="mt-2 flex flex-wrap gap-3 text-[11px] font-bold text-violet-700">
+                                    <span className="flex items-center gap-1"><Zap className="h-3 w-3" />GSC Search Analytics as URL source</span>
+                                    <span className="flex items-center gap-1"><Zap className="h-3 w-3" />All registered sitemaps fetched</span>
+                                    <span className="flex items-center gap-1"><Zap className="h-3 w-3" />Bypasses 403 / sitemap blocks</span>
+                                </div>
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => void runGscDeepAudit()}
+                            disabled={startingGscDeep || hasActiveJob}
+                            className="shrink-0 inline-flex items-center gap-2 border-2 border-violet-700 bg-violet-700 px-6 py-3 text-sm font-black uppercase tracking-[0.15em] text-white transition-colors hover:bg-violet-800 disabled:opacity-50"
+                        >
+                            {startingGscDeep ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
+                            {startingGscDeep ? 'Queuing…' : 'Start GSC Deep Audit'}
+                        </button>
+                    </div>
+                </div>
+            )}
+
             {error && (
                 <div className="flex items-center gap-3 border-2 border-black bg-red-100 p-4 text-black" style={{ boxShadow: '4px 4px 0 0 #000' }}>
                     <div className="p-1 bg-black text-white shrink-0">
@@ -860,6 +1031,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                                 {
                                     group: 'Summary',
                                     tabs: [
+                                        { id: 'priority', label: 'Priority', icon: AlertOctagon },
                                         { id: 'overview', label: 'Overview', icon: LayoutDashboard },
                                         { id: 'changes', label: 'Changes', icon: History },
                                     ],
@@ -921,6 +1093,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                     )}
 
                     <div className="min-h-[400px]">
+                        {activeTab === 'priority' && <AuditPriorityFixes results={displayResults} onReview={(id) => { setFilterId(id); setActiveTab('pages'); }} />}
                         {activeTab === 'overview' && <AuditOverview results={displayResults} history={sortedProjectHistory} />}
                         {activeTab === 'changes' && (
                             <AuditChanges
@@ -953,7 +1126,7 @@ export default function Audit({ projectId, canRunAudit = true, canRequestIndexin
                                         </button>
                                     </div>
                                 )}
-                                <AuditTable results={filteredResults} onRequestIndexing={canRequestIndexing ? handleRequestIndexing : null} />
+                                <AuditTable results={filteredResults} onRequestIndexing={canRequestIndexing ? handleRequestIndexing : null} onCheckSpeed={handleCheckSpeed} speedPending={speedPending} />
                             </div>
                         )}
                         {activeTab === 'indexation' && <AuditIndexation results={displayResults} onReview={(id) => { setFilterId(id); setActiveTab('pages'); }} />}

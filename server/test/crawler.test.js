@@ -119,6 +119,7 @@ test('crawler falls back to the partially loaded document after navigation timeo
         waitForSelector: async (selector, options) => {
             waitCalls.push({ selector, timeout: options.timeout });
         },
+        waitForFunction: async () => {},
     };
 
     const response = await crawler.__internal.navigatePageForAudit(page, 'https://example.com/about', {

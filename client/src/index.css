@@ -280,3 +280,25 @@ code, pre, .font-mono {
   100% { transform: translateY(0);    opacity: 1; }
 }
 .animate-slot { animation: slot-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+
+@media print {
+  body {
+    background: #fff !important;
+  }
+
+  [data-print-hidden] {
+    display: none !important;
+  }
+
+  .operator-shell {
+    min-height: auto !important;
+    background: #fff !important;
+  }
+
+  .operator-panel,
+  .operator-panel-inset,
+  .operator-panel-warm {
+    box-shadow: none !important;
+    break-inside: avoid-page;
+  }
+}

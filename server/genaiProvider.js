@@ -4,13 +4,10 @@ const { GoogleGenAI } = require('@google/genai');
 
 const BACKEND_VERTEX = 'vertex';
 const BACKEND_GEMINI = 'gemini';
-const DEFAULT_API_VERSION = process.env.GENAI_API_VERSION || 'v1';
-const DEFAULT_LOCATION = process.env.GOOGLE_CLOUD_LOCATION || 'global';
 const MAX_ATTEMPTS = Math.max(1, Number(process.env.GENAI_RETRY_ATTEMPTS || 4));
 const BASE_RETRY_DELAY_MS = Math.max(250, Number(process.env.GENAI_RETRY_BASE_DELAY_MS || 1200));
 
-let vertexClient = null;
-let geminiClient = null;
+const clients = {};
 
 function parseModelList(value) {
     if (!value) {
@@ -34,20 +31,20 @@ function uniqueValues(values) {
 }
 
 const DEFAULT_PAGE_MODEL = parseModelList(
-    process.env.GENAI_PAGE_MODEL || process.env.GEMINI_PAGE_MODEL || 'gemini-2.5-flash'
-)[0] || 'gemini-2.5-flash';
+    process.env.GENAI_PAGE_MODEL || process.env.GEMINI_PAGE_MODEL || 'gemini-3.5-flash'
+)[0] || 'gemini-3.5-flash';
 const DEFAULT_PAGE_MODEL_FALLBACKS = uniqueValues(parseModelList(
-    process.env.GENAI_PAGE_MODEL_FALLBACKS || process.env.GEMINI_PAGE_MODEL_FALLBACKS || ''
+    process.env.GENAI_PAGE_MODEL_FALLBACKS || process.env.GEMINI_PAGE_MODEL_FALLBACKS || 'gemini-2.5-flash'
 ));
 const DEFAULT_KEYWORD_MODELS = uniqueValues([
-    ...parseModelList(process.env.GENAI_KEYWORD_MODEL || process.env.GEMINI_KEYWORD_MODEL || 'gemini-3.1-pro-preview'),
-    ...parseModelList(process.env.GENAI_KEYWORD_MODEL_FALLBACKS || process.env.GEMINI_KEYWORD_MODEL_FALLBACKS || 'gemini-2.5-pro'),
+    ...parseModelList(process.env.GENAI_KEYWORD_MODEL || process.env.GEMINI_KEYWORD_MODEL || 'gemini-3.5-flash'),
+    ...parseModelList(process.env.GENAI_KEYWORD_MODEL_FALLBACKS || process.env.GEMINI_KEYWORD_MODEL_FALLBACKS || 'gemini-2.5-flash'),
 ]);
-const DEFAULT_KEYWORD_MODEL = DEFAULT_KEYWORD_MODELS[0] || 'gemini-3.1-pro-preview';
+const DEFAULT_KEYWORD_MODEL = DEFAULT_KEYWORD_MODELS[0] || 'gemini-3.5-flash';
 const DEFAULT_KEYWORD_MODEL_FALLBACKS = DEFAULT_KEYWORD_MODELS.slice(1);
 const DEFAULT_GROUNDED_SEARCH_MODEL = parseModelList(
-    process.env.GENAI_GROUNDED_SEARCH_MODEL || process.env.GEMINI_GROUNDED_SEARCH_MODEL || 'gemini-2.5-flash'
-)[0] || 'gemini-2.5-flash';
+    process.env.GENAI_GROUNDED_SEARCH_MODEL || process.env.GEMINI_GROUNDED_SEARCH_MODEL || 'gemini-3.5-flash'
+)[0] || 'gemini-3.5-flash';
 
 function getVertexApiKey() {
     return process.env.VERTEX_AI_API_KEY || process.env.GOOGLE_VERTEX_API_KEY || '';
@@ -58,34 +55,33 @@ function getGeminiApiKey() {
 }
 
 function hasVertexBackend() {
-    return Boolean(getVertexApiKey() || process.env.GOOGLE_GENAI_USE_VERTEXAI === 'true' || process.env.GOOGLE_CLOUD_PROJECT);
+    return Boolean(getVertexApiKey());
 }
 
 function hasGeminiBackend() {
     return Boolean(getGeminiApiKey());
 }
 
+// Vertex express (AQ.* enterprise key) is primary when configured; the
+// Gemini Developer API key is the fallback backend.
 function getPrimaryBackend() {
-    const configured = (process.env.GENAI_PRIMARY_BACKEND || '').trim().toLowerCase();
-    if (configured === BACKEND_VERTEX || configured === BACKEND_GEMINI) {
-        return configured;
-    }
-
     return hasVertexBackend() ? BACKEND_VERTEX : BACKEND_GEMINI;
 }
 
 function getProviderRuntime() {
     return {
         primaryBackend: getPrimaryBackend(),
-        availableBackends: [hasVertexBackend() ? BACKEND_VERTEX : null, hasGeminiBackend() ? BACKEND_GEMINI : null].filter(Boolean),
-        allowGeminiFallback: process.env.GENAI_ENABLE_GEMINI_FALLBACK !== 'false',
+        availableBackends: [
+            hasVertexBackend() ? BACKEND_VERTEX : null,
+            hasGeminiBackend() ? BACKEND_GEMINI : null,
+        ].filter(Boolean),
+        allowGeminiFallback: hasVertexBackend() && hasGeminiBackend(),
         retryAttempts: MAX_ATTEMPTS,
         pageModel: DEFAULT_PAGE_MODEL,
         pageModelFallbacks: DEFAULT_PAGE_MODEL_FALLBACKS,
         keywordModel: DEFAULT_KEYWORD_MODEL,
         keywordModelFallbacks: DEFAULT_KEYWORD_MODEL_FALLBACKS,
         groundedSearchModel: DEFAULT_GROUNDED_SEARCH_MODEL,
-        location: DEFAULT_LOCATION,
     };
 }
 
@@ -93,74 +89,57 @@ function formatBackendLabel(backend) {
     return backend === BACKEND_VERTEX ? 'Vertex AI' : 'Gemini API';
 }
 
-function buildClient(backend) {
-    if (backend === BACKEND_VERTEX) {
-        const apiKey = getVertexApiKey();
-
-        if (apiKey) {
-            return new GoogleGenAI({
-                vertexai: true,
-                apiKey,
-                apiVersion: process.env.GENAI_VERTEX_API_VERSION || DEFAULT_API_VERSION,
-            });
-        }
-
-        const options = {
-            vertexai: true,
-            apiVersion: process.env.GENAI_VERTEX_API_VERSION || DEFAULT_API_VERSION,
-            location: DEFAULT_LOCATION,
-        };
-
-        const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
-        if (project) {
-            options.project = project;
-        }
-
-        return new GoogleGenAI(options);
-    }
-
-    return new GoogleGenAI({
-        apiKey: getGeminiApiKey(),
-        apiVersion: DEFAULT_API_VERSION,
-    });
-}
-
 function getClient(backend) {
+    if (clients[backend]) {
+        return clients[backend];
+    }
+
     if (backend === BACKEND_VERTEX) {
-        if (!vertexClient) {
-            vertexClient = buildClient(BACKEND_VERTEX);
-        }
-        return vertexClient;
+        clients[backend] = new GoogleGenAI({
+            vertexai: true,
+            apiKey: getVertexApiKey(),
+            apiVersion: process.env.GENAI_VERTEX_API_VERSION || 'v1',
+        });
+        return clients[backend];
     }
 
-    if (!geminiClient) {
-        geminiClient = buildClient(BACKEND_GEMINI);
+    const geminiOptions = {
+        apiKey: getGeminiApiKey(),
+    };
+    if (process.env.GENAI_API_VERSION) {
+        geminiOptions.apiVersion = process.env.GENAI_API_VERSION;
     }
-
-    return geminiClient;
+    clients[backend] = new GoogleGenAI(geminiOptions);
+    return clients[backend];
 }
 
-function buildBackendOrder(preferredBackend, allowFallback = true) {
-    const primary = preferredBackend || getPrimaryBackend();
+function buildBackendOrder(allowFallback = true) {
     const order = [];
-
-    if (primary === BACKEND_VERTEX && hasVertexBackend()) {
+    if (hasVertexBackend()) {
         order.push(BACKEND_VERTEX);
     }
-    if (primary === BACKEND_GEMINI && hasGeminiBackend()) {
+    if (hasGeminiBackend() && (allowFallback || order.length === 0)) {
         order.push(BACKEND_GEMINI);
     }
+    return order;
+}
 
-    if (allowFallback) {
-        if (!order.includes(BACKEND_VERTEX) && hasVertexBackend()) {
-            order.push(BACKEND_VERTEX);
-        }
-        if (!order.includes(BACKEND_GEMINI) && hasGeminiBackend()) {
-            order.push(BACKEND_GEMINI);
-        }
+// The Vertex express v1 API rejects responseMimeType and lags on thinking
+// options, so send it the proven-compatible config; parseJsonResponse
+// extracts JSON from raw text. The Gemini API gets the full config.
+function sanitizeConfigForBackend(backend, config = {}) {
+    if (!config || typeof config !== 'object') {
+        return {};
     }
 
-    return order;
+    if (backend !== BACKEND_VERTEX) {
+        return { ...config };
+    }
+
+    const nextConfig = { ...config };
+    delete nextConfig.responseMimeType;
+    delete nextConfig.thinkingConfig;
+    return nextConfig;
 }
 
 function extractErrorMessage(error) {
@@ -215,9 +194,41 @@ function isRetriableError(error) {
     ].some((token) => message.includes(token));
 }
 
-function getRetryDelayMs(attempt) {
+// Model-not-found errors should fall through to the next model in the list
+// instead of aborting (e.g. a preview model id was retired).
+function isUnknownModelError(error) {
+    const status = getErrorStatus(error);
+    const message = extractErrorMessage(error).toLowerCase();
+    return status === 404 || message.includes('not found') || message.includes('is not supported');
+}
+
+// A 429 against a *daily* quota will not clear within any sane retry window,
+// so skip retries and let the model/backend fallback chain take over.
+function isDailyQuotaError(error) {
+    if (getErrorStatus(error) !== 429) {
+        return false;
+    }
+    return /per\s*day|perday|daily/i.test(extractErrorMessage(error));
+}
+
+// Gemini 429 responses embed RetryInfo, e.g. '"retryDelay":"22s"'. Waiting
+// less than that just burns attempts inside the same rate-limit window.
+function getSuggestedRetryDelayMs(error) {
+    const message = extractErrorMessage(error);
+    const match = message.match(/retryDelay"?\s*[:=]\s*"?(\d+(?:\.\d+)?)\s*s/i)
+        || message.match(/retry (?:in|after)\s+(\d+(?:\.\d+)?)\s*s/i);
+    return match ? Math.ceil(Number(match[1]) * 1000) : 0;
+}
+
+const RATE_LIMIT_MIN_DELAY_MS = 10000;
+const MAX_RETRY_DELAY_MS = 120000;
+
+function getRetryDelayMs(attempt, error = null) {
     const jitter = Math.floor(Math.random() * 250);
-    return BASE_RETRY_DELAY_MS * (2 ** Math.max(0, attempt - 1)) + jitter;
+    const backoff = BASE_RETRY_DELAY_MS * (2 ** Math.max(0, attempt - 1)) + jitter;
+    const suggested = getSuggestedRetryDelayMs(error);
+    const floor = getErrorStatus(error) === 429 ? Math.max(backoff, RATE_LIMIT_MIN_DELAY_MS) : backoff;
+    return Math.min(Math.max(floor, suggested), MAX_RETRY_DELAY_MS);
 }
 
 function sleep(ms) {
@@ -240,20 +251,6 @@ function getResponseText(response) {
     }
 
     return '';
-}
-
-function sanitizeConfigForBackend(backend, config = {}) {
-    if (!config || typeof config !== 'object') {
-        return {};
-    }
-
-    const nextConfig = { ...config };
-
-    // Some backends lag behind the latest thinking options, so keep tool / JSON
-    // config intact but strip the most compatibility-sensitive setting.
-    delete nextConfig.thinkingConfig;
-
-    return nextConfig;
 }
 
 function buildModelOrder(options = {}) {
@@ -391,8 +388,9 @@ async function requestContentFromBackend(backend, options) {
                 attempt,
             };
         } catch (error) {
-            const retriable = isRetriableError(error);
+            const retriable = isRetriableError(error) && !isDailyQuotaError(error);
             const message = extractErrorMessage(error);
+            const delayMs = retriable ? getRetryDelayMs(attempt, error) : 0;
 
             emitEvent(onEvent, {
                 type: retriable && attempt < MAX_ATTEMPTS ? 'retry' : 'error',
@@ -404,13 +402,14 @@ async function requestContentFromBackend(backend, options) {
                 maxAttempts: MAX_ATTEMPTS,
                 message,
                 status: getErrorStatus(error),
+                delayMs,
             });
 
             if (!retriable || attempt >= MAX_ATTEMPTS) {
                 throw error;
             }
 
-            await sleep(getRetryDelayMs(attempt));
+            await sleep(delayMs);
         }
     }
 
@@ -418,11 +417,11 @@ async function requestContentFromBackend(backend, options) {
 }
 
 async function generateContent(options) {
-    const backendOrder = buildBackendOrder(options.preferredBackend, options.allowFallback !== false);
+    const backendOrder = buildBackendOrder(options.allowFallback !== false);
     const modelOrder = buildModelOrder(options);
 
     if (!backendOrder.length) {
-        throw new Error('No AI backend is configured. Add VERTEX_AI_API_KEY for Vertex AI and optionally GEMINI_API_KEY as fallback.');
+        throw new Error('No AI backend is configured. Add VERTEX_AI_API_KEY or GEMINI_API_KEY to server/.env.');
     }
     if (!modelOrder.length) {
         throw new Error('No AI model is configured for this request.');
@@ -496,4 +495,14 @@ module.exports = {
     generateContent,
     generateJson,
     getProviderRuntime,
+    __internal: {
+        buildBackendOrder,
+        isDailyQuotaError,
+        getRetryDelayMs,
+        getSuggestedRetryDelayMs,
+        isRetriableError,
+        isUnknownModelError,
+        parseJsonResponse,
+        sanitizeConfigForBackend,
+    },
 };

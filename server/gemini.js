@@ -1,7 +1,7 @@
 require('dotenv').config();
 
 const { launchBrowser } = require('./browser');
-const { BACKEND_VERTEX, generateJson } = require('./genaiProvider');
+const { generateJson } = require('./genaiProvider');
 const { assertPublicHttpUrl } = require('./networkSafety');
 
 const MAX_ANALYSIS_CONTENT_LENGTH = 100000;
@@ -83,7 +83,6 @@ Return strictly valid JSON:
     try {
         const response = await generateJson({
             modelType: 'page',
-            preferredBackend: BACKEND_VERTEX,
             taskName: 'page content analysis',
             contents: prompt,
             config: {

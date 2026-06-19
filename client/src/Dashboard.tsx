@@ -2,14 +2,17 @@ import { useEffect, useMemo, useState } from 'react';
 import {
     Activity,
     AlertCircle,
+    Printer,
     Download,
     FolderCog,
     ChevronDown,
     Globe,
     History,
     Layout,
+    Link2,
     Loader2,
     RefreshCw,
+    Share2,
     Zap,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -26,6 +29,7 @@ import CrawlStatus from './components/dashboard/CrawlStatus';
 import PerformanceSummary from './components/dashboard/PerformanceSummary';
 import { downloadCsv } from './csv';
 import { useRouter } from './router';
+import { copyCurrentUrl, printCurrentPage, shareCurrentUrl } from './reportActions';
 import { useToast } from './toast';
 import { OperatorStatePanel } from './components/common/OperatorUi';
 import { OperatorComparisonCard, OperatorMetricTile } from './components/common/OperatorStats';
@@ -94,6 +98,18 @@ function formatSnapshotLabel(timestamp?: string | null) {
     }
 
     return new Date(timestamp).toLocaleString();
+}
+
+function buildSpreadsheetUrl(project: Project | null, analysis: AnalysisData | null) {
+    if (analysis?.spreadsheetUrl) {
+        return analysis.spreadsheetUrl;
+    }
+
+    if (!project?.spreadsheetId) {
+        return '';
+    }
+
+    return `https://docs.google.com/spreadsheets/d/${project.spreadsheetId}/edit#gid=${project.sheetGid ?? 0}`;
 }
 
 interface AuditHistoryItem {
@@ -403,6 +419,7 @@ export default function Dashboard({ user }: DashboardProps) {
         [projects, user.role, viewerGoogleConnected]
     );
     const selectedProject = readyProjects.find((project) => project.id === selectedProjectId) || null;
+    const spreadsheetUrl = buildSpreadsheetUrl(selectedProject, data);
     const showDashboardBootstrapLoading = activeTab === 'dashboard' && projectsLoading;
     const showDashboardProjectsError = activeTab === 'dashboard' && !projectsLoading && Boolean(projectsError);
     const showDashboardNoProject = activeTab === 'dashboard' && !projectsLoading && !projectsError && !selectedProject && incompleteProjects.length === 0;
@@ -455,7 +472,7 @@ export default function Dashboard({ user }: DashboardProps) {
         }
 
         try {
-            await api.requestIndexing(url);
+            await api.requestIndexing(url, selectedProjectId);
             push({ tone: 'success', title: 'Indexing requested', description: url });
         } catch (issue) {
             push({ tone: 'error', title: 'Indexing request failed', description: issue instanceof Error ? issue.message : 'Unknown error' });
@@ -482,6 +499,18 @@ export default function Dashboard({ user }: DashboardProps) {
             rows,
         );
         push({ tone: 'success', title: 'Dashboard exported', description: 'CSV download started.' });
+    };
+
+    const handleCopyPageLink = async () => {
+        await copyCurrentUrl(push, '/dashboard');
+    };
+
+    const handleSharePage = async () => {
+        await shareCurrentUrl(push, {
+            path: '/dashboard',
+            title: data?.project || selectedProject?.name || 'ClimbSEO dashboard',
+            text: 'Open the dashboard workspace in ClimbSEO.',
+        });
     };
 
     return (
@@ -519,7 +548,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
                         {/* Project switcher */}
                         {readyProjects.length > 0 && (
-                            <div className="relative shrink-0">
+                            <div data-print-hidden className="relative shrink-0">
                                 <select
                                     value={selectedProjectId}
                                     onChange={(e) => {
@@ -546,7 +575,7 @@ export default function Dashboard({ user }: DashboardProps) {
                 </div>
 
                 {/* Bottom bar: nav tabs */}
-                <div className="max-w-7xl mx-auto px-6">
+                <div data-print-hidden className="max-w-7xl mx-auto px-6">
                     <nav className="flex items-center border-l-2 border-black">
                         {surfaceTabs.map((tab) => (
                             <button
@@ -741,7 +770,7 @@ export default function Dashboard({ user }: DashboardProps) {
 
             {/* Action toolbar — shown when dashboard tab is active and not in a terminal error/empty state */}
             {activeTab === 'dashboard' && !showDashboardBootstrapLoading && !showDashboardProjectsError && !showDashboardNoProject && !showDashboardSetupRequired && (
-                <div className="border-b-2 border-black bg-white">
+                <div data-print-hidden className="border-b-2 border-black bg-white">
                     <div className="max-w-7xl mx-auto px-6 py-3 flex flex-wrap items-center gap-3">
                         {/* Snapshot label */}
                         <div className="flex items-center gap-2 mr-auto min-w-0">
@@ -792,6 +821,33 @@ export default function Dashboard({ user }: DashboardProps) {
                                 Export CSV
                             </button>
                         )}
+
+                        {spreadsheetUrl && (
+                            <a
+                                href={spreadsheetUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="operator-button-secondary px-4 py-2"
+                            >
+                                <Link2 className="w-3.5 h-3.5" />
+                                Open Sheet
+                            </a>
+                        )}
+
+                        <button onClick={() => printCurrentPage()} className="operator-button-secondary px-4 py-2">
+                            <Printer className="w-3.5 h-3.5" />
+                            Print
+                        </button>
+
+                        <button onClick={() => void handleCopyPageLink()} className="operator-button-secondary px-4 py-2">
+                            <Link2 className="w-3.5 h-3.5" />
+                            Copy Link
+                        </button>
+
+                        <button onClick={() => void handleSharePage()} className="operator-button-secondary px-4 py-2">
+                            <Share2 className="w-3.5 h-3.5" />
+                            Share
+                        </button>
 
                         <button
                             onClick={runAnalysis}
@@ -928,13 +984,13 @@ export default function Dashboard({ user }: DashboardProps) {
                         <div className="operator-panel lg:col-span-8 p-8">
                             <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-8 gap-y-12">
                                 {[
-                                    { label: 'Total Clicks', value: data.metrics.clicks, sub: 'Organic', color: 'bg-blue-200' },
-                                    { label: 'Impressions', value: data.metrics.impressions, sub: 'Visibility', color: 'bg-indigo-200' },
-                                    { label: 'Avg CTR', value: data.metrics.ctr, sub: 'Click Rate', color: 'bg-teal-200' },
-                                    { label: 'Avg Position', value: data.metrics.avgPosition, sub: 'Ranking', color: 'bg-purple-200' },
-                                    { label: 'Avg Session', value: data.metrics.avgSessionDuration, sub: 'Time', color: 'bg-amber-200' },
-                                    { label: 'Engagement', value: data.metrics.engagementRate, sub: 'Active', color: 'bg-rose-200' },
-                                    { label: 'Visibility', value: data.metrics.visibility, sub: 'Index', color: 'bg-sky-200' }
+                                    { label: 'Total Clicks', value: data.metrics.clicks, sub: 'Organic', color: 'bg-blue-200', format: 'integer' as const },
+                                    { label: 'Impressions', value: data.metrics.impressions, sub: 'Visibility', color: 'bg-indigo-200', format: 'integer' as const },
+                                    { label: 'Avg CTR', value: data.metrics.ctr, sub: 'Click Rate', color: 'bg-teal-200', format: 'percent' as const },
+                                    { label: 'Avg Position', value: data.metrics.avgPosition, sub: 'Ranking', color: 'bg-purple-200', format: 'decimal' as const },
+                                    { label: 'Avg Session', value: data.metrics.avgSessionDuration, sub: 'Time', color: 'bg-amber-200', format: 'raw' as const },
+                                    { label: 'Engagement', value: data.metrics.engagementRate, sub: 'Active', color: 'bg-rose-200', format: 'percent' as const },
+                                    { label: 'Visibility', value: data.metrics.visibility, sub: 'Index', color: 'bg-sky-200', format: 'percent' as const }
                                 ].map((m, i) => (
                                     <OperatorMetricTile
                                         key={i}
@@ -942,6 +998,7 @@ export default function Dashboard({ user }: DashboardProps) {
                                         value={m.value}
                                         sublabel={m.sub}
                                         accentClassName={m.color}
+                                        format={m.format}
                                     />
                                 ))}
                             </div>

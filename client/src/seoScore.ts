@@ -89,14 +89,18 @@ export function computeSeoScore(result: AuditResult): SeoScoreBreakdown {
     }
 
     // ── Page speed — PSI desktop (15 pts) ───────────────────────
+    // Page speed: mobile-first PSI with desktop fallback (15 pts)
     let speedScore = 8;
     let speedReason = 'No PageSpeed data (neutral)';
-    const psi = result.psi_data?.desktop?.score;
+    const psi = typeof result.psi_data?.mobile?.score === 'number'
+        ? result.psi_data.mobile.score
+        : result.psi_data?.desktop?.score;
+    const psiLabel = typeof result.psi_data?.mobile?.score === 'number' ? 'mobile' : 'desktop';
     if (typeof psi === 'number') {
-        if (psi >= 90) { speedScore = 15; speedReason = `PSI desktop ${psi} — excellent`; }
-        else if (psi >= 70) { speedScore = 10; speedReason = `PSI desktop ${psi} — good`; }
-        else if (psi >= 50) { speedScore = 5; speedReason = `PSI desktop ${psi} — needs improvement`; }
-        else { speedScore = 1; speedReason = `PSI desktop ${psi} — poor`; }
+        if (psi >= 90) { speedScore = 15; speedReason = `PSI ${psiLabel} ${psi} - excellent`; }
+        else if (psi >= 70) { speedScore = 10; speedReason = `PSI ${psiLabel} ${psi} - good`; }
+        else if (psi >= 50) { speedScore = 5; speedReason = `PSI ${psiLabel} ${psi} - needs improvement`; }
+        else { speedScore = 1; speedReason = `PSI ${psiLabel} ${psi} - poor`; }
     }
 
     // ── Indexation (10 pts) ─────────────────────────────────────

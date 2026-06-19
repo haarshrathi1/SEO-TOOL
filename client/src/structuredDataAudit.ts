@@ -144,6 +144,130 @@ export function filterResultsByStructuredDataFilter(results: AuditResult[], filt
     return results.filter((result) => matchesStructuredDataFilter(result, filterId));
 }
 
+export interface SchemaRecommendation {
+    schemaType: string;
+    action: 'add' | 'fill';
+    priority: 'high' | 'medium' | 'low';
+    reason: string;
+    suggestedFields?: Record<string, string>;
+}
+
+export interface SchemaOpportunity {
+    schemaType: string;
+    action: 'add' | 'fill';
+    priority: 'high' | 'medium' | 'low';
+    count: number;
+    sampleUrls: string[];
+    reason: string;
+}
+
+export interface SchemaOpportunitiesModel {
+    totalPagesWithOpportunities: number;
+    opportunities: SchemaOpportunity[];
+}
+
+export function buildSchemaRecommendationsForPage(result: AuditResult): SchemaRecommendation[] {
+    if (result.contentBlocked || (result.httpStatus !== undefined && result.httpStatus >= 400)) return [];
+
+    const urlLower = result.url.toLowerCase();
+    const titleLower = (result.title || '').toLowerCase();
+    const h1Lower = (result.h1Text || '').toLowerCase();
+    const combined = `${urlLower} ${titleLower} ${h1Lower}`;
+    const existingTypes = new Set(result.structuredData?.itemTypes || []);
+    const has = (type: string) => existingTypes.has(type);
+
+    const recs: SchemaRecommendation[] = [];
+
+    // Product
+    const isProduct = /\/(product|shop|buy|item|sku|p\/|pdp)[/\-_]/.test(urlLower)
+        || /(price|buy now|add to cart|add to bag|\$\s*\d|€\s*\d|£\s*\d)/i.test(combined);
+    if (isProduct && !has('Product')) {
+        recs.push({ schemaType: 'Product', action: 'add', priority: 'high', reason: 'Product page signals detected (URL or pricing/CTA keywords). Product schema enables rich results with price and availability.', suggestedFields: { name: result.h1Text || result.title || '' } });
+    }
+
+    // Article / BlogPosting
+    const isBlog = /\/(blog|article|post|news|story)[/\-_]/.test(urlLower) || /(written by|published|author|min read)/i.test(combined);
+    const isLongContent = (result.wordCount || 0) > 600;
+    const h1WordCount = (result.h1Text || '').trim().split(/\s+/).filter(Boolean).length;
+    if (isBlog && isLongContent && h1WordCount >= 4 && !has('Article') && !has('BlogPosting') && !has('NewsArticle')) {
+        recs.push({ schemaType: 'BlogPosting', action: 'add', priority: 'medium', reason: 'Blog/article page with long-form content detected. Article schema enables author rich results and better indexation signals.', suggestedFields: { headline: result.h1Text || result.title || '' } });
+    }
+
+    // FAQPage
+    const isFaq = /\/(faq|help|support|questions)[/\-_]/.test(urlLower) || /(frequently asked|faq|q&a)/i.test(combined);
+    if (isFaq && !has('FAQPage')) {
+        recs.push({ schemaType: 'FAQPage', action: 'add', priority: 'high', reason: 'FAQ content detected. FAQPage schema can display Q&As directly in search results, improving CTR.' });
+    }
+
+    // Recipe
+    const isRecipe = /\/(recipe|cook|bake)[/\-_]/.test(urlLower) || /(recipe|ingredients|prep time|cook time)/i.test(combined);
+    if (isRecipe && !has('Recipe')) {
+        recs.push({ schemaType: 'Recipe', action: 'add', priority: 'high', reason: 'Recipe content detected. Recipe schema enables rich results with ratings, cook time, and calories.', suggestedFields: { name: result.h1Text || result.title || '' } });
+    }
+
+    // HowTo
+    const isHowTo = h1Lower.startsWith('how to') || /\/(how-to|tutorial|step-by-step)[/\-_]/.test(urlLower);
+    if (isHowTo && !has('HowTo')) {
+        recs.push({ schemaType: 'HowTo', action: 'add', priority: 'medium', reason: 'How-to content detected. HowTo schema enables step-by-step rich results in Google Search.', suggestedFields: { name: result.h1Text || result.title || '' } });
+    }
+
+    // LocalBusiness
+    const isLocalPage = /\/(contact|location|about|store|branch|find-us)[/\-_]/.test(urlLower);
+    const hasLocalSignals = /(address|phone|open|hours|directions|get in touch)/i.test(combined);
+    if (isLocalPage && hasLocalSignals && !has('LocalBusiness') && !has('Organization')) {
+        recs.push({ schemaType: 'LocalBusiness', action: 'add', priority: 'high', reason: 'Local business contact/location page detected. LocalBusiness schema improves local search visibility and Google Maps integration.', suggestedFields: { name: result.title || '' } });
+    }
+
+    // BreadcrumbList — only suggest for non-root pages that already have other schema
+    const urlPath = (() => { try { return new URL(result.url).pathname; } catch { return ''; } })();
+    const isNonRoot = urlPath.length > 1 && urlPath !== '/';
+    if (isNonRoot && !has('BreadcrumbList') && existingTypes.size > 0) {
+        recs.push({ schemaType: 'BreadcrumbList', action: 'add', priority: 'low', reason: 'No BreadcrumbList schema detected on a page that already uses other schema types. Breadcrumbs improve navigation display in SERPs.' });
+    }
+
+    // Fill recommendations: surface existing schema errors as actionable fills
+    (result.structuredData?.issues || []).forEach((issue) => {
+        if (issue.severity === 'error') {
+            recs.push({ schemaType: issue.type, action: 'fill', priority: 'high', reason: issue.message });
+        }
+    });
+
+    return recs;
+}
+
+export function buildSchemaOpportunitiesModel(results: AuditResult[]): SchemaOpportunitiesModel {
+    const opportunityMap = new Map<string, { opp: SchemaOpportunity; pages: Set<string> }>();
+    const pagesWithOpportunities = new Set<string>();
+
+    results.forEach((result) => {
+        const recs = buildSchemaRecommendationsForPage(result);
+        if (recs.length > 0) pagesWithOpportunities.add(result.url);
+
+        recs.forEach((rec) => {
+            const key = `${rec.schemaType}::${rec.action}`;
+            if (!opportunityMap.has(key)) {
+                opportunityMap.set(key, {
+                    opp: { schemaType: rec.schemaType, action: rec.action, priority: rec.priority, count: 0, sampleUrls: [], reason: rec.reason },
+                    pages: new Set(),
+                });
+            }
+            const entry = opportunityMap.get(key)!;
+            if (!entry.pages.has(result.url)) {
+                entry.pages.add(result.url);
+                entry.opp.count += 1;
+                if (entry.opp.sampleUrls.length < 4) entry.opp.sampleUrls.push(result.url);
+            }
+        });
+    });
+
+    const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
+    const opportunities = [...opportunityMap.values()]
+        .map((e) => e.opp)
+        .sort((a, b) => (priorityOrder[a.priority] ?? 3) - (priorityOrder[b.priority] ?? 3) || b.count - a.count);
+
+    return { totalPagesWithOpportunities: pagesWithOpportunities.size, opportunities };
+}
+
 export function buildStructuredDataAuditModel(results: AuditResult[]): StructuredDataAuditModel {
     const pagesWithSchema = results.filter((result) => (result.structuredData?.totalItems || 0) > 0);
     const pagesMissingSchema = results.filter((result) => matchesStructuredDataFilter(result, 'schema-missing'));

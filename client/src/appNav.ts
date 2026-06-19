@@ -1,4 +1,4 @@
-﻿import { FolderCog, LayoutDashboard, Search, Zap } from 'lucide-react';
+import { FolderCog, LayoutDashboard, Search, Shield, Zap } from 'lucide-react';
 import type { AuthUser } from './types';
 
 export interface NavItem {
@@ -11,6 +11,7 @@ export const defaultAdminNav: NavItem[] = [
     { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/keywords', label: 'Keywords', icon: Search },
     { path: '/projects', label: 'Projects', icon: FolderCog },
+    { path: '/admin', label: 'Admin', icon: Shield },
 ];
 
 function hasAccess(user: AuthUser, accessName: 'keywords' | 'dashboard' | 'audit') {
@@ -38,10 +39,10 @@ export function canAccessRoute(user: AuthUser, path: string): boolean {
 
     switch (normalized) {
         case '/dashboard': return canAccessDashboardSurface(user);
-        case '/keywords':  return canAccessKeywords(user);
-        case '/projects':  return true;
-        // Root and any unknown path are not protected app routes.
-        default:           return false;
+        case '/keywords': return canAccessKeywords(user);
+        case '/projects': return true;
+        case '/admin': return user.role === 'admin';
+        default: return false;
     }
 }
 

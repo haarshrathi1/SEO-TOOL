@@ -1,8 +1,16 @@
 const { google } = require('googleapis');
-const { getAuthClient, getServiceAccountAuth } = require('./auth');
+const { getAuthClient, getServiceAccountAuth, getProjectAuthClient } = require('./auth');
 
-const getBoxingClient = async () => {
-    // Priority 1: Service Account (Required for Indexing API usually)
+async function getIndexingClient(project) {
+    // Priority 1: Project-specific Google connection
+    if (project) {
+        const projectAuth = await getProjectAuthClient(project);
+        if (projectAuth) {
+            return google.indexing({ version: 'v3', auth: projectAuth });
+        }
+    }
+
+    // Priority 2: Service Account
     const saAuth = getServiceAccountAuth();
     if (saAuth) {
         try {
@@ -13,26 +21,18 @@ const getBoxingClient = async () => {
         }
     }
 
-    // Priority 2: User OAuth (Fallback)
+    // Priority 3: Shared admin OAuth
     const auth = getAuthClient();
-    if (!auth) throw new Error('Not authenticated. Please add service_account.json to server/data/ or sign in.');
+    if (!auth) throw new Error('Not authenticated. Connect a Google account or sign in as admin.');
     return google.indexing({ version: 'v3', auth });
-};
+}
 
-/**
- * Request indexing (URL_UPDATED).
- * Use this when a page is added or updated.
- * @param {string} url 
- */
-const publish = async (url) => {
+const publish = async (url, project) => {
     try {
-        const service = await getBoxingClient();
+        const service = await getIndexingClient(project);
         console.log(`Requesting indexing for: ${url}`);
         const res = await service.urlNotifications.publish({
-            requestBody: {
-                url: url,
-                type: 'URL_UPDATED'
-            }
+            requestBody: { url, type: 'URL_UPDATED' },
         });
         return res.data;
     } catch (e) {
@@ -41,20 +41,12 @@ const publish = async (url) => {
     }
 };
 
-/**
- * Request removal (URL_DELETED).
- * Use this when a page is deleted/404.
- * @param {string} url 
- */
-const remove = async (url) => {
+const remove = async (url, project) => {
     try {
-        const service = await getBoxingClient();
+        const service = await getIndexingClient(project);
         console.log(`Requesting removal for: ${url}`);
         const res = await service.urlNotifications.publish({
-            requestBody: {
-                url: url,
-                type: 'URL_DELETED'
-            }
+            requestBody: { url, type: 'URL_DELETED' },
         });
         return res.data;
     } catch (e) {
@@ -63,4 +55,15 @@ const remove = async (url) => {
     }
 };
 
-module.exports = { publish, remove };
+const getMetadata = async (url, project) => {
+    try {
+        const service = await getIndexingClient(project);
+        const res = await service.urlNotifications.getMetadata({ url });
+        return res.data;
+    } catch (e) {
+        console.error('Indexing Metadata Error:', e.message);
+        return { error: e.message };
+    }
+};
+
+module.exports = { publish, remove, getMetadata };

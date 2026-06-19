@@ -148,3 +148,68 @@ test('applyGroundedSearchUsageLimit resets usage across date boundaries', () => 
     assert.equal(decision.remaining, 499);
     assert.deepEqual(decision.nextState, { date: '2026-03-25', count: 1 });
 });
+
+test('normalizeBlogBrief keeps a valid model brief and normalizes roles and sources', () => {
+    const brief = __internal.normalizeBlogBrief({
+        recommendedTitle: 'CRM Software: The Honest Guide',
+        titleOptions: ['CRM Software: The Honest Guide', 'Best CRM Software Compared'],
+        metaDescription: 'Compare CRM software with real pricing and real questions answered.',
+        slug: 'CRM Software Guide!!',
+        readerPromise: 'Pick the right CRM in one read.',
+        targetKeywords: [
+            { term: 'crm software', role: 'PRIMARY', placement: 'H1 + first 100 words' },
+            { term: 'best crm for agencies', role: 'nonsense-role', placement: 'H2' },
+        ],
+        outline: [
+            { heading: 'What is CRM software?', purpose: 'Define it', coversQueries: ['what is crm'] },
+            { heading: 'Pricing compared', purpose: 'Costs', coversQueries: [] },
+            { heading: 'Best picks by team size', purpose: 'Recommendations', coversQueries: ['best crm for agencies'] },
+        ],
+        faq: [
+            { question: 'What is CRM used for?', source: 'paa', answerAngle: 'Short answer first.' },
+            { question: 'Is there free CRM?', source: 'made-up-source', answerAngle: '' },
+        ],
+        searcherLanguage: ['crm software for small business', 'crm software pricing'],
+    }, { seed: 'crm software' });
+
+    assert.equal(brief.generatedBy, 'model');
+    assert.equal(brief.slug, 'crm-software-guide');
+    assert.equal(brief.targetKeywords[0].role, 'primary');
+    assert.equal(brief.targetKeywords[1].role, 'supporting');
+    assert.equal(brief.faq[1].source, 'paa');
+    assert.equal(brief.outline.length, 3);
+});
+
+test('normalizeBlogBrief falls back to a brief built from real search data', () => {
+    const brief = __internal.normalizeBlogBrief(null, {
+        seed: 'crm software',
+        paaQuestions: ['What does CRM stand for?', 'Is CRM worth it for small business?'],
+        relatedSearches: ['crm software free', 'crm software examples'],
+        suggestions: ['crm software for small business'],
+        keywordUniverse: { keywords: [{ term: 'best crm software' }, { term: 'crm software' }] },
+    });
+
+    assert.equal(brief.generatedBy, 'fallback');
+    assert.equal(brief.slug, 'crm-software');
+    assert.equal(brief.targetKeywords[0].term, 'crm software');
+    assert.equal(brief.targetKeywords[0].role, 'primary');
+    assert.ok(brief.faq.every((entry) => entry.source === 'paa'));
+    assert.ok(brief.faq.some((entry) => entry.question === 'What does CRM stand for?'));
+    assert.ok(brief.outline.length >= 3);
+    assert.ok(brief.searcherLanguage.includes('crm software free'));
+});
+
+test('normalizeBlogBrief rejects a thin model brief in favor of the fallback', () => {
+    const brief = __internal.normalizeBlogBrief({
+        recommendedTitle: 'Title only, no outline or keywords',
+        outline: [{ heading: 'Single section' }],
+    }, {
+        seed: 'crm software',
+        paaQuestions: ['What does CRM stand for?'],
+        relatedSearches: [],
+        suggestions: [],
+        keywordUniverse: { keywords: [] },
+    });
+
+    assert.equal(brief.generatedBy, 'fallback');
+});

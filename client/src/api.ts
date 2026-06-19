@@ -2,33 +2,45 @@
     AnalysisData,
     AuditJob,
     AuditResult,
+    DemoSnapshotResponse,
     AuthConfigResponse,
     GoogleConnectionStatus,
     AuthSessionResponse,
     GoogleResourcesResponse,
     GoogleLoginResponse,
     HistoryItem,
-    KeywordData,
-    KeywordDataV2,
     KeywordAdsStatus,
     KeywordHistoryItem,
     KeywordJob,
     KeywordScanResult,
     PaginatedResult,
     Project,
+    PSIData,
     ViewerRecord,
+    WorkspaceMember,
 } from './types';
 
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/+$/, '');
-const productionApiBaseUrl = 'https://seo-tool-tcqn.onrender.com';
 const API_BASE_URL = configuredApiBaseUrl || (import.meta.env.PROD
-    ? productionApiBaseUrl
+    ? ''
     : 'http://localhost:3001');
 
 export const getApiUrl = (endpoint: string) => `${API_BASE_URL}${endpoint}`;
 
+let csrfTokenCache = '';
+
+function maybeStoreCsrfToken(payload: unknown) {
+    if (payload && typeof payload === 'object' && 'csrfToken' in payload) {
+        const nextToken = (payload as { csrfToken?: unknown }).csrfToken;
+        if (typeof nextToken === 'string' && nextToken.trim()) {
+            csrfTokenCache = nextToken;
+        }
+    }
+}
+
 async function handleResponse<T>(res: Response): Promise<T> {
     if (res.status === 401) {
+        csrfTokenCache = '';
         const json = await res.json().catch(() => ({} as Record<string, string>));
         throw new Error(json.error || json.message || 'Unauthorized');
     }
@@ -43,13 +55,45 @@ async function handleResponse<T>(res: Response): Promise<T> {
         throw new Error(json.error || json.message || 'Request failed');
     }
 
-    return res.json() as Promise<T>;
+    const payload = await res.json() as T;
+    maybeStoreCsrfToken(payload);
+    return payload;
+}
+
+function isMutatingRequest(method?: string) {
+    const normalized = String(method || 'GET').toUpperCase();
+    return normalized !== 'GET' && normalized !== 'HEAD' && normalized !== 'OPTIONS';
+}
+
+async function getCsrfToken() {
+    if (csrfTokenCache) {
+        return csrfTokenCache;
+    }
+
+    const res = await fetch(getApiUrl('/api/auth/csrf'), {
+        credentials: 'include',
+    });
+
+    if (!res.ok) {
+        return '';
+    }
+
+    const payload = await res.json().catch(() => ({ csrfToken: '' }));
+    maybeStoreCsrfToken(payload);
+    return csrfTokenCache;
 }
 
 async function request<T>(endpoint: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
     if (init.body && !headers.has('Content-Type')) {
         headers.set('Content-Type', 'application/json');
+    }
+
+    if (isMutatingRequest(init.method)) {
+        const csrfToken = await getCsrfToken();
+        if (csrfToken) {
+            headers.set('x-csrf-token', csrfToken);
+        }
     }
 
     const res = await fetch(getApiUrl(endpoint), {
@@ -86,7 +130,9 @@ export const api = {
 
     getAuthConfig: () => request<AuthConfigResponse>('/api/auth/config'),
 
-    authMe: () => request<AuthSessionResponse>('/api/auth/me'),
+    getDemoSnapshot: () => request<DemoSnapshotResponse>('/api/demo/summary'),
+
+    authMe: () => request<AuthSessionResponse>('/api/auth/session'),
 
     logout: () => request<{ message: string }>('/api/auth/logout', { method: 'POST' }),
 
@@ -102,11 +148,11 @@ export const api = {
 
     getViewers: () => request<ViewerRecord[]>('/api/auth/viewers'),
 
+    getWorkspaceMembers: () => request<{ items: WorkspaceMember[] }>('/api/workspaces/current/members'),
+
     removeViewer: (email: string) => request<{ message: string }>(`/api/auth/viewers/${encodeURIComponent(email)}`, {
         method: 'DELETE',
     }),
-
-    checkHealth: () => request<{ status: string; authenticated: boolean }>('/health'),
 
     getGoogleConnectionStatus: () => request<GoogleConnectionStatus>('/api/google/connection'),
 
@@ -125,10 +171,6 @@ export const api = {
         gscSiteUrl: options.gscSiteUrl || undefined,
         ga4PropertyId: options.ga4PropertyId || undefined,
     })}`),
-
-    loginGoogle: () => {
-        window.location.href = getApiUrl('/auth/google/login');
-    },
 
     connectProjectGoogle: (projectId?: string | null, redirectPath = '/projects') => {
         const query = createQuery({
@@ -183,19 +225,21 @@ export const api = {
 
     getAuditJobResult: (jobId: string) => request<AuditJob>(`/api/audit/jobs/${encodeURIComponent(jobId)}/result`),
 
-    requestIndexing: (url: string) => request<{ url: string; notifyTime?: string }>('/api/indexing/publish', {
+    cancelAuditJob: (jobId: string) => request<AuditJob>(`/api/audit/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }),
+
+    createGscDeepAuditJob: (projectId: string) => request<AuditJob>('/api/audit/gsc-deep', {
         method: 'POST',
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ projectId }),
     }),
 
-    researchKeywords: (seed: string) => request<KeywordData>('/api/keywords/research', {
+    requestIndexing: (url: string, projectId?: string) => request<{ url: string; notifyTime?: string }>('/api/indexing/publish', {
         method: 'POST',
-        body: JSON.stringify({ seed }),
+        body: JSON.stringify({ url, projectId }),
     }),
 
-    researchKeywordsV2: (seed: string) => request<KeywordDataV2>('/api/keywords/research-v2', {
+    checkSpeed: (url: string, projectId: string) => request<{ url: string; psi_score?: number; psi_data?: PSIData }>('/api/audit/speed', {
         method: 'POST',
-        body: JSON.stringify({ seed }),
+        body: JSON.stringify({ url, projectId }),
     }),
 
     getKeywordAdsStatus: () => request<KeywordAdsStatus>('/api/keywords/ads-access', {
@@ -230,6 +274,17 @@ export const api = {
     analyzePageKeywords: (url: string) => request<KeywordScanResult>('/api/keywords/analyze-content', {
         method: 'POST',
         body: JSON.stringify({ url }),
+    }),
+
+    sendChatMessage: (projectId: string, message: string) => request<{ message: string }>('/api/chat/message', {
+        method: 'POST',
+        body: JSON.stringify({ projectId, message }),
+    }),
+
+    getChatHistory: (projectId: string) => request<{ messages: { role: string; content: string; timestamp: string }[] }>(`/api/chat/history?projectId=${encodeURIComponent(projectId)}`),
+
+    clearChatHistory: (projectId: string) => request<{ message: string }>(`/api/chat/history?projectId=${encodeURIComponent(projectId)}`, {
+        method: 'DELETE',
     }),
 };
 

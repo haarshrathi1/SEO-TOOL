@@ -1,6 +1,9 @@
-const { AdminUser, KeywordJob, Viewer } = require('./models');
+const { KeywordJob, User, WorkspaceMembership } = require('./models');
 const { runKeywordResearchV2, TOTAL_LAYERS, getRuntimeProviderLabel } = require('./keywordResearchService');
 const { persistKeywordResearchResult } = require('./keywordResearchPersistence');
+const { logger } = require('./logger');
+const { recordAuditEvent } = require('./auditEvents');
+const { QUEUE_NAMES, enqueueJob, isBullQueueEnabled, startWorker } = require('./queues');
 
 const KEYWORD_WORKER_ID = `keyword-worker:${process.pid}`;
 const DEFAULT_LEASE_MS = 3 * 60 * 1000;
@@ -49,52 +52,83 @@ function normalizeSeed(seed) {
 }
 
 function buildKeywordJobQuery(user, options = {}) {
-    const query = { ownerEmail: user.email };
+    const query = {};
+    if (user?.workspaceId) {
+        query.workspaceId = user.workspaceId;
+    }
     const projectId = normalizeProjectId(options.projectId);
     if (projectId) {
         query.projectId = projectId;
     }
+
+    const effectiveRole = user?.workspaceRole || user?.role;
+    if (effectiveRole === 'viewer') {
+        if (!Array.isArray(user.projectIds) || user.projectIds.length === 0) {
+            return null;
+        }
+
+        if (projectId) {
+            if (!user.projectIds.includes(projectId)) {
+                return null;
+            }
+        } else {
+            query.projectId = { $in: user.projectIds };
+        }
+    }
+
     return query;
 }
 
 function canAccessKeywordJob(job, user) {
-    return Boolean(job && user?.email && job.ownerEmail === user.email);
+    if (!job || !user) {
+        return false;
+    }
+
+    if (user.workspaceId && String(job.workspaceId || '') !== String(user.workspaceId || '')) {
+        return false;
+    }
+
+    const effectiveRole = user.workspaceRole || user.role;
+    if (effectiveRole !== 'viewer') {
+        return true;
+    }
+
+    if (!job.projectId) {
+        return false;
+    }
+
+    return Array.isArray(user.projectIds) && user.projectIds.includes(job.projectId);
 }
 
 async function loadJobUser(job) {
     const email = String(job?.ownerEmail || '').toLowerCase().trim();
-    if (!email) {
+    if (!email || !job?.workspaceId) {
         return null;
     }
 
-    const admin = await AdminUser.findOne({ email }).lean();
-    if (admin) {
-        return {
-            email,
-            role: 'admin',
-            access: ['keywords', 'dashboard', 'audit'],
-            features: ['keyword_ads'],
-            projectIds: [],
-        };
+    const user = await User.findOne({ email }).lean();
+    if (!user) {
+        return null;
     }
 
-    const viewer = await Viewer.findOne({ email }).lean();
-    if (viewer) {
-        return {
-            email,
-            role: 'viewer',
-            access: Array.isArray(viewer.access) ? viewer.access : ['keywords'],
-            features: Array.isArray(viewer.features) ? viewer.features : [],
-            projectIds: Array.isArray(viewer.projectIds) ? viewer.projectIds : [],
-        };
+    const membership = await WorkspaceMembership.findOne({
+        workspaceId: job.workspaceId,
+        userId: user._id,
+        status: { $ne: 'revoked' },
+    }).lean();
+    if (!membership) {
+        return null;
     }
 
     return {
         email,
-        role: 'viewer',
-        access: ['keywords'],
-        features: [],
-        projectIds: [],
+        role: membership.role === 'viewer' ? 'viewer' : 'admin',
+        workspaceRole: membership.role,
+        workspaceId: String(job.workspaceId),
+        userId: String(user._id),
+        access: Array.isArray(membership.access) ? membership.access : ['keywords'],
+        features: Array.isArray(membership.features) ? membership.features : [],
+        projectIds: Array.isArray(membership.projectIds) ? membership.projectIds : [],
     };
 }
 
@@ -102,11 +136,16 @@ function serializeJob(record, options = {}) {
     const job = typeof record.toObject === 'function' ? record.toObject() : record;
     return {
         id: job._id?.toString?.() || job.id,
+        workspaceId: String(job.workspaceId || ''),
         seed: job.seed,
         projectId: job.projectId || null,
         ownerEmail: job.ownerEmail,
         status: job.status,
         progress: job.progress,
+        summary: {
+            seed: job.seed,
+            provider: job.progress?.provider || getRuntimeProviderLabel(),
+        },
         error: job.error || '',
         keywordHistoryId: job.keywordHistoryId || null,
         historySaveError: job.historySaveError || '',
@@ -118,12 +157,12 @@ function serializeJob(record, options = {}) {
     };
 }
 
-async function touchKeywordJobLease(jobId) {
+async function touchKeywordJobLease(jobId, leaseOwner = KEYWORD_WORKER_ID) {
     const now = new Date();
     await KeywordJob.findOneAndUpdate(
         {
             _id: jobId,
-            leaseOwner: KEYWORD_WORKER_ID,
+            leaseOwner,
             status: 'running',
         },
         {
@@ -165,14 +204,15 @@ async function claimNextKeywordJob() {
     return claimed;
 }
 
-async function runKeywordJob(jobRecord) {
+async function runKeywordJob(jobRecord, options = {}) {
     const jobId = jobRecord._id?.toString?.() || String(jobRecord._id || jobRecord.id || '');
+    const leaseOwner = options.leaseOwner || KEYWORD_WORKER_ID;
     if (!jobId) {
         return;
     }
 
     const heartbeat = setInterval(() => {
-        void touchKeywordJobLease(jobId);
+        void touchKeywordJobLease(jobId, leaseOwner);
     }, getHeartbeatMs());
     heartbeat.unref?.();
 
@@ -192,11 +232,13 @@ async function runKeywordJob(jobRecord) {
         const user = await loadJobUser(jobRecord);
         const startedAt = jobRecord.startedAt || new Date();
         await KeywordJob.findOneAndUpdate(
-            { _id: jobId, leaseOwner: KEYWORD_WORKER_ID },
+            { _id: jobId },
             {
                 status: 'running',
                 startedAt,
                 progress: latestProgress,
+                leaseOwner,
+                leaseStartedAt: new Date(),
                 leaseExpiresAt: getLeaseExpiry(),
                 lastHeartbeatAt: new Date(),
             }
@@ -218,7 +260,7 @@ async function runKeywordJob(jobRecord) {
                     provider: progress.provider || getRuntimeProviderLabel(),
                 };
                 await KeywordJob.findOneAndUpdate(
-                    { _id: jobId, leaseOwner: KEYWORD_WORKER_ID },
+                    { _id: jobId },
                     {
                         status: 'running',
                         progress: latestProgress,
@@ -233,7 +275,7 @@ async function runKeywordJob(jobRecord) {
         });
 
         await KeywordJob.findOneAndUpdate(
-            { _id: jobId, leaseOwner: KEYWORD_WORKER_ID },
+            { _id: jobId },
             {
                 status: 'completed',
                 progress: {
@@ -257,9 +299,17 @@ async function runKeywordJob(jobRecord) {
                 lastHeartbeatAt: new Date(),
             }
         );
+
+        await recordAuditEvent({
+            workspaceId: jobRecord.workspaceId,
+            action: 'keyword.completed',
+            entityType: 'keywordJob',
+            entityId: jobId,
+            metadata: { projectId: jobRecord.projectId || null, seed: jobRecord.seed },
+        });
     } catch (error) {
         await KeywordJob.findOneAndUpdate(
-            { _id: jobId, leaseOwner: KEYWORD_WORKER_ID },
+            { _id: jobId },
             {
                 status: 'failed',
                 error: error.message || 'Keyword research failed',
@@ -282,11 +332,45 @@ async function runKeywordJob(jobRecord) {
                 lastHeartbeatAt: new Date(),
             }
         );
+
+        logger.error('keyword.job_failed', {
+            keywordJobId: jobId,
+            projectId: jobRecord.projectId || null,
+            error: error instanceof Error ? error.message : String(error),
+        });
     } finally {
         clearInterval(heartbeat);
         runningKeywordJobs.delete(jobId);
-        void runKeywordWorkerTick();
+        if (!isBullQueueEnabled()) {
+            void runKeywordWorkerTick();
+        }
     }
+}
+
+async function processQueuedKeywordJob(keywordJobId) {
+    const record = await KeywordJob.findByIdAndUpdate(
+        keywordJobId,
+        {
+            $set: {
+                status: 'running',
+                leaseOwner: KEYWORD_WORKER_ID,
+                leaseStartedAt: new Date(),
+                leaseExpiresAt: getLeaseExpiry(),
+                lastHeartbeatAt: new Date(),
+                error: '',
+                completedAt: null,
+            },
+            $inc: { attemptCount: 1 },
+        },
+        { new: true }
+    ).lean();
+
+    if (!record) {
+        return null;
+    }
+
+    await runKeywordJob(record, { leaseOwner: KEYWORD_WORKER_ID });
+    return null;
 }
 
 async function runKeywordWorkerTick() {
@@ -319,7 +403,20 @@ function startKeywordWorkerLoop() {
     void runKeywordWorkerTick();
 }
 
-async function initializeKeywordJobs() {
+async function initializeKeywordJobs(options = {}) {
+    if (options.startWorkers !== true) {
+        return;
+    }
+
+    if (isBullQueueEnabled()) {
+        startWorker(QUEUE_NAMES.keyword, async (job) => {
+            await processQueuedKeywordJob(job.data.keywordJobId);
+        }, {
+            concurrency: getConcurrency(),
+        });
+        return;
+    }
+
     startKeywordWorkerLoop();
 }
 
@@ -330,7 +427,14 @@ async function createKeywordJob(seedInput, user, options = {}) {
     }
 
     const projectId = normalizeProjectId(options.projectId);
+    if (user?.workspaceRole === 'viewer') {
+        if (!projectId || !Array.isArray(user.projectIds) || !user.projectIds.includes(projectId)) {
+            throw new Error('Project access denied');
+        }
+    }
+
     const doc = await KeywordJob.create({
+        workspaceId: user.workspaceId,
         seed,
         projectId,
         ownerEmail: user.email,
@@ -350,12 +454,38 @@ async function createKeywordJob(seedInput, user, options = {}) {
         historySaveError: '',
     });
 
-    void runKeywordWorkerTick();
+    let queueJobId = null;
+    if (isBullQueueEnabled()) {
+        queueJobId = await enqueueJob(QUEUE_NAMES.keyword, {
+            keywordJobId: String(doc._id),
+        }, {
+            jobId: String(doc._id),
+        });
+        if (queueJobId) {
+            doc.set({ queueJobId });
+            await doc.save();
+        }
+    }
+
+    await recordAuditEvent({
+        workspaceId: user.workspaceId,
+        userId: user.userId,
+        action: 'keyword.created',
+        entityType: 'keywordJob',
+        entityId: String(doc._id),
+        metadata: { seed, projectId },
+    });
+
     return serializeJob(doc);
 }
 
 async function listKeywordJobs(user, options = {}) {
-    const jobs = await KeywordJob.find(buildKeywordJobQuery(user, options)).sort({ createdAt: -1 }).limit(20).lean();
+    const query = buildKeywordJobQuery(user, options);
+    if (!query) {
+        return [];
+    }
+
+    const jobs = await KeywordJob.find(query).sort({ createdAt: -1 }).limit(20).lean();
     return jobs.map((job) => serializeJob(job));
 }
 
@@ -379,11 +509,11 @@ module.exports = {
     listKeywordJobs,
     getKeywordJob,
     __internal: {
-        normalizeProjectId,
-        normalizeSeed,
         buildKeywordJobQuery,
         canAccessKeywordJob,
         loadJobUser,
+        normalizeProjectId,
+        normalizeSeed,
         parsePositiveInt,
         serializeJob,
     },
