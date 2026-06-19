@@ -1,0 +1,172 @@
+import { AlertTriangle, ChevronRight, Info, XCircle } from 'lucide-react';
+import { isHighValueUnderlinked, isIndexedOrphan } from '../../internalLinkRecommendations';
+import { buildTechnicalIssueCards, countTechnicalIssuesBySeverity, getTechnicalIssues } from '../../technicalIssues';
+import type { AuditResult } from '../../types';
+
+interface IssuesProps {
+    results: AuditResult[];
+    onReview: (filterId: string) => void;
+}
+
+export default function AuditIssues({ results, onReview }: IssuesProps) {
+    const indexedCount = results.filter((result) => result.status === 'PASS').length;
+    const orphanCount = results.filter((result) => isIndexedOrphan(result)).length;
+    const highValueUnderlinkedCount = results.filter((result) => isHighValueUnderlinked(result)).length;
+    const linkOpportunityCount = orphanCount + highValueUnderlinkedCount;
+    const issueCards = buildTechnicalIssueCards(results);
+    const severityCounts = countTechnicalIssuesBySeverity(results);
+    const criticalCards = issueCards.filter((issue) => issue.severity === 'critical' || issue.severity === 'high');
+    const warningCards = issueCards.filter((issue) => issue.severity === 'medium' || issue.severity === 'low' || issue.severity === 'info');
+    const reviewCount = results.filter((result) => getTechnicalIssues(result, results).length > 0).length;
+
+    return (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="grid gap-3 md:grid-cols-4">
+                <div className="border-2 border-black bg-green-100 p-4 shadow-[4px_4px_0px_0px_#000]">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Indexed</div>
+                    <div className="mt-2 text-3xl font-black text-black">{indexedCount}</div>
+                    <div className="mt-1 text-xs font-bold text-slate-600">Pages currently passing index checks.</div>
+                </div>
+                <div className="border-2 border-black bg-red-100 p-4 shadow-[4px_4px_0px_0px_#000]">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Needs Review</div>
+                    <div className="mt-2 text-3xl font-black text-black">{reviewCount}</div>
+                    <div className="mt-1 text-xs font-bold text-slate-600">Pages excluded, failing, or partially healthy.</div>
+                </div>
+                <div className="border-2 border-black bg-yellow-100 p-4 shadow-[4px_4px_0px_0px_#000]">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Critical Items</div>
+                    <div className="mt-2 text-3xl font-black text-black">{severityCounts.critical + severityCounts.high}</div>
+                    <div className="mt-1 text-xs font-bold text-slate-600">High-priority fixes surfaced below.</div>
+                </div>
+                <div className="border-2 border-black bg-blue-100 p-4 shadow-[4px_4px_0px_0px_#000]">
+                    <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Link Opportunities</div>
+                    <div className="mt-2 text-3xl font-black text-black">{linkOpportunityCount}</div>
+                    <div className="mt-1 text-xs font-bold text-slate-600">Pages that need stronger internal support.</div>
+                </div>
+            </div>
+
+            <div>
+                <h3 className="mb-4 flex w-fit items-center gap-2 border-2 border-black bg-red-100 px-2 text-sm font-black uppercase tracking-wider text-black">
+                    <XCircle className="h-4 w-4 text-red-600" />
+                    Critical Issues ({criticalCards.reduce((sum, issue) => sum + issue.count, 0)})
+                </h3>
+                <div className="space-y-3">
+                    {criticalCards.map((issue) => (
+                        <button
+                            key={issue.id}
+                            type="button"
+                            onClick={() => onReview(issue.id)}
+                            className="group flex w-full cursor-pointer items-center justify-between border-2 border-black bg-white p-4 text-left shadow-[4px_4px_0px_0px_#000] transition-all hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[6px_6px_0px_0px_#000] focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                        >
+                            <div className="flex items-center gap-4">
+                                <div className="border-2 border-black bg-[#FF6B6B] p-3 text-black">
+                                    <AlertTriangle className="h-5 w-5" />
+                                </div>
+                                <div>
+                                    <div className="text-lg font-black uppercase text-black">{issue.count} {issue.title}</div>
+                                    <div className="mt-0.5 text-sm font-bold text-slate-600">{issue.description}</div>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2 border-2 border-black bg-red-100 px-4 py-2 text-sm font-black uppercase text-black transition-colors group-hover:bg-black group-hover:text-white">
+                                Fix Now <ChevronRight className="h-4 w-4" />
+                            </div>
+                        </button>
+                    ))}
+                    {criticalCards.length === 0 && (
+                        <div className="p-6 text-center font-bold italic text-slate-500 shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] border-2 border-black bg-slate-50">
+                            Great work! No critical issues found.
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <div>
+                <h3 className="mb-4 flex w-fit items-center gap-2 border-2 border-black bg-yellow-100 px-2 text-sm font-black uppercase tracking-wider text-black">
+                    <AlertTriangle className="h-4 w-4 text-amber-600" />
+                    Warnings ({warningCards.reduce((sum, issue) => sum + issue.count, 0)})
+                </h3>
+                <div className="space-y-3">
+                    {warningCards.map((issue) => (
+                        <button
+                            key={issue.id}
+                            type="button"
+                            onClick={() => onReview(issue.id)}
+                            className="group flex w-full cursor-pointer items-center justify-between border-2 border-black bg-white p-4 text-left shadow-[4px_4px_0px_0px_#000] transition-all hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[6px_6px_0px_0px_#000] focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                        >
+                            <div className="flex items-center gap-4">
+                                <div className="border-2 border-black bg-yellow-300 p-3 text-black">
+                                    <Info className="h-5 w-5" />
+                                </div>
+                                <div>
+                                    <div className="text-lg font-black uppercase text-black">{issue.count} {issue.title}</div>
+                                    <div className="mt-0.5 text-sm font-bold text-slate-600">{issue.description}</div>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2 border-2 border-black bg-yellow-100 px-4 py-2 text-sm font-black uppercase text-black transition-colors group-hover:bg-black group-hover:text-white">
+                                Review <ChevronRight className="h-4 w-4" />
+                            </div>
+                        </button>
+                    ))}
+                    {warningCards.length === 0 && (
+                        <div className="border-2 border-black bg-slate-50 p-6 text-center font-bold italic text-slate-500 shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)]">
+                            No warnings found.
+                        </div>
+                    )}
+                </div>
+
+                <div>
+                    <h3 className="mb-4 flex w-fit items-center gap-2 border-2 border-black bg-blue-100 px-2 text-sm font-black uppercase tracking-wider text-black">
+                        <AlertTriangle className="h-4 w-4 text-blue-600" />
+                        Link Opportunities ({(orphanCount > 0 ? 1 : 0) + (highValueUnderlinkedCount > 0 ? 1 : 0)})
+                    </h3>
+                    <div className="space-y-3">
+                        {orphanCount > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => onReview('links-indexed-orphans')}
+                                className="group flex w-full cursor-pointer items-center justify-between border-2 border-black bg-white p-4 text-left shadow-[4px_4px_0px_0px_#000] transition-all hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[6px_6px_0px_0px_#000] focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                            >
+                                <div className="flex items-center gap-4">
+                                    <div className="border-2 border-black bg-blue-300 p-3 text-black">
+                                        <AlertTriangle className="h-5 w-5" />
+                                    </div>
+                                    <div>
+                                        <div className="text-lg font-black uppercase text-black">{orphanCount} Indexed Orphan Pages</div>
+                                        <div className="mt-0.5 text-sm font-bold text-slate-600">Indexed pages with zero internal support.</div>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2 border-2 border-black bg-blue-100 px-4 py-2 text-sm font-black uppercase text-black transition-colors group-hover:bg-black group-hover:text-white">
+                                    Connect <ChevronRight className="h-4 w-4" />
+                                </div>
+                            </button>
+                        )}
+                        {highValueUnderlinkedCount > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => onReview('links-high-value-underlinked')}
+                                className="group flex w-full cursor-pointer items-center justify-between border-2 border-black bg-white p-4 text-left shadow-[4px_4px_0px_0px_#000] transition-all hover:translate-x-[-2px] hover:translate-y-[-2px] hover:shadow-[6px_6px_0px_0px_#000] focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                            >
+                                <div className="flex items-center gap-4">
+                                    <div className="border-2 border-black bg-blue-300 p-3 text-black">
+                                        <Info className="h-5 w-5" />
+                                    </div>
+                                    <div>
+                                        <div className="text-lg font-black uppercase text-black">{highValueUnderlinkedCount} High-Value Underlinked Pages</div>
+                                        <div className="mt-0.5 text-sm font-bold text-slate-600">Pages with traffic or substantial content that only have one or two internal links.</div>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2 border-2 border-black bg-blue-100 px-4 py-2 text-sm font-black uppercase text-black transition-colors group-hover:bg-black group-hover:text-white">
+                                    Review <ChevronRight className="h-4 w-4" />
+                                </div>
+                            </button>
+                        )}
+                        {orphanCount === 0 && highValueUnderlinkedCount === 0 && (
+                            <div className="border-2 border-black bg-slate-50 p-6 text-center font-bold italic text-slate-500 shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)]">
+                                No priority internal linking gaps found.
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
